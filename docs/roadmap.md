@@ -4,7 +4,7 @@
 >
 > **Current planning baseline:** V0.1 is completed on `main`; V0.2 is implemented on branch `v02` and pending merge via PR #1. V0.25 is the next planned milestone.
 >
-> See `docs/architecture.md`, `docs/items_left_for_v02.md`, `docs/v025.md`, and `docs/v03.md` for architectural and implementation details.
+> See [`docs/architecture.md`](architecture.md), [`docs/v02/v02.md`](v02/v02.md), [`docs/v02/items_left_for_v02.md`](v02/items_left_for_v02.md), [`docs/v025/v025.md`](v025/v025.md), and [`docs/v03/v03.md`](v03/v03.md) for architectural and implementation details.
 
 ---
 

@@ -162,7 +162,7 @@ def optimize_court_lineup(
     head_coach = coaches[0]
     coach_proj = projections[head_coach.id]
 
-    best_score = -1e9
+    best_score: tuple[float, float] = (-1e9, -1e9)
     best_config: tuple[
         tuple[Player, ...],
         Player,
@@ -232,9 +232,10 @@ def optimize_court_lineup(
                     projections=projections,
                 )
                 total_xpdk = round(static_xpdk + cap_opt + slot_opt, 2)
+                candidate_key = (total_xpdk, round(starters_sum, 2))
 
-                if total_xpdk > best_score:
-                    best_score = total_xpdk
+                if candidate_key > best_score:
+                    best_score = candidate_key
                     best_config = (
                         starters,
                         sixth_man,

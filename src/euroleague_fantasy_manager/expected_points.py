@@ -1,4 +1,15 @@
-"""Baseline Expected Fantasy Points (xPDK) model for Court Players (PIR + 10% Win Bonus) and Head Coaches."""
+"""Heuristic Baseline Expected Fantasy Points (xPDK V0.2) for Court Players and Head Coaches.
+
+Model Contract (V0.2 Baseline):
+- V0.2 xPDK is an intentionally heuristic decision-support baseline, NOT an ML model or a
+  statistically fitted / historically validated forecast.
+- Market quotation (`credits`) is intentionally blended as an input prior alongside observed
+  per-game fantasy scoring (`0.55 * avg_fantasy_pts + 0.45 * price_prior`), modified by
+  availability/depth-chart role (`1.00` starter, `0.85` bench), position-aware FDR multiplier
+  (`lambda_FDR` in `[0.86, 1.14]`), and the EuroLeague `10%` team win bonus (`1 + 0.10 * P(win)`).
+- `sigma_pdk` (`max(4.0, 0.45 * xPDK)`) is a heuristic uncertainty estimate used for Turn 1 -> Turn 2
+  option-value calculations, not empirical player game-to-game variance.
+"""
 
 from dataclasses import dataclass
 import math

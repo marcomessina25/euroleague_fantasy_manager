@@ -15,8 +15,9 @@ EuroLeague Fantasy & Feeds APIs -> local SQLite snapshots -> rules + validation 
 ## Living roadmap
 
 - [`docs/architecture.md`](docs/architecture.md) defines the purpose, architectural boundaries, and responsibilities of each layer.
-- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1`–`V0.2` completed; `V0.3`–`V0.6+` planned) and next milestones.
-- [`docs/v02/v02.md`](docs/v02/v02.md) defines the technical specification and implementation plan for **V0.2**.
+- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1` completed on `main`; `V0.2` implemented on branch `v02` and pending merge via PR #1; `V0.25`–`V0.6+` planned).
+- [`docs/v02/v02.md`](docs/v02/v02.md) and [`docs/v02/items_left_for_v02.md`](docs/v02/items_left_for_v02.md) define the **V0.2** heuristic decision-support baseline specification and pre-merge checklist.
+- [`docs/v025/v025.md`](docs/v025/v025.md) and [`docs/v03/v03.md`](docs/v03/v03.md) define the upcoming **V0.25** historical evaluation foundation and **V0.3** validated predictive projection layer.
 
 Both human contributors and AI agents must read the relevant living documents before making material changes and update them whenever architecture, scope, priorities, or delivery status changes.
 

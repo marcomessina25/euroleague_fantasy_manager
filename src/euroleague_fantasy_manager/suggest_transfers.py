@@ -184,7 +184,9 @@ def suggest_trades(
         used_in_ids=set(),
     )
 
-    # Sort by marginal gain and run full Turn-1 -> Turn-2 lineup optimizer on top candidates
+    # Sort by marginal gain and run full Turn-1 -> Turn-2 lineup optimizer on top candidates.
+    # Note: Two-stage marginal pre-filtering is a V0.2 runtime performance optimization, not a
+    # formally proven exact search reduction for arbitrary nonlinear multi-unit objectives.
     raw_candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
     shortlist = raw_candidates[: max(25, top_k * 6)]
 
@@ -196,6 +198,8 @@ def suggest_trades(
         ]
         lineup_rec = optimize_court_lineup(new_squad, projections, round_number=target_round)
         delta_xp = round(lineup_rec.total_turn_adjusted_xpdk - baseline_xp, 2)
+        if delta_xp <= 0.0:
+            continue
         scored_bundles.append((delta_xp, bank_after, moves, lineup_rec))
 
     scored_bundles.sort(key=lambda item: (item[0], item[1]), reverse=True)

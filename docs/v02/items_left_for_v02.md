@@ -1,27 +1,27 @@
 # Items left for V0.2
 
-> **Status:** V0.2 implementation is complete on branch `v02` and is currently under PR #1.
+> **Status:** V0.2 implementation and pre-merge verification checklist are complete on branch `v02` (under PR #1).
 >
 > This document is the final pre-merge checklist. It intentionally contains only items that should be addressed before or as part of merging V0.2. Anything that is a design improvement rather than a release blocker belongs in V0.25/V0.3.
 
 ## 1. Merge-state and documentation cleanup
 
 ### 1.1 Roadmap status
-- [ ] Keep `V0.2` described as **implemented on `v02`, pending merge** until PR #1 is merged.
+- [x] Keep `V0.2` described as **implemented on `v02`, pending merge** until PR #1 is merged.
 - [ ] After merge, update `docs/roadmap.md` to `Status: completed on 2026-09-22`.
-- [ ] Ensure README/roadmap wording consistently distinguishes branch implementation status from released `main` status.
+- [x] Ensure README/roadmap wording consistently distinguishes branch implementation status from released `main` status.
 
 ### 1.2 V0.2 implementation/design document
-- [ ] Ensure the final V0.2 implementation notes accurately describe the shipped behavior.
-- [ ] Document all intentionally heuristic quantities:
+- [x] Ensure the final V0.2 implementation notes accurately describe the shipped behavior.
+- [x] Document all intentionally heuristic quantities:
   - Team Strength Index
   - win probability
   - FDR multipliers
   - xPDK baseline coefficients
   - availability/depth-chart multiplier
   - uncertainty/sigma used by option-value calculations.
-- [ ] Explicitly state that V0.2 xPDK is a **decision-support baseline**, not a historically validated predictive model.
-- [ ] Explicitly state that the current sigma is a **heuristic uncertainty estimate**, not empirical player variance.
+- [x] Explicitly state that V0.2 xPDK is a **decision-support baseline**, not a historically validated predictive model.
+- [x] Explicitly state that the current sigma is a **heuristic uncertainty estimate**, not empirical player variance.
 
 ## 2. xPDK semantic clarification
 
@@ -29,11 +29,11 @@ The V0.2 model combines recent/per-game fantasy production with a market-price p
 
 This is acceptable for V0.2, but the model contract must be clear:
 
-- [ ] Name/document xPDK V0.2 as a heuristic baseline.
-- [ ] Explain that quotation/price is intentionally used as an input prior.
-- [ ] Do not describe the model as an ML model or as a validated forecast.
-- [ ] Avoid implying that the current coefficients have been statistically fitted.
-- [ ] Preserve the current implementation as a stable baseline so V0.25 can compare against it.
+- [x] Name/document xPDK V0.2 as a heuristic baseline.
+- [x] Explain that quotation/price is intentionally used as an input prior.
+- [x] Do not describe the model as an ML model or as a validated forecast.
+- [x] Avoid implying that the current coefficients have been statistically fitted.
+- [x] Preserve the current implementation as a stable baseline so V0.25 can compare against it.
 
 ## 3. Turn Option Value tests
 
@@ -41,14 +41,14 @@ The current test suite verifies that the option-value mechanism produces a posit
 
 Before merge:
 
-- [ ] Add at least one deterministic hand-calculated option-value test.
-- [ ] Add a test where the backup has a different position and the swap is illegal.
-- [ ] Add a test where a nominally attractive backup cannot be used because the resulting formation is illegal.
-- [ ] Add a test for captain-switch option value.
-- [ ] Add a zero-option-value case:
+- [x] Add at least one deterministic hand-calculated option-value test.
+- [x] Add a test where the backup has a different position and the swap is illegal.
+- [x] Add a test where a nominally attractive backup cannot be used because the resulting formation is illegal.
+- [x] Add a test for captain-switch option value.
+- [x] Add a zero-option-value case:
   - no eligible unplayed backup, or
   - backup score cannot improve the primary under the configured scenario.
-- [ ] Keep tests deterministic; do not depend on live API values.
+- [x] Keep tests deterministic; do not depend on live API values.
 
 ## 4. Lineup optimizer validation
 
@@ -56,12 +56,12 @@ The exhaustive optimizer is appropriate for the current 10 court-player search s
 
 Before merge:
 
-- [ ] Add a test that each of the five legal formations can be selected when the roster makes it optimal.
-- [ ] Add a test that captain must be a starter.
-- [ ] Add a test that sixth man is not also a starter.
-- [ ] Add a test that all four bench players are distinct from starters/sixth man.
-- [ ] Add a test that the coach is not accidentally included in court-player formation constraints.
-- [ ] Add a test for a T1/T2 lineup where the best T1 choice is not simply the highest-xPDK five.
+- [x] Add a test that each of the five legal formations can be selected when the roster makes it optimal.
+- [x] Add a test that captain must be a starter.
+- [x] Add a test that sixth man is not also a starter.
+- [x] Add a test that all four bench players are distinct from starters/sixth man.
+- [x] Add a test that the coach is not accidentally included in court-player formation constraints.
+- [x] Add a test for a T1/T2 lineup where the best T1 choice is not simply the highest-xPDK five.
 
 ## 5. Trade recommender sanity checks
 
@@ -69,23 +69,23 @@ The two-stage candidate filtering approach is appropriate for V0.2.
 
 Before merge:
 
-- [ ] Verify that all generated trade bundles are passed through the deterministic `validate_trades()` validator.
-- [ ] Verify Head Coach swaps count toward the 1..4 trade limit.
-- [ ] Verify `--unlimited` bypasses the normal trade-count limit without bypassing budget/roster/club rules.
-- [ ] Add a no-improvement case where the recommender returns no actionable trade.
-- [ ] Add a case where a superficially attractive individual transfer becomes illegal as part of a multi-player bundle.
-- [ ] Document that Pareto/marginal filtering is a performance optimization, not yet a formally proven exact search reduction for every future objective.
+- [x] Verify that all generated trade bundles are passed through the deterministic `validate_trades()` validator.
+- [x] Verify Head Coach swaps count toward the 1..4 trade limit.
+- [x] Verify `--unlimited` bypasses the normal trade-count limit without bypassing budget/roster/club rules.
+- [x] Add a no-improvement case where the recommender returns no actionable trade.
+- [x] Add a case where a superficially attractive individual transfer becomes illegal as part of a multi-player bundle.
+- [x] Document that Pareto/marginal filtering is a performance optimization, not yet a formally proven exact search reduction for every future objective.
 
 ## 6. Live verification
 
-- [ ] Run the full `pytest` suite.
-- [ ] Run `elf squad`.
-- [ ] Run `elf fixtures --rounds 5`.
-- [ ] Run `elf fixtures --rounds 5 --squad-only`.
-- [ ] Run `elf lineup`.
-- [ ] Run `elf suggest-trades --trades 1`.
-- [ ] Run at least one multi-trade example (`--trades 2`) against the current snapshot.
-- [ ] Confirm that no private squad/configuration data is included in the PR.
+- [x] Run the full `pytest` suite.
+- [x] Run `elf squad`.
+- [x] Run `elf fixtures --rounds 5`.
+- [x] Run `elf fixtures --rounds 5 --squad-only`.
+- [x] Run `elf lineup`.
+- [x] Run `elf suggest-trades --trades 1`.
+- [x] Run at least one multi-trade example (`--trades 2`) against the current snapshot.
+- [x] Confirm that no private squad/configuration data is included in the PR.
 
 ## 7. Merge criteria
 
