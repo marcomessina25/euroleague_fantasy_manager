@@ -1,0 +1,22 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+
+# Runtime data is reproducible from the EuroLeague Fantasy API and may become large.
+data/*.sqlite3
+data/raw/
+data/historical/raw/
+reports/*.json
+reports/*.md
+reports/backtests/*
+!reports/backtests/.gitkeep
+config/current_squad.json
+config/teams/*
+!config/teams/.gitkeep
+config/active_team.json
+players.txt
+!data/.gitkeep
+!reports/.gitkeep
+pr_text.txt
