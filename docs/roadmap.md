@@ -2,9 +2,9 @@
 
 > **Living document.** This is the source of truth for delivery status, engineering priorities, release criteria, known risks, and long-term direction. Human contributors and AI agents must read it before material work and update it when priorities or milestone status changes.
 >
-> **Current planning baseline:** V0.1 foundation is implemented and verified on `main` (`master`).
+> **Current planning baseline:** V0.1 foundation is completed on `main`. V0.2 implementation plan is on branch `v02` ([`docs/v02/v02.md`](v02/v02.md)).
 >
-> See [`docs/architecture.md`](architecture.md) and [`docs/squad_import.md`](squad_import.md) for architecture and workflow details.
+> See [`docs/architecture.md`](architecture.md), [`docs/v02/v02.md`](v02/v02.md), and [`docs/squad_import.md`](squad_import.md) for architecture, V0.2 design, and workflow details.
 
 ---
 
@@ -89,7 +89,7 @@ Model improvement
 
 ## V0.2 — Decision-support basics, Matchup FDR, xP baseline & Turn-aware Lineup
 
-**Status: planned.**
+**Status: planned on branch `v02` ([`docs/v02/v02.md`](v02/v02.md)).**
 
 ### Scope
 

@@ -16,6 +16,7 @@ EuroLeague Fantasy & Feeds APIs -> local SQLite snapshots -> rules + validation 
 
 - [`docs/architecture.md`](docs/architecture.md) defines the purpose, architectural boundaries, and responsibilities of each layer.
 - [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1` completed; `V0.2`–`V0.6+` planned) and next milestones.
+- [`docs/v02/v02.md`](docs/v02/v02.md) defines the technical specification and implementation plan for **V0.2**.
 
 Both human contributors and AI agents must read the relevant living documents before making material changes and update them whenever architecture, scope, priorities, or delivery status changes.
 
