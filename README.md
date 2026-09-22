@@ -2,7 +2,7 @@
 
 A deterministic, local-first **EuroLeague Fantasy Challenge (Classic Mode)** decision engine for the 2026/27 season (`E2026`), architected to share its core engine with **EuroCup Fantasy Challenge** (`U2026`).
 
-![Version](https://img.shields.io/badge/Version-0.1.0-purple) ![Python](https://img.shields.io/badge/Python-3.12-blue) ![License](https://img.shields.io/badge/License-MIT-green)
+![Version](https://img.shields.io/badge/Version-0.2.0-purple) ![Python](https://img.shields.io/badge/Python-3.12-blue) ![License](https://img.shields.io/badge/License-MIT-green)
 
 ---
 
@@ -15,7 +15,9 @@ EuroLeague Fantasy & Feeds APIs -> local SQLite snapshots -> rules + validation 
 ## Living roadmap
 
 - [`docs/architecture.md`](docs/architecture.md) defines the purpose, architectural boundaries, and responsibilities of each layer.
-- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1` completed; `V0.2`–`V0.6+` planned) and next milestones.
+- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1` completed on `main`; `V0.2` implemented on branch `v02` and pending merge via PR #1; `V0.25`–`V0.6+` planned).
+- [`docs/v02/v02.md`](docs/v02/v02.md) and [`docs/v02/items_left_for_v02.md`](docs/v02/items_left_for_v02.md) define the **V0.2** heuristic decision-support baseline specification and pre-merge checklist.
+- [`docs/v025/v025.md`](docs/v025/v025.md) and [`docs/v03/v03.md`](docs/v03/v03.md) define the upcoming **V0.25** historical evaluation foundation and **V0.3** validated predictive projection layer.
 
 Both human contributors and AI agents must read the relevant living documents before making material changes and update them whenever architecture, scope, priorities, or delivery status changes.
 
@@ -64,6 +66,33 @@ python scripts/import_squad.py
 ```
 
 The private `config/current_squad.json` and `players.txt` files are ignored by Git; do not commit them. Prices and bank balances are stored in tenths of a Credit (`17.0 Cr` is stored as `170`).
+
+## V0.2 Decision Support (`elf squad`, `elf fixtures`, `elf lineup`, `elf suggest-trades`)
+
+Inspect your 11-unit squad's purchase prices, current quotations, `100%` selling prices (`0%` sell-on tax), unrealized capital gains (`+Cr`/`-Cr`), bank, and next Unlimited Trade Window:
+
+```powershell
+elf squad
+```
+
+Analyze multi-round schedules, Turns (`T1`/`T2`), Win Probabilities, and `1..5` Fixture Difficulty Ratings (`FDR`) across all 20 clubs or specifically for your 11-unit squad:
+
+```powershell
+elf fixtures --rounds 5
+elf fixtures --rounds 5 --squad-only
+```
+
+Optimize your Starting 5 (`1.0x`), Captain (`2.0x`), Sixth Man (`1.0x`), 4 Bench (`0.5x`), and Head Coach (`1.0x`) across all 5 legal basketball formations (`2-2-1`, `1-2-2`, `2-1-2`, `1-3-1`, `3-1-1`) while maximizing **Turn 1 $\to$ Turn 2 Real Option Value**:
+
+```powershell
+elf lineup
+```
+
+Recommend top legal `1..4` trade packages (including Head Coach swaps) ranked by net gain in Turn-Adjusted Squad Expected Fantasy Points ($\Delta \text{xPDK}$):
+
+```powershell
+elf suggest-trades --trades 2 --top 5
+```
 
 ## Deterministic Trade Validation (`elf validate-trades`)
 
