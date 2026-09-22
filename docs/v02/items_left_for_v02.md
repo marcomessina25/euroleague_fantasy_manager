@@ -8,7 +8,7 @@
 
 ### 1.1 Roadmap status
 - [x] Keep `V0.2` described as **implemented on `v02`, pending merge** until PR #1 is merged.
-- [ ] After merge, update `docs/roadmap.md` to `Status: completed on 2026-09-22`.
+- [x] After merge, update `docs/roadmap.md` to `Status: completed on 2026-09-22`.
 - [x] Ensure README/roadmap wording consistently distinguishes branch implementation status from released `main` status.
 
 ### 1.2 V0.2 implementation/design document

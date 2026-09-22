@@ -8,6 +8,11 @@ import sys
 from typing import Sequence
 
 from .api import fetch_current_data
+from .evaluation import (
+    build_historical_dataset,
+    inspect_historical_round,
+    run_walk_forward_evaluation,
+)
 from .fixtures import analyze_squad_fixtures, analyze_team_fixtures
 from .import_squad import (
     DATABASE_PATH,
@@ -196,6 +201,90 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to current_squad.json.",
     )
 
+    # V0.25 Historical Evaluation Foundation Commands
+    evaluation_parser = subparsers.add_parser(
+        "evaluation",
+        help="Build or inspect normalized point-in-time historical evaluation datasets.",
+    )
+    eval_sub = evaluation_parser.add_subparsers(dest="eval_command", required=True)
+
+    build_ds_parser = eval_sub.add_parser(
+        "build-dataset",
+        help="Build normalized multi-season historical evaluation dataset in SQLite.",
+    )
+    build_ds_parser.add_argument(
+        "--seasons",
+        nargs="+",
+        default=["2022", "2023", "2024", "2025"],
+        help="Historical seasons to build (default: 2022 2023 2024 2025).",
+    )
+    build_ds_parser.add_argument(
+        "--rounds-per-season",
+        type=int,
+        default=12,
+        help="Number of rounds per season to generate/normalize (default: 12).",
+    )
+
+    inspect_ds_parser = eval_sub.add_parser(
+        "inspect",
+        help="Inspect point-in-time features, baseline predictions, and outcomes for a historical round.",
+    )
+    inspect_ds_parser.add_argument(
+        "--season",
+        type=str,
+        default="2025",
+        help="Target season (e.g., 2025 or E2025).",
+    )
+    inspect_ds_parser.add_argument(
+        "--round",
+        "-r",
+        type=int,
+        default=8,
+        help="Round number to inspect (default: 8).",
+    )
+    inspect_ds_parser.add_argument(
+        "--alpha",
+        type=float,
+        default=0.25,
+        help="EWMA decay parameter alpha in (0, 1] (default: 0.25).",
+    )
+
+    evaluate_parser = subparsers.add_parser(
+        "evaluate",
+        help="Run chronological walk-forward evaluation comparing season_mean, last5, ewma, and xpdk_v02.",
+    )
+    evaluate_parser.add_argument(
+        "--season",
+        type=str,
+        default="2025",
+        help="Target evaluation season (default: 2025).",
+    )
+    evaluate_parser.add_argument(
+        "--rounds",
+        type=str,
+        default="1:34",
+        help="Round range to evaluate, e.g. '1:34' or '2:12' (default: 1:34).",
+    )
+    evaluate_parser.add_argument(
+        "--models",
+        "--model",
+        dest="models",
+        type=str,
+        default="season_mean,last5,ewma,xpdk_v02",
+        help="Comma-separated models to evaluate (default: season_mean,last5,ewma,xpdk_v02).",
+    )
+    evaluate_parser.add_argument(
+        "--alpha",
+        type=float,
+        default=0.25,
+        help="EWMA decay parameter alpha in (0, 1] (default: 0.25).",
+    )
+    evaluate_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print full JSON evaluation payload instead of formatted terminal tables.",
+    )
+
     return parser
 
 
@@ -295,6 +384,40 @@ def main(argv: Sequence[str] | None = None) -> int:
             report_path=None,
         )
         print(json.dumps(trades_payload, indent=2, ensure_ascii=False))
+        return 0
+
+    if args.command == "evaluation":
+        if args.eval_command == "build-dataset":
+            summary = build_historical_dataset(
+                database_path=args.db,
+                seasons=args.seasons,
+                rounds_per_season=args.rounds_per_season,
+            )
+            print(json.dumps(asdict(summary), indent=2))
+            return 0
+        if args.eval_command == "inspect":
+            payload = inspect_historical_round(
+                season=args.season,
+                round_number=args.round,
+                database_path=args.db,
+                ewma_alpha=args.alpha,
+            )
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+            return 0
+
+    if args.command == "evaluate":
+        model_list = [m.strip() for m in str(args.models).split(",") if m.strip()]
+        eval_report = run_walk_forward_evaluation(
+            season=args.season,
+            rounds=args.rounds,
+            models=model_list,
+            ewma_alpha=args.alpha,
+            database_path=args.db,
+        )
+        if args.json:
+            print(json.dumps(eval_report, indent=2, ensure_ascii=False))
+        else:
+            print(eval_report["console_table"])
         return 0
 
     return 0

@@ -2,7 +2,7 @@
 
 > **Living document.** This is the source of truth for delivery status, engineering priorities, release criteria, known risks, and long-term direction. Human contributors and AI agents must read it before material work and update it when priorities or milestone status changes.
 >
-> **Current planning baseline:** V0.1 is completed on `main`; V0.2 is implemented on branch `v02` and pending merge via PR #1. V0.25 is the next planned milestone.
+> **Current planning baseline:** V0.1 and V0.2 are completed on `main` (2026-09-22); V0.25 is implemented on branch `v025` and pending merge. V0.3 is the next planned milestone.
 >
 > See [`docs/architecture.md`](architecture.md), [`docs/v02/v02.md`](v02/v02.md), [`docs/v02/items_left_for_v02.md`](v02/items_left_for_v02.md), [`docs/v025/v025.md`](v025/v025.md), and [`docs/v03/v03.md`](v03/v03.md) for architectural and implementation details.
 
@@ -86,7 +86,7 @@ The project has a deterministic source of truth for fantasy state and rules.
 
 ## V0.2 — Decision-support basics
 
-**Status: implemented on `v02`; pending merge via PR #1.**
+**Status: completed on 2026-09-22.**
 
 ### Scope
 
@@ -115,14 +115,14 @@ The purpose of V0.2 is to establish a useful deterministic + quantitative decisi
 See:
 
 ```text
-docs/items_left_for_v02.md
+docs/v02/items_left_for_v02.md
 ```
 
 ---
 
 ## V0.25 — Historical Evaluation Foundation
 
-**Status: next milestone.**
+**Status: implemented on `v025`; pending merge.**
 
 ### Objective
 
