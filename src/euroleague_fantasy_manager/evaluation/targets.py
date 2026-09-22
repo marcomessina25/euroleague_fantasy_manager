@@ -1,4 +1,4 @@
-"""Target definitions and authoritative fantasy score reconstruction for V0.25."""
+"""Target definitions and authoritative fantasy score reconstruction for V0.2.5."""
 
 from dataclasses import dataclass
 

@@ -1,4 +1,4 @@
-"""Point prediction, ranking, value-ranking, and fantasy lineup decision regret metrics for V0.25."""
+"""Point prediction, ranking, value-ranking, and fantasy lineup decision regret metrics for V0.2.5."""
 
 from dataclasses import dataclass
 import math
@@ -34,6 +34,12 @@ class ModelEvaluationSummary:
     coach_mae: float
     coach_rmse: float
     coach_bias: float
+    active_player_samples: int = 0
+    active_mae: float = 0.0
+    active_rmse: float = 0.0
+    active_bias: float = 0.0
+    active_spearman: float = 0.0
+    price_provenance_counts: dict[str, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +140,7 @@ def compute_point_and_ranking_metrics(
 
     first = records[0]
     player_recs = [r for r in records if r.position != "HC"]
+    active_player_recs = [r for r in player_recs if r.actual_status not in ("DNP", "out")]
     coach_recs = [r for r in records if r.position == "HC"]
 
     if player_recs:
@@ -155,12 +162,25 @@ def compute_point_and_ranking_metrics(
         n_p = 0
         mae_val = rmse_val = med_ae = bias_val = ci95 = 0.0
 
+    if active_player_recs:
+        act_abs = [abs(r.conditional_prediction - r.actual_fantasy_points) for r in active_player_recs]
+        act_sq = [(r.conditional_prediction - r.actual_fantasy_points) ** 2 for r in active_player_recs]
+        act_sig = [r.conditional_prediction - r.actual_fantasy_points for r in active_player_recs]
+        n_act = len(active_player_recs)
+        act_mae = sum(act_abs) / n_act
+        act_rmse = math.sqrt(sum(act_sq) / n_act)
+        act_bias = sum(act_sig) / n_act
+    else:
+        n_act = 0
+        act_mae = act_rmse = act_bias = 0.0
+
     # Group court player predictions by (season, round) for ranking metrics
     by_round: dict[tuple[str, int], list[PredictionRecord]] = {}
     for r in player_recs:
         by_round.setdefault((r.season, r.round), []).append(r)
 
     sp_list: list[float] = []
+    act_sp_list: list[float] = []
     kt_list: list[float] = []
     t5_list: list[float] = []
     t10_list: list[float] = []
@@ -176,10 +196,30 @@ def compute_point_and_ranking_metrics(
         t10_list.append(top_k_recall(preds, acts, k=10))
         t20_list.append(top_k_recall(preds, acts, k=20))
 
+        act_round = [x for x in r_list if x.actual_status not in ("DNP", "out")]
+        if len(act_round) >= 2:
+            act_sp_list.append(
+                spearman_correlation(
+                    [x.conditional_prediction for x in act_round],
+                    [x.actual_fantasy_points for x in act_round],
+                )
+            )
+
         # Value ranking strictly uses pre-round quotation_at_decision_tenths (Section 12.3)
         pred_vals = [x.prediction / max(4.0, x.quotation_at_decision_tenths / 10.0) for x in r_list]
         act_vals = [x.actual_fantasy_points / max(4.0, x.quotation_at_decision_tenths / 10.0) for x in r_list]
         val_sp_list.append(spearman_correlation(pred_vals, act_vals))
+
+    prov_counts: dict[str, int] = {
+        "official_snapshot": 0,
+        "archived_fantasy": 0,
+        "reconstructed": 0,
+        "proxy": 0,
+        "missing": 0,
+    }
+    for r in player_recs:
+        p_cat = r.price_provenance if r.price_provenance in prov_counts else "reconstructed"
+        prov_counts[p_cat] += 1
 
     # Separate Head Coach metrics
     if coach_recs:
@@ -217,6 +257,12 @@ def compute_point_and_ranking_metrics(
         coach_mae=round(c_mae, 3),
         coach_rmse=round(c_rmse, 3),
         coach_bias=round(c_bias, 3),
+        active_player_samples=n_act,
+        active_mae=round(act_mae, 3),
+        active_rmse=round(act_rmse, 3),
+        active_bias=round(act_bias, 3),
+        active_spearman=round(sum(act_sp_list) / len(act_sp_list), 4) if act_sp_list else 0.0,
+        price_provenance_counts=prov_counts,
     )
 
 

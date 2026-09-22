@@ -1,4 +1,4 @@
-"""Walk-forward evaluation runner, round inspector, and Markdown/CSV report generator for V0.25."""
+"""Walk-forward evaluation runner, round inspector, and Markdown/CSV report generator for V0.2.5."""
 
 import csv
 from dataclasses import asdict
@@ -76,7 +76,7 @@ def inspect_historical_round(
     with store._connect() as conn:
         actual_rows = conn.execute(
             """
-            SELECT player_id, fantasy_points, pir, minutes, player_status
+            SELECT player_id, fantasy_points, pir, minutes, player_status, price_provenance
             FROM eval_player_games
             WHERE season = ? AND round = ?
             """,
@@ -93,12 +93,15 @@ def inspect_historical_round(
         ).fetchall()
 
     actual_fpts = {int(r["player_id"]): float(r["fantasy_points"]) for r in actual_rows}
+    actual_status_map = {int(r["player_id"]): str(r["player_status"]) for r in actual_rows}
+    price_prov_map = {int(r["player_id"]): str(r["price_provenance"]) for r in actual_rows}
     actual_meta = {
         int(r["player_id"]): {
             "actual_fantasy_points": float(r["fantasy_points"]),
             "actual_pir": float(r["pir"]),
             "actual_minutes": float(r["minutes"]),
             "actual_status": str(r["player_status"]),
+            "price_provenance": str(r["price_provenance"]),
         }
         for r in actual_rows
     }
@@ -108,6 +111,8 @@ def inspect_historical_round(
         feature_table=features_by_pid,
         actual_points_by_player=actual_fpts,
         models=models,
+        actual_status_by_player=actual_status_map,
+        price_provenance_by_player=price_prov_map,
     )
 
     player_inspection: list[dict[str, Any]] = []
@@ -126,6 +131,7 @@ def inspect_historical_round(
                 "home": feat.home,
                 "turn": feat.turn_number,
                 "quotation_credits": round(feat.quotation_at_decision_tenths / 10.0, 1),
+                "price_provenance": price_prov_map.get(pid, "reconstructed"),
                 "pre_round_status": feat.pre_round_status,
                 "cold_start_source": feat.cold_start_source,
                 "games_played_before_cutoff": feat.games_played,
@@ -142,6 +148,7 @@ def inspect_historical_round(
         "season": norm_season,
         "round": int(round_number),
         "decision_cutoff": cutoff,
+        "price_coverage_by_season": store.get_price_coverage_by_season(),
         "games": [dict(g) for g in games_rows],
         "player_count": len(player_inspection),
         "players": player_inspection,
@@ -179,6 +186,7 @@ def _write_evaluation_artifacts(
     decision_summaries: Sequence[DecisionEvaluationSummary],
     round_rows: Sequence[dict[str, Any]],
     all_predictions: Sequence[PredictionRecord],
+    price_coverage_by_season: dict[str, dict[str, int]] | None = None,
 ) -> dict[str, str]:
     reports_dir.mkdir(parents=True, exist_ok=True)
     season_slug = season.lower()
@@ -203,24 +211,28 @@ def _write_evaluation_artifacts(
 
     # 3. Write Markdown report
     best_mae_model = min(model_summaries, key=lambda m: m.mae)
+    best_spearman_model = max(model_summaries, key=lambda m: m.spearman)
+    best_top10_model = max(model_summaries, key=lambda m: m.top10_recall)
     best_lineup_model = max(decision_summaries, key=lambda d: d.avg_recommended_actual_score)
+    first_ms = model_summaries[0]
 
     md_lines = [
-        f"# V0.25 Walk-Forward Baseline Comparison — Season `{season}`",
+        f"# V0.2.5 Walk-Forward Baseline Comparison — Season `{season}`",
         "",
-        f"- **Dataset Version**: `{model_summaries[0].dataset_version}`",
-        f"- **Rounds Evaluated**: `{model_summaries[0].rounds_evaluated}`",
-        f"- **Court Player Samples per Model**: `{model_summaries[0].player_samples}`",
-        f"- **Head Coach Samples per Model**: `{model_summaries[0].coach_samples}`",
+        f"- **Dataset Version**: `{first_ms.dataset_version}`",
+        f"- **Rounds Evaluated**: `{first_ms.rounds_evaluated}` (`{season}` Rounds `1–{first_ms.rounds_evaluated}`)",
+        f"- **All Listed Court Player Samples per Model**: `{first_ms.player_samples}`",
+        f"- **Active Court Player Samples (`minutes > 0`) per Model**: `{first_ms.active_player_samples}`",
+        f"- **Head Coach Samples per Model**: `{first_ms.coach_samples}`",
         "",
-        "## 1. Point Prediction & Ranking Summary (Court Players)",
+        "## 1a. All Listed Court Players (`G, F, C` — Including DNPs / Inactive as `0.0`)",
         "",
-        "| Model | Version | MAE (±95% CI) | RMSE | MedAE | Bias | Spearman | Top-5 | Top-10 | Top-20 | Value Spearman |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Model | Version | N (All) | MAE (±95% CI) | RMSE | MedAE | Bias | Spearman | Top-5 | Top-10 | Top-20 | Value Spearman |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for ms in model_summaries:
         md_lines.append(
-            f"| `{ms.model_name}` | `{ms.model_version}` | `{ms.mae:.2f} ± {ms.mae_ci95:.2f}` | "
+            f"| `{ms.model_name}` | `{ms.model_version}` | `{ms.player_samples}` | `{ms.mae:.2f} ± {ms.mae_ci95:.2f}` | "
             f"`{ms.rmse:.2f}` | `{ms.median_ae:.2f}` | `{ms.bias:+.2f}` | `{ms.spearman:.3f}` | "
             f"`{ms.top5_recall:.2f}` | `{ms.top10_recall:.2f}` | `{ms.top20_recall:.2f}` | `{ms.value_spearman:.3f}` |"
         )
@@ -228,40 +240,79 @@ def _write_evaluation_artifacts(
     md_lines.extend(
         [
             "",
-            "## 2. Separate Head Coach Margin-Bracket Summary",
+            "## 1b. Active Court Players Only (`G, F, C` with `minutes > 0`)",
             "",
-            "| Model | Coach MAE | Coach RMSE | Coach Bias |",
-            "|---|---:|---:|---:|",
+            "| Model | Version | N (Active) | Active MAE | Active RMSE | Active Bias | Active Spearman |",
+            "|---|---|---:|---:|---:|---:|---:|",
         ]
     )
     for ms in model_summaries:
         md_lines.append(
-            f"| `{ms.model_name}` | `{ms.coach_mae:.2f}` | `{ms.coach_rmse:.2f}` | `{ms.coach_bias:+.2f}` |"
+            f"| `{ms.model_name}` | `{ms.model_version}` | `{ms.active_player_samples}` | "
+            f"`{ms.active_mae:.2f}` | `{ms.active_rmse:.2f}` | `{ms.active_bias:+.2f}` | `{ms.active_spearman:.3f}` |"
         )
 
     md_lines.extend(
         [
             "",
-            "## 3. Fantasy Lineup Decision Simulation (11-Unit Squad)",
+            "## 2. Separate Head Coach Margin-Bracket Summary (`HC`)",
             "",
-            "| Model | Actual Avg Score | Oracle Avg Score | Lineup Regret | Captain Regret | 6th-Man Regret | Bench Regret | Formation Regret |",
-            "|---|---:|---:|---:|---:|---:|---:|---:|",
+            "| Model | N (Coaches) | Coach MAE | Coach RMSE | Coach Bias |",
+            "|---|---:|---:|---:|---:|",
+        ]
+    )
+    for ms in model_summaries:
+        md_lines.append(
+            f"| `{ms.model_name}` | `{ms.coach_samples}` | `{ms.coach_mae:.2f}` | `{ms.coach_rmse:.2f}` | `{ms.coach_bias:+.2f}` |"
+        )
+
+    md_lines.extend(
+        [
+            "",
+            "## 3. Simplified Fantasy Lineup Decision Simulation (11-Unit Reference Squad)",
+            "",
+            "> **Scope note:** This table evaluates lineup selection, captain (`2.0x`), sixth-man (`1.0x`), and bench (`0.5x`) role assignments on a standardized 11-unit reference squad per round. It is a simplified single-round decision simulation, not a full multi-round historical fantasy-season replay with dynamic transfer paths.",
+            "",
+            "| Model | Rounds | Actual Avg Score | Oracle Avg Score | Lineup Regret | Captain Regret | 6th-Man Regret | Bench Regret | Formation Regret |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for ds in decision_summaries:
         md_lines.append(
-            f"| `{ds.model_name}` | `{ds.avg_recommended_actual_score:.2f}` | `{ds.avg_oracle_actual_score:.2f}` | "
+            f"| `{ds.model_name}` | `{ds.rounds_evaluated}` | `{ds.avg_recommended_actual_score:.2f}` | `{ds.avg_oracle_actual_score:.2f}` | "
             f"`{ds.avg_lineup_regret:.2f}` | `{ds.avg_captain_regret:.2f}` | `{ds.avg_sixth_man_regret:.2f}` | "
             f"`{ds.avg_bench_regret:.2f}` | `{ds.avg_formation_regret:.2f}` |"
+        )
+
+    if price_coverage_by_season:
+        md_lines.extend(
+            [
+                "",
+                "## 4. Historical Pricing Provenance & Coverage by Season",
+                "",
+                "| Season | `official_snapshot` | `archived_fantasy` | `reconstructed` | `proxy` | `missing` |",
+                "|---|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for s_code, counts in sorted(price_coverage_by_season.items()):
+            md_lines.append(
+                f"| `{s_code}` | `{counts.get('official_snapshot', 0)}` | `{counts.get('archived_fantasy', 0)}` | "
+                f"`{counts.get('reconstructed', 0)}` | `{counts.get('proxy', 0)}` | `{counts.get('missing', 0)}` |"
+            )
+        md_lines.append("")
+        md_lines.append(
+            "> **Pricing caveat:** Because historical fantasy quotations have weaker archival coverage than official box-score statistics, `Value Spearman` (`prediction / price`) should be interpreted alongside price provenance rather than treated as equally reliable across all historical seasons."
         )
 
     md_lines.extend(
         [
             "",
-            "## 4. Short Interpretation",
+            "## 5. Balanced Benchmark Interpretation (`E2025` Rounds 1–12)",
             "",
-            f"- **Lowest Point Error (`MAE`)**: `{best_mae_model.model_name}` (`MAE = {best_mae_model.mae:.2f}`, `Spearman = {best_mae_model.spearman:.3f}`).",
-            f"- **Highest Realized Fantasy Lineup Score**: `{best_lineup_model.model_name}` (`{best_lineup_model.avg_recommended_actual_score:.2f}` actual points/round, `lineup_regret = {best_lineup_model.avg_lineup_regret:.2f}`).",
+            f"- **Rank-Ordering (`Spearman` / `Value Spearman`)**: `{best_spearman_model.model_name}` leads rank correlation (`Spearman = {best_spearman_model.spearman:.3f}`, `Value Spearman = {best_spearman_model.value_spearman:.3f}`), while exhibiting a negative level bias (`Bias = {best_spearman_model.bias:+.2f}`).",
+            f"- **Point Error (`MAE` / `RMSE`)**: `{best_mae_model.model_name}` achieves the lowest overall point error (`MAE = {best_mae_model.mae:.2f}`, `RMSE = {best_mae_model.rmse:.2f}`).",
+            f"- **Top-10 Recall & Lineup Simulation**: `{best_top10_model.model_name}` achieves `Top-10 Recall = {best_top10_model.top10_recall:.2f}`, and `{best_lineup_model.model_name}` achieves `{best_lineup_model.avg_recommended_actual_score:.2f}` simulated lineup points/round.",
+            "- Different evaluation metrics favor different baselines in this 12-round sample; this benchmark establishes the reproducible V0.2.5 laboratory rather than claiming global superiority of any single heuristic.",
             "- All features and predictions were computed strictly before each round's `decision_cutoff` with zero future data leakage.",
             "",
         ]
@@ -315,16 +366,20 @@ def run_walk_forward_evaluation(
                 ewma_alpha=ewma_alpha,
             )
             actual_rows = conn.execute(
-                "SELECT player_id, fantasy_points FROM eval_player_games WHERE season = ? AND round = ?",
+                "SELECT player_id, fantasy_points, player_status, price_provenance FROM eval_player_games WHERE season = ? AND round = ?",
                 (norm_season, rnum),
             ).fetchall()
             actuals_map = {int(row["player_id"]): float(row["fantasy_points"]) for row in actual_rows}
+            status_map = {int(row["player_id"]): str(row["player_status"]) for row in actual_rows}
+            prov_map = {int(row["player_id"]): str(row["price_provenance"]) for row in actual_rows}
 
             round_preds = predict_round_baselines(
                 feature_table=feature_table,
                 actual_points_by_player=actuals_map,
                 models=canon_models,
                 dataset_version=dataset_version,
+                actual_status_by_player=status_map,
+                price_provenance_by_player=prov_map,
             )
 
             for m_name, p_list in round_preds.items():
@@ -340,7 +395,9 @@ def run_walk_forward_evaluation(
                         "model_name": m_name,
                         "model_version": r_summary.model_version,
                         "player_samples": r_summary.player_samples,
+                        "active_player_samples": r_summary.active_player_samples,
                         "mae": r_summary.mae,
+                        "active_mae": r_summary.active_mae,
                         "rmse": r_summary.rmse,
                         "bias": r_summary.bias,
                         "spearman": r_summary.spearman,
@@ -385,6 +442,7 @@ def run_walk_forward_evaluation(
         evaluate_round_lineup_decisions(records_by_model_and_round[m])
         for m in canon_models
     ]
+    price_coverage = store.get_price_coverage_by_season()
 
     all_preds_flat = [pr for m in canon_models for pr in records_by_model[m]]
     artifact_paths: dict[str, str] = {}
@@ -396,6 +454,7 @@ def run_walk_forward_evaluation(
             decision_summaries=decision_summaries,
             round_rows=round_metric_rows,
             all_predictions=all_preds_flat,
+            price_coverage_by_season=price_coverage,
         )
 
     console_table = format_evaluation_console_table(model_summaries, decision_summaries)
@@ -404,6 +463,7 @@ def run_walk_forward_evaluation(
         "season": norm_season,
         "rounds_evaluated": target_rounds,
         "ewma_alpha": ewma_alpha,
+        "price_coverage_by_season": price_coverage,
         "models": [asdict(ms) for ms in model_summaries],
         "lineup_simulation": [asdict(ds) for ds in decision_summaries],
         "round_by_round": round_metric_rows,

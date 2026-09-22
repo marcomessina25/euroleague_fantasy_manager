@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "euroleague-fantasy-manager"
-version = "0.25.0"
+version = "0.2.5"
 description = "A deterministic, local-first EuroLeague (and EuroCup) Fantasy Challenge decision engine."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"

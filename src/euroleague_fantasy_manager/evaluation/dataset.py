@@ -1,4 +1,4 @@
-"""Normalized historical player-game, team-game, round-cutoff, and snapshot dataset builder for V0.25."""
+"""Normalized historical player-game, team-game, round-cutoff, and snapshot dataset builder for V0.2.5."""
 
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
@@ -15,7 +15,15 @@ from .targets import (
     reconstruct_player_fantasy_points,
 )
 
-DATASET_VERSION = "historical-v0.25-001"
+DATASET_VERSION = "historical-v0.2.5-001"
+
+PRICE_PROVENANCE_CATEGORIES: tuple[str, ...] = (
+    "official_snapshot",
+    "archived_fantasy",
+    "reconstructed",
+    "proxy",
+    "missing",
+)
 
 
 def normalize_season_code(season: str | int) -> str:
@@ -45,10 +53,11 @@ class HistoricalBuildSummary:
     total_team_games: int
     duplicate_games_detected: int
     duplicate_player_games_detected: int
+    price_coverage_by_season: dict[str, dict[str, int]] | None = None
 
 
 class EvaluationDatasetStore:
-    """SQLite storage layer for V0.25 normalized historical evaluation tables."""
+    """SQLite storage layer for V0.2.5 normalized historical evaluation tables."""
 
     def __init__(self, database_path: Path = DATABASE_PATH) -> None:
         self.database_path = Path(database_path)
@@ -155,6 +164,7 @@ class EvaluationDatasetStore:
                     player_status TEXT NOT NULL,
                     pre_round_quotation_tenths INTEGER NOT NULL,
                     pre_round_status TEXT NOT NULL,
+                    price_provenance TEXT NOT NULL DEFAULT 'reconstructed',
                     PRIMARY KEY (season, game_id, player_id)
                 );
 
@@ -189,6 +199,14 @@ class EvaluationDatasetStore:
                 );
                 """
             )
+            cols = {
+                str(r["name"])
+                for r in conn.execute("PRAGMA table_info(eval_player_games)").fetchall()
+            }
+            if "price_provenance" not in cols:
+                conn.execute(
+                    "ALTER TABLE eval_player_games ADD COLUMN price_provenance TEXT NOT NULL DEFAULT 'reconstructed'"
+                )
 
     def clear_season_data(self, seasons: Sequence[str]) -> None:
         norm_seasons = [normalize_season_code(s) for s in seasons]
@@ -262,6 +280,9 @@ class EvaluationDatasetStore:
             minutes = float(record.get("minutes", 0.0))
             p_status = normalize_availability_status(record.get("player_status", "available"), minutes=minutes)
             pre_status = normalize_availability_status(record.get("pre_round_status", "available"))
+            price_prov = str(record.get("price_provenance", "reconstructed"))
+            if price_prov not in PRICE_PROVENANCE_CATEGORIES:
+                price_prov = "reconstructed"
 
             conn.execute(
                 """
@@ -272,7 +293,7 @@ class EvaluationDatasetStore:
                     turnovers, fouls, fouls_drawn, fg_attempted, fg_made,
                     ft_attempted, ft_made, three_attempted, three_made,
                     pir, fantasy_points, player_status,
-                    pre_round_quotation_tenths, pre_round_status
+                    pre_round_quotation_tenths, pre_round_status, price_provenance
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?,
@@ -280,7 +301,7 @@ class EvaluationDatasetStore:
                     ?, ?, ?, ?, ?,
                     ?, ?, ?, ?,
                     ?, ?, ?,
-                    ?, ?
+                    ?, ?, ?
                 )
                 """,
                 (
@@ -315,6 +336,7 @@ class EvaluationDatasetStore:
                     p_status,
                     int(record.get("pre_round_quotation_tenths", 100)),
                     pre_status,
+                    price_prov,
                 ),
             )
             return True
@@ -363,6 +385,39 @@ class EvaluationDatasetStore:
         with self._connect() as conn:
             rows = conn.execute("SELECT DISTINCT season FROM eval_rounds ORDER BY season").fetchall()
             return [str(r["season"]) for r in rows]
+
+    def get_price_coverage_by_season(self, season: str | None = None) -> dict[str, dict[str, int]]:
+        """Return counts of player-game rows by season and price_provenance category."""
+        result: dict[str, dict[str, int]] = {}
+        with self._connect() as conn:
+            if season is not None:
+                norm_s = normalize_season_code(season)
+                rows = conn.execute(
+                    """
+                    SELECT season, price_provenance, COUNT(*) AS cnt
+                    FROM eval_player_games
+                    WHERE season = ?
+                    GROUP BY season, price_provenance
+                    ORDER BY season, price_provenance
+                    """,
+                    (norm_s,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT season, price_provenance, COUNT(*) AS cnt
+                    FROM eval_player_games
+                    GROUP BY season, price_provenance
+                    ORDER BY season, price_provenance
+                    """
+                ).fetchall()
+            for r in rows:
+                s_code = str(r["season"])
+                if s_code not in result:
+                    result[s_code] = {cat: 0 for cat in PRICE_PROVENANCE_CATEGORIES}
+                prov = str(r["price_provenance"])
+                result[s_code][prov] = int(r["cnt"])
+        return result
 
 
 def _det_int(seed_str: str, low: int, high: int) -> int:
@@ -551,6 +606,10 @@ def build_historical_dataset(
                         team_won = h_win if is_home else a_win
                         team_margin = margin if is_home else -margin
                         pre_quote = current_quotations[pid]
+                        if season_code in ("E2024", "E2025"):
+                            price_prov = "archived_fantasy" if rnum == 1 else "reconstructed"
+                        else:
+                            price_prov = "proxy"
 
                         if pos == "HC":
                             hc_pts = reconstruct_coach_fantasy_points(team_margin)
@@ -563,7 +622,7 @@ def build_historical_dataset(
                                     turnovers, fouls, fouls_drawn, fg_attempted, fg_made,
                                     ft_attempted, ft_made, three_attempted, three_made,
                                     pir, fantasy_points, player_status,
-                                    pre_round_quotation_tenths, pre_round_status
+                                    pre_round_quotation_tenths, pre_round_status, price_provenance
                                 ) VALUES (
                                     ?, ?, ?, ?, ?, 'HC',
                                     ?, ?, ?, ?, 1,
@@ -571,13 +630,13 @@ def build_historical_dataset(
                                     0, 0, 0, 0, 0,
                                     0, 0, 0, 0,
                                     ?, ?, 'available',
-                                    ?, 'available'
+                                    ?, 'available', ?
                                 )
                                 """,
                                 (
                                     season_code, rnum, game_id, game_dt, pid,
                                     tid, opp_id, ha_str, turn_num,
-                                    hc_pts, hc_pts, pre_quote,
+                                    hc_pts, hc_pts, pre_quote, price_prov,
                                 ),
                             )
                             total_pg += 1
@@ -645,7 +704,7 @@ def build_historical_dataset(
                                 turnovers, fouls, fouls_drawn, fg_attempted, fg_made,
                                 ft_attempted, ft_made, three_attempted, three_made,
                                 pir, fantasy_points, player_status,
-                                pre_round_quotation_tenths, pre_round_status
+                                pre_round_quotation_tenths, pre_round_status, price_provenance
                             ) VALUES (
                                 ?, ?, ?, ?, ?, ?,
                                 ?, ?, ?, ?, ?,
@@ -653,7 +712,7 @@ def build_historical_dataset(
                                 ?, ?, ?, ?, ?,
                                 ?, ?, ?, ?,
                                 ?, ?, ?,
-                                ?, ?
+                                ?, ?, ?
                             )
                             """,
                             (
@@ -663,7 +722,7 @@ def build_historical_dataset(
                                 tov, pf, fd, fga, fgm,
                                 fta, ftm, tpa, tpm,
                                 pir_val, fpts_val, actual_status,
-                                pre_quote, pre_status,
+                                pre_quote, pre_status, price_prov,
                             ),
                         )
                         total_pg += 1
@@ -703,4 +762,5 @@ def build_historical_dataset(
         total_team_games=total_tg,
         duplicate_games_detected=0,
         duplicate_player_games_detected=0,
+        price_coverage_by_season=store.get_price_coverage_by_season(),
     )

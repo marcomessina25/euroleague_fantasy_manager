@@ -1,8 +1,8 @@
 # Items left for V0.2
 
-> **Status:** V0.2 implementation and pre-merge verification checklist are complete on branch `v02` (under PR #1).
+> **Status:** Completed and merged into `main` on 2026-09-22 (PR #1).
 >
-> This document is the final pre-merge checklist. It intentionally contains only items that should be addressed before or as part of merging V0.2. Anything that is a design improvement rather than a release blocker belongs in V0.25/V0.3.
+> This document is the final pre-merge checklist. It intentionally contains only items that should be addressed before or as part of merging V0.2. Anything that is a design improvement rather than a release blocker belongs in V0.2.5/V0.3.
 
 ## 1. Merge-state and documentation cleanup
 
@@ -33,7 +33,7 @@ This is acceptable for V0.2, but the model contract must be clear:
 - [x] Explain that quotation/price is intentionally used as an input prior.
 - [x] Do not describe the model as an ML model or as a validated forecast.
 - [x] Avoid implying that the current coefficients have been statistically fitted.
-- [x] Preserve the current implementation as a stable baseline so V0.25 can compare against it.
+- [x] Preserve the current implementation as a stable baseline so V0.2.5 can compare against it.
 
 ## 3. Turn Option Value tests
 
@@ -98,7 +98,7 @@ V0.2 is ready to merge when:
 5. The deterministic validator remains the final authority for all actionable lineup/trade outputs.
 6. Documentation correctly reflects that V0.2 is pending merge until PR #1 lands.
 
-## Explicitly deferred to V0.25+
+## Explicitly deferred to V0.2.5+
 
 Do **not** block V0.2 on:
 

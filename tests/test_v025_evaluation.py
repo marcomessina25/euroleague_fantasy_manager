@@ -1,9 +1,10 @@
-"""Hermetic V0.25 unit, point-in-time leakage, and walk-forward evaluation tests."""
+"""Hermetic V0.2.5 unit, point-in-time leakage, and walk-forward evaluation tests."""
 
 import json
 from pathlib import Path
 import pytest
 
+from euroleague_fantasy_manager import __version__
 from euroleague_fantasy_manager.cli import main as cli_main
 from euroleague_fantasy_manager.evaluation import (
     EvaluationDatasetStore,
@@ -236,7 +237,10 @@ def test_walk_forward_evaluation_metrics_provenance_and_cli(tmp_path: Path, caps
         database_path=db_path,
         reports_dir=reports_dir,
     )
+    assert __version__ == "0.2.5"
     assert len(eval_res["models"]) == 4
+    assert eval_res["models"][0]["active_player_samples"] > 0
+    assert "E2025" in eval_res["price_coverage_by_season"]
     assert len(eval_res["lineup_simulation"]) == 4
     assert "MODEL" in eval_res["console_table"]
     assert "Fantasy lineup simulation" in eval_res["console_table"]

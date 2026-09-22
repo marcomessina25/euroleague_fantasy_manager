@@ -201,7 +201,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to current_squad.json.",
     )
 
-    # V0.25 Historical Evaluation Foundation Commands
+    # V0.2.5 Historical Evaluation Foundation Commands
     evaluation_parser = subparsers.add_parser(
         "evaluation",
         help="Build or inspect normalized point-in-time historical evaluation datasets.",

@@ -1,4 +1,4 @@
-"""Point-in-time feature generator with strict cutoff enforcement and cold-start tracking for V0.25."""
+"""Point-in-time feature generator with strict cutoff enforcement and cold-start tracking for V0.2.5."""
 
 from dataclasses import dataclass
 from datetime import datetime

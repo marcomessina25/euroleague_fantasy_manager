@@ -1,4 +1,4 @@
-"""V0.25 Historical Evaluation Foundation package for EuroLeague Fantasy Manager."""
+"""V0.2.5 Historical Evaluation Foundation package for EuroLeague Fantasy Manager."""
 
 from .backtest import inspect_historical_round, run_walk_forward_evaluation
 from .baselines import PredictionRecord, predict_round_baselines

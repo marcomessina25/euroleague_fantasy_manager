@@ -1,4 +1,4 @@
-"""Baseline prediction models (`season_mean`, `last3`, `last5`, `last10`, `ewma`, `xpdk_v02`) and provenance records for V0.25."""
+"""Baseline prediction models (`season_mean`, `last3`, `last5`, `last10`, `ewma`, `xpdk_v02`) and provenance records for V0.2.5."""
 
 from dataclasses import dataclass
 from typing import Sequence
@@ -28,7 +28,7 @@ def canonical_model_name(name: str) -> str:
     aliases = {
         "season_avg": "season_mean",
         "season_mean": "season_mean",
-        "last3": "last5" if False else "last3",
+        "last3": "last3",
         "last_3": "last3",
         "last5": "last5",
         "last_5": "last5",
@@ -67,6 +67,8 @@ class PredictionRecord:
     prediction: float
     sigma_prediction: float
     actual_fantasy_points: float
+    actual_status: str = "available"
+    price_provenance: str = "reconstructed"
 
 
 def predict_single_player_baseline(
@@ -74,6 +76,8 @@ def predict_single_player_baseline(
     model_name: str,
     actual_fantasy_points: float = 0.0,
     dataset_version: str = DATASET_VERSION,
+    actual_status: str = "available",
+    price_provenance: str = "reconstructed",
 ) -> PredictionRecord:
     """Compute both conditional (`E[PDK | plays]`) and unconditional (`E[PDK]`) predictions for a feature row."""
     canon = canonical_model_name(model_name)
@@ -100,27 +104,27 @@ def predict_single_player_baseline(
             cond_pred = round(feature_row.season_avg_fantasy_points, 2)
             uncond_pred = cond_pred
             sigma_val = coach_std
-            m_ver = "0.25.0"
+            m_ver = "0.2.5"
         elif canon == "last3":
             cond_pred = round(feature_row.last_3_avg, 2)
             uncond_pred = cond_pred
             sigma_val = coach_std
-            m_ver = "0.25.0"
+            m_ver = "0.2.5"
         elif canon == "last5":
             cond_pred = round(feature_row.last_5_avg, 2)
             uncond_pred = cond_pred
             sigma_val = coach_std
-            m_ver = "0.25.0"
+            m_ver = "0.2.5"
         elif canon == "last10":
             cond_pred = round(feature_row.last_10_avg, 2)
             uncond_pred = cond_pred
             sigma_val = coach_std
-            m_ver = "0.25.0"
+            m_ver = "0.2.5"
         else:  # ewma
             cond_pred = round(feature_row.ewma_fantasy_points, 2)
             uncond_pred = cond_pred
             sigma_val = coach_std
-            m_ver = "0.25.0"
+            m_ver = "0.2.5"
 
         return PredictionRecord(
             model_name=canon,
@@ -142,6 +146,8 @@ def predict_single_player_baseline(
             prediction=uncond_pred,
             sigma_prediction=sigma_val,
             actual_fantasy_points=round(float(actual_fantasy_points), 2),
+            actual_status=actual_status,
+            price_provenance=price_provenance,
         )
 
     # Court Players (G, F, C)
@@ -167,7 +173,7 @@ def predict_single_player_baseline(
         uncond_pred = round(feature_row.play_probability * cond_pred, 2)
         sigma_val = round(max(4.0, 0.45 * uncond_pred), 2) if uncond_pred > 0.0 else 0.0
     else:
-        m_ver = "0.25.0"
+        m_ver = "0.2.5"
         if canon == "season_mean":
             raw_est = feature_row.season_avg_fantasy_points
         elif canon == "last3":
@@ -203,6 +209,8 @@ def predict_single_player_baseline(
         prediction=uncond_pred,
         sigma_prediction=sigma_val,
         actual_fantasy_points=round(float(actual_fantasy_points), 2),
+        actual_status=actual_status,
+        price_provenance=price_provenance,
     )
 
 
@@ -211,6 +219,8 @@ def predict_round_baselines(
     actual_points_by_player: dict[int, float],
     models: Sequence[str] = ("season_mean", "last5", "ewma", "xpdk_v02"),
     dataset_version: str = DATASET_VERSION,
+    actual_status_by_player: dict[int, str] | None = None,
+    price_provenance_by_player: dict[int, str] | None = None,
 ) -> dict[str, list[PredictionRecord]]:
     """Generate PredictionRecord lists for all requested baseline models in a single round."""
     results: dict[str, list[PredictionRecord]] = {}
@@ -222,6 +232,8 @@ def predict_round_baselines(
                 model_name=canon,
                 actual_fantasy_points=actual_points_by_player.get(pid, 0.0),
                 dataset_version=dataset_version,
+                actual_status=(actual_status_by_player or {}).get(pid, "available"),
+                price_provenance=(price_provenance_by_player or {}).get(pid, "reconstructed"),
             )
             for pid, feat in sorted(feature_table.items())
         ]
