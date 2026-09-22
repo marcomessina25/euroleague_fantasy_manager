@@ -70,14 +70,40 @@ def fetch_current_data(
     league_id: int = EUROLEAGUE_LEAGUE_ID,
     competition_code: str = "E",
     season_code: str = "E2026",
+    upcoming_rounds: int = 6,
 ) -> dict[str, Any]:
-    """Fetch a complete point-in-time snapshot of config, schedule, match lineups, and official clubs."""
+    """Fetch a complete point-in-time snapshot of config, multi-round schedules, match lineups, and official clubs."""
     config = fetch_league_config(league_id=league_id)
     schedule_id = int(config["current_schedule_id"])
     current_md = config["current_matchday"]
     matchday_id = int(current_md["id"])
+    current_round_num = int(current_md.get("number", 1))
 
-    schedule = fetch_matchday_schedule(schedule_id=schedule_id, matchday_id=matchday_id)
+    all_matchdays = config.get("matchdays", [])
+    target_mds = [
+        md for md in all_matchdays
+        if int(md.get("number", 0)) >= current_round_num
+    ][: max(1, upcoming_rounds)]
+    if not target_mds:
+        target_mds = [{"id": matchday_id, "number": current_round_num}]
+
+    schedules_by_num: dict[int, dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=min(6, len(target_mds))) as md_pool:
+        future_to_num = {
+            md_pool.submit(fetch_matchday_schedule, schedule_id, int(md["id"])): int(md.get("number", 1))
+            for md in target_mds
+        }
+        for fut in as_completed(future_to_num):
+            rnum = future_to_num[fut]
+            try:
+                sched_data = fut.result()
+                sched_data["number"] = rnum
+                schedules_by_num[rnum] = sched_data
+            except Exception:
+                pass
+
+    schedule = schedules_by_num.get(current_round_num) or fetch_matchday_schedule(schedule_id=schedule_id, matchday_id=matchday_id)
+    ordered_schedules = [schedules_by_num[k] for k in sorted(schedules_by_num)] or [schedule]
 
     match_ids: list[tuple[int, int]] = []
     for turn in schedule.get("rounds", []):
@@ -106,6 +132,7 @@ def fetch_current_data(
         "season_code": season_code,
         "config": config,
         "schedule": schedule,
+        "schedules": ordered_schedules,
         "match_lineups": ordered_match_lineups,
         "official_clubs": official_clubs,
     }

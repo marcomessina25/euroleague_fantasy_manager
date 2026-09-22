@@ -89,16 +89,16 @@ Model improvement
 
 ## V0.2 — Decision-support basics, Matchup FDR, xP baseline & Turn-aware Lineup
 
-**Status: planned on branch `v02` ([`docs/v02/v02.md`](v02/v02.md)).**
+**Status: completed on 2026-09-22 on branch `v02` ([`docs/v02/v02.md`](v02/v02.md)).**
 
-### Scope
+### Scope & Completed Deliverables
 
-- Detailed current-squad reporting (`elf squad`): purchase prices, current `quotation` credits, realized/unrealized capital gains (`total_plus`), bank, total team value, and remaining trades (`0..4`).
-- Multi-round fixture and Turn (`T1`/`T2`) schedule ticker (`elf fixtures --rounds 5`, `--squad-only`) with opponent defensive difficulty (FDR) by position (`G`, `F`, `C`, `HC`).
-- Baseline Expected Fantasy Points ($\text{xPDK}$) model for players (modified PIR + 10% win bonus) and Head Coaches (`+10/+20/+25` win margins vs `-5/-10/-20` loss margins).
-- **Turn-Aware Lineup & Captaincy Optimizer (`elf lineup`)**:
-  - Optimizes Starting 5 (`1.0x`), Captain (`2.0x`), Sixth Man (`1.0x`), and 4 Bench (`0.5x`) while explicitly computing the **Turn 1 $\to$ Turn 2 Real Option Value** ($\mathbb{E}[\max(S_{T1}, S_{T2})]$) for starting `T1` players when `T2` backups exist on the bench.
-- Automated `1..4` trade candidate generator and recommender (`elf suggest-trades --trades 1..4`).
+- Detailed current-squad reporting (`elf squad`, [`squad_report.py`](../src/euroleague_fantasy_manager/squad_report.py)): purchase prices, current `quotation` credits, `100%` selling value (`0%` sell-on tax), unrealized capital gains (`+Cr`/`-Cr`), bank, total team value, remaining trades (`0..4`), and next Unlimited Trade Window.
+- Multi-round fixture and Turn (`T1`/`T2`) schedule ticker (`elf fixtures --rounds 5`, `--squad-only`, [`fixtures.py`](../src/euroleague_fantasy_manager/fixtures.py)) with Team Strength Index ($S_t$), Win Probability, and `1..5` Fixture Difficulty Rating (FDR) by position (`G`, `F`, `C`, `HC`).
+- Baseline Expected Fantasy Points ($\text{xPDK}$) model ([`expected_points.py`](../src/euroleague_fantasy_manager/expected_points.py)) for Court Players (modified PIR + 10% win bonus) and Head Coaches (`+10/+20/+25` win margins vs `-5/-10/-20` loss margins via exact normal CDF step brackets).
+- **Turn-Aware Lineup & Captaincy Optimizer (`elf lineup`, [`lineup.py`](../src/euroleague_fantasy_manager/lineup.py))**:
+  - Exhaustively evaluates all legal 5-starter formations (`2-2-1`, `1-2-2`, `2-1-2`, `1-3-1`, `3-1-1`), Captain (`2.0x`), Sixth Man (`1.0x`), 4 Bench (`0.5x`), and Head Coach (`1.0x`) while explicitly computing the **Turn 1 $\to$ Turn 2 Real Option Value** ($\Delta \text{Option}_{\text{Cap}} + \Delta \text{Option}_{\text{slot}}$) for starting `T1` players when `T2` backups exist on the bench.
+- Automated `1..4` trade candidate generator and recommender (`elf suggest-trades --trades 1..4`, [`suggest_transfers.py`](../src/euroleague_fantasy_manager/suggest_transfers.py)).
 
 ---
 

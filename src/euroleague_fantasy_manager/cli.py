@@ -8,6 +8,7 @@ import sys
 from typing import Sequence
 
 from .api import fetch_current_data
+from .fixtures import analyze_squad_fixtures, analyze_team_fixtures
 from .import_squad import (
     DATABASE_PATH,
     DEFAULT_PLAYERS_PATH,
@@ -15,9 +16,12 @@ from .import_squad import (
     PROJECT_ROOT,
     import_squad_from_file,
 )
+from .lineup import generate_lineup_report
 from .rules import EUROCUP_LEAGUE_ID, EUROLEAGUE_LEAGUE_ID
+from .squad_report import generate_squad_report
 from .squad_state import load_current_squad
 from .storage import SnapshotStore
+from .suggest_transfers import suggest_trades
 from .transfers import parse_trade_specs, validate_trades
 
 
@@ -88,6 +92,110 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to current_squad.json.",
     )
 
+    # V0.2 Decision Support Commands
+    squad_parser = subparsers.add_parser(
+        "squad",
+        help="Inspect 11-unit squad capital gains (0% sell-on tax), bank, and trade budget.",
+    )
+    squad_parser.add_argument(
+        "--squad",
+        type=Path,
+        default=DEFAULT_SQUAD_PATH,
+        help="Path to current_squad.json.",
+    )
+    squad_parser.add_argument(
+        "--round",
+        "-r",
+        type=int,
+        default=None,
+        help="Target round number (defaults to round_number in squad file or snapshot).",
+    )
+
+    fixtures_parser = subparsers.add_parser(
+        "fixtures",
+        help="Rank clubs or current squad by multi-round schedule & Fixture Difficulty Rating (FDR 1..5).",
+    )
+    fixtures_parser.add_argument(
+        "--rounds",
+        "-r",
+        type=int,
+        default=5,
+        help="Number of upcoming rounds to evaluate (default: 5).",
+    )
+    fixtures_parser.add_argument(
+        "--start-round",
+        type=int,
+        default=None,
+        help="Starting round number (defaults to active round in snapshot).",
+    )
+    fixtures_parser.add_argument(
+        "--squad-only",
+        action="store_true",
+        help="Show fixture ticker only for the 11 units in current_squad.json.",
+    )
+    fixtures_parser.add_argument(
+        "--squad",
+        type=Path,
+        default=DEFAULT_SQUAD_PATH,
+        help="Path to current_squad.json (used with --squad-only).",
+    )
+
+    lineup_parser = subparsers.add_parser(
+        "lineup",
+        aliases=["starting-five", "captain"],
+        help="Recommend optimal Starting 5, Sixth Man, Bench, Head Coach, and Captain with T1->T2 Option Value.",
+    )
+    lineup_parser.add_argument(
+        "--round",
+        "-r",
+        type=int,
+        default=None,
+        help="Target round number (defaults to active round in snapshot).",
+    )
+    lineup_parser.add_argument(
+        "--squad",
+        type=Path,
+        default=DEFAULT_SQUAD_PATH,
+        help="Path to current_squad.json.",
+    )
+
+    suggest_parser = subparsers.add_parser(
+        "suggest-trades",
+        aliases=["suggest-transfers"],
+        help="Recommend top legal 1-to-4 trade packages ranked by Turn-Adjusted Expected PDK gain.",
+    )
+    suggest_parser.add_argument(
+        "--trades",
+        "-t",
+        type=int,
+        default=1,
+        help="Number of trades per package (1..4, default: 1).",
+    )
+    suggest_parser.add_argument(
+        "--round",
+        "-r",
+        type=int,
+        default=None,
+        help="Target round number (defaults to active round in snapshot).",
+    )
+    suggest_parser.add_argument(
+        "--top",
+        type=int,
+        default=5,
+        help="Number of top trade packages to return (default: 5).",
+    )
+    suggest_parser.add_argument(
+        "--unlimited",
+        action="store_true",
+        help="Evaluate under Unlimited Trade Window rules.",
+    )
+    suggest_parser.add_argument(
+        "--squad",
+        type=Path,
+        default=DEFAULT_SQUAD_PATH,
+        help="Path to current_squad.json.",
+    )
+
     return parser
 
 
@@ -136,6 +244,58 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = validate_trades(state, moves, players_by_id, unlimited_window=args.unlimited)
         print(json.dumps(asdict(report), indent=2))
         return 0 if report.is_valid else 2
+
+    if args.command == "squad":
+        report = generate_squad_report(
+            squad_path=args.squad,
+            database_path=args.db,
+            report_path=None,
+            round_number=args.round,
+        )
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 0
+
+    if args.command == "fixtures":
+        if args.squad_only:
+            squad_fixtures = analyze_squad_fixtures(
+                squad_path=args.squad,
+                database_path=args.db,
+                num_rounds=args.rounds,
+                start_round=args.start_round,
+            )
+            print(json.dumps(squad_fixtures, indent=2, ensure_ascii=False))
+            return 0
+        team_report = analyze_team_fixtures(
+            database_path=args.db,
+            num_rounds=args.rounds,
+            start_round=args.start_round,
+            report_path=None,
+        )
+        print(json.dumps(team_report, indent=2, ensure_ascii=False))
+        return 0
+
+    if args.command in ("lineup", "starting-five", "captain"):
+        lineup_payload = generate_lineup_report(
+            squad_path=args.squad,
+            database_path=args.db,
+            round_number=args.round,
+            report_path=None,
+        )
+        print(json.dumps(lineup_payload, indent=2, ensure_ascii=False))
+        return 0
+
+    if args.command in ("suggest-trades", "suggest-transfers"):
+        trades_payload = suggest_trades(
+            squad_path=args.squad,
+            database_path=args.db,
+            num_trades=args.trades,
+            round_number=args.round,
+            top_k=args.top,
+            unlimited_window=args.unlimited,
+            report_path=None,
+        )
+        print(json.dumps(trades_payload, indent=2, ensure_ascii=False))
+        return 0
 
     return 0
 

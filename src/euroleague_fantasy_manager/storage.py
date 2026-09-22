@@ -148,29 +148,39 @@ class SnapshotStore:
             tabbr = str(t.get("abbreviation", ""))
             team_map[tid] = (tname, tabbr)
 
-        schedule = payload.get("schedule", {})
+        schedules_list = payload.get("schedules")
+        if not schedules_list:
+            single_sched = payload.get("schedule", {})
+            schedules_list = [single_sched] if single_sched else []
+
         fixtures_rows: list[tuple[Any, ...]] = []
-        for turn in schedule.get("rounds", []):
-            t_num = int(turn.get("number", 1))
-            for m in turn.get("matches", []):
-                mid = int(m["id"])
-                ht = m.get("home_team", {})
-                at = m.get("away_team", {})
-                fixtures_rows.append(
-                    (
-                        mid,
-                        round_number,
-                        t_num,
-                        m.get("started_at"),
-                        m.get("status", "scheduled"),
-                        int(ht.get("id", 0)),
-                        str(ht.get("abbreviation", "")),
-                        int(at.get("id", 0)),
-                        str(at.get("abbreviation", "")),
-                        ht.get("score"),
-                        at.get("score"),
+        seen_fixture_ids: set[int] = set()
+        for sched_obj in schedules_list:
+            sched_round = int(sched_obj.get("number", round_number))
+            for turn in sched_obj.get("rounds", []):
+                t_num = int(turn.get("number", 1))
+                for m in turn.get("matches", []):
+                    mid = int(m["id"])
+                    if mid in seen_fixture_ids:
+                        continue
+                    seen_fixture_ids.add(mid)
+                    ht = m.get("home_team", {})
+                    at = m.get("away_team", {})
+                    fixtures_rows.append(
+                        (
+                            mid,
+                            sched_round,
+                            t_num,
+                            m.get("started_at"),
+                            m.get("status", "scheduled"),
+                            int(ht.get("id", 0)),
+                            str(ht.get("abbreviation", "")),
+                            int(at.get("id", 0)),
+                            str(at.get("abbreviation", "")),
+                            ht.get("score"),
+                            at.get("score"),
+                        )
                     )
-                )
 
         players_by_id: dict[int, dict[str, Any]] = {}
         for mdata in payload.get("match_lineups", []):
@@ -387,3 +397,62 @@ class SnapshotStore:
                     }
                 )
         return results
+
+    def load_latest_teams(self) -> dict[int, dict[str, str]]:
+        """Return mapping of team_id -> {'name': ..., 'short_name': ...} for the latest snapshot."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT id FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
+            if row is None:
+                return {}
+            sid = int(row["id"])
+            rows = conn.execute(
+                "SELECT id, name, short_name FROM teams WHERE snapshot_id = ? ORDER BY id",
+                (sid,),
+            ).fetchall()
+            return {
+                int(r["id"]): {"name": str(r["name"]), "short_name": str(r["short_name"])}
+                for r in rows
+            }
+
+    def load_latest_fixtures(self, round_numbers: list[int] | None = None) -> list[dict[str, Any]]:
+        """Return fixtures from the latest snapshot, optionally filtered by round_numbers."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT id FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
+            if row is None:
+                return []
+            sid = int(row["id"])
+            if round_numbers:
+                placeholders = ",".join("?" for _ in round_numbers)
+                rows = conn.execute(
+                    f"""
+                    SELECT * FROM fixtures
+                    WHERE snapshot_id = ? AND round_number IN ({placeholders})
+                    ORDER BY round_number ASC, turn_number ASC, started_at ASC, id ASC
+                    """,
+                    (sid, *round_numbers),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM fixtures
+                    WHERE snapshot_id = ?
+                    ORDER BY round_number ASC, turn_number ASC, started_at ASC, id ASC
+                    """,
+                    (sid,),
+                ).fetchall()
+            return [
+                {
+                    "id": int(r["id"]),
+                    "round_number": int(r["round_number"]),
+                    "turn_number": int(r["turn_number"]),
+                    "started_at": r["started_at"],
+                    "status": str(r["status"] or "scheduled"),
+                    "home_team_id": int(r["home_team_id"]),
+                    "home_team_code": str(r["home_team_code"]),
+                    "away_team_id": int(r["away_team_id"]),
+                    "away_team_code": str(r["away_team_code"]),
+                    "home_score": r["home_score"],
+                    "away_score": r["away_score"],
+                }
+                for r in rows
+            ]
