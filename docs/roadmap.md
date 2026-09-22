@@ -2,9 +2,9 @@
 
 > **Living document.** This is the source of truth for delivery status, engineering priorities, release criteria, known risks, and long-term direction. Human contributors and AI agents must read it before material work and update it when priorities or milestone status changes.
 >
-> **Current planning baseline:** V0.1 is completed on `main`; V0.2 is implemented on branch `v02` and pending merge via PR #1. V0.25 is the next planned milestone.
+> **Current planning baseline:** V0.1, V0.2, and V0.2.5 (`0.2.5`) are completed (2026-09-22). **V0.3** is the single next milestone.
 >
-> See [`docs/architecture.md`](architecture.md), [`docs/v02/v02.md`](v02/v02.md), [`docs/v02/items_left_for_v02.md`](v02/items_left_for_v02.md), [`docs/v025/v025.md`](v025/v025.md), and [`docs/v03/v03.md`](v03/v03.md) for architectural and implementation details.
+> See [`docs/architecture.md`](architecture.md), [`docs/v02/v02.md`](v02/v02.md), [`docs/v02/items_left_for_v02.md`](v02/items_left_for_v02.md), [`docs/v025/v025.md`](v025/v025.md), [`docs/v025/v025_cleanup.md`](v025/v025_cleanup.md), and [`docs/v03/v03.md`](v03/v03.md) for architectural and implementation details.
 
 ---
 
@@ -86,7 +86,7 @@ The project has a deterministic source of truth for fantasy state and rules.
 
 ## V0.2 — Decision-support basics
 
-**Status: implemented on `v02`; pending merge via PR #1.**
+**Status: completed on 2026-09-22.**
 
 ### Scope
 
@@ -115,122 +115,110 @@ The purpose of V0.2 is to establish a useful deterministic + quantitative decisi
 See:
 
 ```text
-docs/items_left_for_v02.md
+docs/v02/items_left_for_v02.md
 ```
 
 ---
 
-## V0.25 — Historical Evaluation Foundation
+## V0.2.5 — Historical Evaluation Foundation
 
-**Status: next milestone.**
+**Status: completed on 2026-09-22 (`0.2.5`).**
 
 ### Objective
 
-Build the machinery needed to determine whether our projections actually work.
+Build the historical laboratory needed to determine—rigorously, point-in-time safely, and reproducibly—whether projections and lineup decisions actually work.
 
 ### Scope
 
-- Historical player-game dataset.
-- Historical team/game dataset.
-- Point-in-time feature generation.
-- Historical fantasy-score reconstruction.
-- Season-average baseline.
-- Last-3/5/10 baselines.
-- EWMA baseline.
-- Historical reproduction of V0.2 xPDK.
-- Walk-forward evaluation.
-- MAE/RMSE.
-- Bias.
-- Spearman/ranking metrics.
-- Top-K metrics.
-- Historical lineup simulation.
-- Captain/Sixth-Man/Bench decision metrics.
-- Data/model provenance.
-- Leakage tests.
-- Evaluation reports.
+- Normalized multi-season historical dataset (`E2022`–`E2025`) in SQLite (`eval_players`, `eval_teams`, `eval_rounds`, `eval_games`, `eval_team_games`, `eval_player_games`, `eval_historical_snapshots`, `eval_predictions`).
+- Authoritative EuroLeague PIR (`reconstruct_pir`), Dunkest player fantasy points (`reconstruct_player_fantasy_points` with `+10%` win bonus and `0.0` for `DNP`/`out`), and separate Head Coach margin scoring (`reconstruct_coach_fantasy_points`).
+- Strict point-in-time feature generation (`game_date < decision_cutoff`) with explicit cold-start fallback hierarchy (`current_season -> previous_season -> career_history -> position_team_prior`).
+- Baselines (`season_mean`, `last3`, `last5`, `last10`, `ewma`, and historical point-in-time reproduction of `xpdk_v02`).
+- Walk-forward evaluation separating **All Listed Players** from **Active Players Only** (`minutes > 0`) and Court Players (`G, F, C`) from Head Coaches (`HC`).
+- Explicit historical pricing provenance tracking (`official_snapshot`, `archived_fantasy`, `reconstructed`, `proxy`, `missing`) and coverage reporting.
+- Simplified 11-unit fantasy lineup decision/regret simulation (`avg_lineup_regret`, `avg_captain_regret`, `avg_sixth_man_regret`, `avg_bench_regret`, `avg_formation_regret`).
+- Hermetic anti-leakage, target reconstruction, duplicate detection, and walk-forward backtest tests.
 
-### Key question
+### Empirical findings (`E2025` Rounds 1–12 benchmark)
 
-```text
-Does V0.2 xPDK actually beat
-simple historical baselines?
-```
+Different evaluation metrics favor different baselines in the `E2025` R1–12 benchmark (`N=288` all court-player observations, `N=282` active court-player observations):
+- **`xpdk_v02`**: strongest rank ordering (`Spearman = 0.678` all / `0.691` active, `Value Spearman = 0.231`), while exhibiting a negative level bias (`Bias = -1.97` all / `-2.08` active) due to conservative quotation scaling relative to the `1.10x` win bonus.
+- **`season_mean` / `ewma`**: strongest point-error accuracy (`season_mean MAE = 3.75`, `ewma MAE = 3.87`) and highest simulated single-round reference-squad score (`199.13` / `198.62`).
+- **`last5`**: tied strongest `Top-10 Recall = 0.74`.
 
-If not, V0.3 must address the identified weakness rather than simply adding model complexity.
+These findings directly motivate V0.3's decomposed architecture and point-in-time calibration.
 
-### Detailed plan
+### Detailed plan & cleanup
 
-See:
-
-```text
-docs/v025.md
-```
+See [`docs/v025/v025.md`](v025/v025.md) and [`docs/v025/v025_cleanup.md`](v025/v025_cleanup.md).
 
 ---
 
-## V0.3 — Validated Predictive Projection Layer
+## V0.3 — Validated Predictive Projection Layer (Next Milestone)
 
-**Status: planned.**
+**Status: planned (next milestone).**
 
 ### Objective
 
-Move from heuristic xPDK to statistically grounded projections.
+Build the first **validated, point-in-time predictive projection system** for EuroLeague Fantasy, built on top of the V0.2.5 historical evaluation laboratory.
 
-### Architecture
+### Core architectural rule & pipeline
 
-```text
-availability
-     ↓
-expected minutes
-     ↓
-component production
-     ↓
-game context
-     ↓
-expected PIR / fantasy points
-     ↓
-empirical uncertainty
-```
-
-### Scope
-
-- Expected availability.
-- Expected minutes.
-- Component production rates.
-- Player role/rotation features.
-- Team/opponent context.
-- Schedule/rest/congestion features.
-- Statistical prediction models.
-- Empirical uncertainty estimates.
-- Model registry/versioning.
-- Model-agnostic prediction objects.
-- V0.2 vs V0.3 walk-forward comparison.
-- Deterministic conversion of component projections into fantasy points.
-- Separate Head Coach model.
-
-### Important separation
-
-V0.3 must distinguish:
+> **Do not make one model learn availability, playing time, and performance as one undifferentiated target.**
 
 ```text
-performance prediction
-        ≠
-fantasy valuation
-        ≠
-lineup/trade optimization
+historical/current information
+        ↓
+P(play)                      [Phase B: Availability model]
+        ↓
+E(minutes | play)            [Phase C: Conditional minutes model]
+        ↓
+E(FP/min | play)             [Phase D: Conditional production-per-minute model]
+        ↓
+E(fantasy points)            [Phase E: Coherent composition: P(play) × E(min|play) × E(FP/min|play)]
+        ↓
+calibration + uncertainty    [Phases F & G: Out-of-sample level calibration + residual intervals]
+        ↓
+player valuation             [Phase I: Expected FP / price & value above replacement]
+        ↓
+V0.4 optimizer               [Downstream decision layer]
 ```
 
-### Capital gain
+### Synthesized V0.3 delivery phases (`docs/v03/v03.md`)
 
-A first dedicated capital-gain model may be introduced only after establishing a clean price-change target and baseline.
+1. **Phase A — Multi-Season Evaluation Laboratory & Paired Comparisons**:
+   - Within-season walk-forward (`R1..R_n`), cross-season (`E2022+E2023+E2024 -> E2025`), and rolling cross-season modes.
+   - Paired model deltas ($\Delta\text{MAE}$, $\Delta\text{RMSE}$, $\Delta\text{Spearman}$, $\Delta\text{Top-K}$, $\Delta\text{Value Spearman}$, $\Delta\text{Lineup Score}$, $\Delta\text{Captain Regret}$) with bootstrap confidence intervals and explicit sample-size reporting (`players`, `active_players`, `rounds`, `games`, `price_observations`).
+2. **Phase B — Point-in-Time Availability Model (`P(play)`)**:
+   - Predict `P(play | cutoff)` from rolling appearance/DNP rates, minutes volatility, starter rate, rest, and double-round congestion; evaluate via Brier score, log loss, and probability calibration.
+3. **Phase C — Conditional Minutes Model (`E[minutes | play]`)**:
+   - Predict conditional playing time from EWMA minutes, minutes std, starter rate, rotation depth, rest, and home/away context.
+4. **Phase D — Conditional Production-Per-Minute Model (`E[FP/min | play]`)**:
+   - Shrinkage and regularized rate models combining player `FP/min` / `PIR/min` rates, positional/role priors, and opponent defensive strength while keeping `HC` prediction as a separate target family.
+5. **Phases E & F — Fantasy-Point Composition & Out-of-Sample Calibration**:
+   - Combine `E[FP] = P(play) × E[minutes | play] × E[FP/min | play]` using the deterministic fantasy scoring layer as the single source of truth.
+   - Fit intercept, linear, and multi-model (`xpdk_v02 + ewma + season_mean`) calibration strictly on rounds `< r` to eliminate the `-1.97` xPDK level bias without test-set leakage.
+6. **Phases G, H & I — Uncertainty, Oracle Regret & Player Valuation**:
+   - Empirical out-of-sample residual intervals (`lower_bound`, `upper_bound`, `prediction_spread`), hindsight oracle lineup regret (`oracle_score - model_selected_score`), and risk-adjusted player valuation (`expected_FP / price`, replacement value).
+7. **Phases J, K & L — Cold-Start Hierarchy, Feature Diagnostics & Model Registry**:
+   - Granular `fallback_source` (`current_season -> previous_season -> career -> position_prior -> team_role_prior -> league_prior`), ablation diagnostics, and `prediction/` + `valuation/` package architecture (`prediction_runs`, `player_predictions`, `model_metrics`).
 
-### Detailed architecture
+### Recommended incremental experiment order
 
-See:
+1. Re-run V0.2.5 baselines across multiple seasons (`E2022`–`E2025`).
+2. Calibrate `xpdk_v02` out-of-sample.
+3. Build availability model (`P(play)`).
+4. Build conditional minutes model (`E[minutes | play]`).
+5. Build conditional production-per-minute model (`E[FP/min | play]`).
+6. Combine `P(play) × E[minutes | play] × E[FP/min | play]` and calibrate.
+7. Add empirical uncertainty bounds and oracle lineup regret evaluation.
+8. Test regularized ML / ensembles only where paired out-of-sample evidence justifies complexity over interpretable components.
 
-```text
-docs/v03.md
-```
+### Important boundary
+
+> **V0.2.5 tells us whether our predictions are good. V0.3 builds better predictions. V0.4 decides what to do with them.**
+
+See [`docs/v03/v03.md`](v03/v03.md) for the complete V0.3 specification.
 
 ---
 
@@ -366,7 +354,7 @@ rules engine / source of truth / optimizer
 
 **Status: future horizon.**
 
-Once V0.25/V0.3 have established reliable point-in-time prediction and evaluation:
+Once V0.2.5/V0.3 have established reliable point-in-time prediction and evaluation:
 
 - multi-season historical decision simulation;
 - sequential decision A/B backtesting;
@@ -470,21 +458,20 @@ Never allow level 4 to override levels 1–3 silently.
 # Current priority order
 
 ```text
-1. Merge V0.2 cleanly
+1. V0.1 & V0.2 deterministic foundation & baseline [Completed]
         ↓
-2. Build V0.25 evaluation foundation
+2. V0.2.5 historical evaluation foundation (`0.2.5`) [Completed]
         ↓
-3. Measure V0.2 against simple baselines
+3. V0.3 validated predictive projection layer [Next Milestone]
+   (P(play) × E(minutes|play) × E(FP/min|play) + calibration + uncertainty)
         ↓
-4. Build V0.3 only where evaluation shows value
+4. V0.35 / V0.4 optimize using validated projections
         ↓
-5. Optimize using validated projections
+5. V0.4 exact live Turn 1 -> Turn 2 decisions
         ↓
-6. Build exact live Turn decisions
+6. V0.45 closed-loop decision/outcome backtesting
         ↓
-7. Add decision/outcome backtesting
-        ↓
-8. Add GUI / LLM
+7. V0.5+ GUI / LLM strategic layer
 ```
 
 This ordering is intentional.

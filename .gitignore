@@ -10,6 +10,8 @@ data/raw/
 data/historical/raw/
 reports/*.json
 reports/*.md
+reports/evaluation/*
+!reports/evaluation/.gitkeep
 reports/backtests/*
 !reports/backtests/.gitkeep
 config/current_squad.json

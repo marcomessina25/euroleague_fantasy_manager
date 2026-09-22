@@ -2,7 +2,7 @@
 
 A deterministic, local-first **EuroLeague Fantasy Challenge (Classic Mode)** decision engine for the 2026/27 season (`E2026`), architected to share its core engine with **EuroCup Fantasy Challenge** (`U2026`).
 
-![Version](https://img.shields.io/badge/Version-0.2.0-purple) ![Python](https://img.shields.io/badge/Python-3.12-blue) ![License](https://img.shields.io/badge/License-MIT-green)
+![Version](https://img.shields.io/badge/Version-0.2.5-purple) ![Python](https://img.shields.io/badge/Python-3.12-blue) ![License](https://img.shields.io/badge/License-MIT-green)
 
 ---
 
@@ -15,9 +15,9 @@ EuroLeague Fantasy & Feeds APIs -> local SQLite snapshots -> rules + validation 
 ## Living roadmap
 
 - [`docs/architecture.md`](docs/architecture.md) defines the purpose, architectural boundaries, and responsibilities of each layer.
-- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1` completed on `main`; `V0.2` implemented on branch `v02` and pending merge via PR #1; `V0.25`–`V0.6+` planned).
+- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1`, `V0.2`, and `V0.2.5` completed; `V0.3` is the next milestone).
 - [`docs/v02/v02.md`](docs/v02/v02.md) and [`docs/v02/items_left_for_v02.md`](docs/v02/items_left_for_v02.md) define the **V0.2** heuristic decision-support baseline specification and pre-merge checklist.
-- [`docs/v025/v025.md`](docs/v025/v025.md) and [`docs/v03/v03.md`](docs/v03/v03.md) define the upcoming **V0.25** historical evaluation foundation and **V0.3** validated predictive projection layer.
+- [`docs/v025/v025.md`](docs/v025/v025.md), [`docs/v025/v025_cleanup.md`](docs/v025/v025_cleanup.md), and [`docs/v03/v03.md`](docs/v03/v03.md) define the **V0.2.5** historical evaluation foundation (`0.2.5`) and **V0.3** validated predictive projection layer.
 
 Both human contributors and AI agents must read the relevant living documents before making material changes and update them whenever architecture, scope, priorities, or delivery status changes.
 
@@ -107,6 +107,16 @@ For Unlimited Trade Windows (after Rounds `6, 13, 18, 23, 28, 34` or with `--unl
 
 ```powershell
 elf validate-trades -n --unlimited --trade "Mike James:TJ Shorts"
+```
+
+## V0.2.5 Historical Evaluation Foundation (`elf evaluation`, `elf evaluate`)
+
+Build a normalized multi-season point-in-time historical dataset (`E2022`–`E2025`), inspect point-in-time features and price provenance before any round cutoff, and run chronological walk-forward evaluation (`E2025` Rounds `1–12` benchmark) comparing `season_mean`, `last5`, `ewma`, and `xpdk_v02`:
+
+```powershell
+elf evaluation build-dataset --seasons 2022 2023 2024 2025
+elf evaluation inspect --season 2025 --round 8
+elf evaluate --season 2025 --rounds 1:12 --models season_mean,last5,ewma,xpdk_v02
 ```
 
 ## License
