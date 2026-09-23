@@ -124,8 +124,8 @@ elf evaluate --season 2025 --rounds 1:12 --models season_mean,last5,ewma,xpdk_v0
 ## V0.3 Validated Predictive Projections (`elf predict`, `elf evaluate`)
 
 Generate strictly point-in-time, component-decomposed player projections:
-$$\mathbb{E}[\text{FP}] = P(\text{play}) \times \mathbb{E}[\text{minutes} \mid \text{play}] \times \mathbb{E}[\text{FP/min} \mid \text{play}]$$
-with out-of-sample calibration (zero test leakage), prediction uncertainty intervals ($[\text{lower}, \text{upper}]$), and player valuation metrics ($\text{FP/Cr}$, $\text{PAR}$, $\text{Risk-Adjusted Value}$):
+$$\mathbb{E}[\mathrm{FP}] = P(\mathrm{play}) \times \mathbb{E}[\mathrm{minutes} \mid \mathrm{play}] \times \mathbb{E}[\mathrm{FP/min} \mid \mathrm{play}]$$
+with out-of-sample calibration (zero test leakage), prediction uncertainty intervals ($[\mathrm{lower}, \mathrm{upper}]$), and player valuation metrics ($\mathrm{FP/Cr}$, $\mathrm{PAR}$, $\mathrm{Risk\text{-}Adjusted\ Value}$):
 
 ```powershell
 elf predict --season 2025 --round 5 --model fp_decomposed_v03 --top 10
