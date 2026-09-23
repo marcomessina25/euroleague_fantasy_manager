@@ -6,11 +6,14 @@ from .dataset import (
     DATASET_VERSION,
     EvaluationDatasetStore,
     build_historical_dataset,
+    normalize_season_code,
 )
 from .features import PointInTimeFeatureRow, build_features, build_round_feature_table
 from .metrics import (
     DecisionEvaluationSummary,
     ModelEvaluationSummary,
+    PairedModelComparison,
+    compute_paired_model_comparison,
     compute_point_and_ranking_metrics,
     evaluate_round_lineup_decisions,
 )
@@ -26,15 +29,18 @@ __all__ = [
     "DecisionEvaluationSummary",
     "EvaluationDatasetStore",
     "ModelEvaluationSummary",
+    "PairedModelComparison",
     "PointInTimeFeatureRow",
     "PredictionRecord",
     "build_features",
     "build_historical_dataset",
     "build_round_feature_table",
+    "compute_paired_model_comparison",
     "compute_point_and_ranking_metrics",
     "evaluate_round_lineup_decisions",
     "inspect_historical_round",
     "normalize_availability_status",
+    "normalize_season_code",
     "predict_round_baselines",
     "reconstruct_coach_fantasy_points",
     "reconstruct_pir",

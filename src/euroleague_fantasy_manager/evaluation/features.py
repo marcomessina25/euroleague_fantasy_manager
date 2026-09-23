@@ -51,6 +51,13 @@ class PointInTimeFeatureRow:
     block_rate: float
     turnover_rate: float
     foul_draw_rate: float
+    ewma_minutes: float = 0.0
+    std_minutes_last5: float = 0.0
+    dnp_rate_last5: float = 0.0
+    ewma_fp_per_min: float = 0.0
+    season_fp_per_min: float = 0.0
+    pos_prior_fp_per_min: float = 0.55
+    is_double_round_week: bool = False
 
 
 def _parse_iso_utc(ts: str) -> datetime:
@@ -263,10 +270,25 @@ def build_features(
         cold_start_source = "position_team_prior"
         active_sample = []
 
+    pos_prior_fp_per_min = 0.54 if pos == "G" else (0.56 if pos == "F" else (0.60 if pos == "C" else 0.35))
+    price_prior_fp_per_min = max(0.32, min(0.82, pos_prior_fp_per_min + (quote_tenths - 105.0) * 0.0028))
+
+    recent_all_5 = history_rows[-5:]
+    if recent_all_5:
+        dnp_count_5 = sum(
+            1 for r in recent_all_5
+            if float(r["minutes"]) <= 0.0
+            or normalize_availability_status(str(r["player_status"]), float(r["minutes"])) in ("out", "DNP")
+        )
+        dnp_rate_5 = dnp_count_5 / len(recent_all_5)
+    else:
+        dnp_rate_5 = 0.0 if pre_status == "available" else (0.25 if pre_status == "probable" else 0.60)
+
     if active_sample:
         fpts_seq = [float(r["fantasy_points"]) for r in active_sample]
         min_seq = [float(r["minutes"]) for r in active_sample]
         starter_seq = [int(r["starter"]) for r in active_sample]
+        fp_per_min_seq = [float(r["fantasy_points"]) / max(4.0, float(r["minutes"])) for r in active_sample]
 
         season_avg_fpts = sum(fpts_seq) / len(fpts_seq)
         last_1_fpts = fpts_seq[-1]
@@ -278,10 +300,18 @@ def build_features(
         season_avg_min = sum(min_seq) / len(min_seq)
         last_3_min = sum(min_seq[-3:]) / len(min_seq[-3:])
         last_5_min = sum(min_seq[-5:]) / len(min_seq[-5:])
+        ewma_min = compute_ewma(min_seq, alpha=ewma_alpha)
+        if len(min_seq[-5:]) >= 2:
+            m_mean = last_5_min
+            std_min_5 = (sum((m - m_mean) ** 2 for m in min_seq[-5:]) / len(min_seq[-5:])) ** 0.5
+        else:
+            std_min_5 = 2.5
         minutes_trend = last_3_min - season_avg_min
         starter_rate = sum(starter_seq) / len(starter_seq)
 
         total_min = max(1.0, sum(min_seq))
+        season_fp_rate = sum(fpts_seq) / total_min
+        ewma_fp_rate = compute_ewma(fp_per_min_seq, alpha=ewma_alpha)
         usage_val = sum(int(r["fg_attempted"]) + 0.44 * int(r["ft_attempted"]) + int(r["turnovers"]) for r in active_sample) / total_min
         reb_rate = sum(int(r["rebounds"]) for r in active_sample) / total_min
         ast_rate = sum(int(r["assists"]) for r in active_sample) / total_min
@@ -293,9 +323,11 @@ def build_features(
         # Cold-start position/team prior fallback (strictly from pre-round quotation)
         prior_fpts = (quote_tenths / 10.0) * (1.0 if pos != "HC" else 0.9)
         season_avg_fpts = last_1_fpts = last_3_avg = last_5_avg = last_10_avg = ewma_fpts = prior_fpts
-        season_avg_min = last_3_min = last_5_min = 24.0 if quote_tenths >= 110 else 16.0
+        season_avg_min = last_3_min = last_5_min = ewma_min = 24.0 if quote_tenths >= 110 else 16.0
+        std_min_5 = 3.0
         minutes_trend = 0.0
         starter_rate = 1.0 if quote_tenths >= 115 else 0.25
+        season_fp_rate = ewma_fp_rate = price_prior_fp_per_min
         usage_val = 0.35
         reb_rate = 0.18 if pos in ("F", "C") else 0.10
         ast_rate = 0.16 if pos == "G" else 0.07
@@ -311,6 +343,8 @@ def build_features(
         days_rest = max(1.0, round((ref_dt - last_game_dt).total_seconds() / 86400.0, 1))
     else:
         days_rest = 7.0
+
+    is_double_round = bool(days_rest <= 3.5)
 
     return PointInTimeFeatureRow(
         player_id=int(player_id),
@@ -352,6 +386,13 @@ def build_features(
         block_rate=round(blk_rate, 4),
         turnover_rate=round(tov_rate, 4),
         foul_draw_rate=round(fd_rate, 4),
+        ewma_minutes=round(ewma_min, 2),
+        std_minutes_last5=round(std_min_5, 3),
+        dnp_rate_last5=round(dnp_rate_5, 4),
+        ewma_fp_per_min=round(ewma_fp_rate, 4),
+        season_fp_per_min=round(season_fp_rate, 4),
+        pos_prior_fp_per_min=round(price_prior_fp_per_min, 4),
+        is_double_round_week=is_double_round,
     )
 
 
