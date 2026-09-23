@@ -56,7 +56,18 @@ def compute_risk_adjusted_player_score(
     risk_mode: RiskMode = RiskMode.EXPECTED,
     risk_lambda: float = 0.15,
 ) -> tuple[float, float]:
-    """Compute (raw_expected_fp, risk_adjusted_fp) under a specific multiplier and risk mode."""
+    """Compute (raw_expected_fp, risk_adjusted_fp) under a specific multiplier and risk mode.
+
+    Mathematical Interpretation:
+      This is an individual risk-adjusted heuristic:
+        score_adj = multiplier * E[FP] +/- lambda * (multiplier * sigma)
+      - EXPECTED: pure expectation E[FP]
+      - CONSERVATIVE: penalizes volatility by -lambda * sigma (downside risk aversion)
+      - AGGRESSIVE: rewards volatility by +lambda * sigma (upside / tournament ceiling hunting)
+
+    Note: This is an individual player heuristic, not a full portfolio variance model.
+    Inter-player covariance modeling remains out of scope for V0.4.
+    """
     raw = multiplier * expected_fp
     sigma = multiplier * max(0.0, uncertainty)
 

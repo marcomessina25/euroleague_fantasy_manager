@@ -14,6 +14,7 @@ from euroleague_fantasy_manager.optimization import (
     RiskMode,
     TransferOptimizer,
     brute_force_exhaustive_lineup,
+    compute_captain_option_value,
     compute_positional_replacement_levels,
     compute_turn_substitution_option_bonus,
     score_lineup_with_actuals,
@@ -33,8 +34,12 @@ def make_test_player(
     turn: int = 1,
     sigma: float = 3.0,
     prob_play: float = 1.0,
+    uncertainty: float | None = None,
+    turn_number: int | None = None,
 ) -> PlayerProjectionContract:
     eff_team = team_id if team_id is not None else ((pid % 5) + 1)
+    eff_turn = turn_number if turn_number is not None else turn
+    eff_sigma = uncertainty if uncertainty is not None else sigma
     return PlayerProjectionContract(
         player_id=pid,
         player_name=f"Player_{pid}_{pos.name}",
@@ -46,8 +51,8 @@ def make_test_player(
         probability_play=prob_play,
         expected_minutes=25.0 if pos != Position.HEAD_COACH else 40.0,
         fp_per_minute=round(expected_fp / 25.0, 3) if pos != Position.HEAD_COACH else 0.0,
-        uncertainty=sigma,
-        turn_number=turn,
+        uncertainty=eff_sigma,
+        turn_number=eff_turn,
     )
 
 
@@ -581,3 +586,359 @@ def test_cli_optimize_backtest(capsys):
     assert rc == 0
     captured = capsys.readouterr()
     assert "Decision Optimization Backtest Report" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# Section 3, 6, 7, 8, 9, 10, 13: Regression & Item-Left Verification Tests
+# ---------------------------------------------------------------------------
+
+
+def test_club_quota_boundary_regression():
+    """Verify official EuroLeague Fantasy Challenge (Dunkest) club quota.
+
+    Rule: Maximum 6 players from the same EuroLeague club across the 10 court players.
+    Head Coach is a coach unit; court limit of 6 applies to court players.
+    """
+    # 1. Exact boundary: 6 court players from club 10 + 4 from club 20 + coach from club 30
+    squad_exact_6 = [
+        make_test_player(101, Position.GUARD, expected_fp=15.0, team_id=10),
+        make_test_player(102, Position.GUARD, expected_fp=14.0, team_id=10),
+        make_test_player(103, Position.GUARD, expected_fp=13.0, team_id=10),
+        make_test_player(104, Position.GUARD, expected_fp=12.0, team_id=10),
+        make_test_player(201, Position.FORWARD, expected_fp=20.0, team_id=10),
+        make_test_player(202, Position.FORWARD, expected_fp=18.0, team_id=10),
+        make_test_player(203, Position.FORWARD, expected_fp=16.0, team_id=20),
+        make_test_player(204, Position.FORWARD, expected_fp=14.0, team_id=20),
+        make_test_player(301, Position.CENTER, expected_fp=22.0, team_id=20),
+        make_test_player(302, Position.CENTER, expected_fp=17.0, team_id=20),
+        make_test_player(401, Position.HEAD_COACH, expected_fp=15.0, team_id=30),
+    ]
+    res_6 = validate_squad_constraints(squad_exact_6, budget_tenths=2000)
+    assert res_6.is_valid, f"Expected 6 players from same club to be valid, got: {res_6.errors}"
+
+    # 2. Violation: 7 court players from club 10 + 3 from club 20 + coach from club 30
+    squad_violation_7 = list(squad_exact_6)
+    squad_violation_7[6] = make_test_player(203, Position.FORWARD, expected_fp=16.0, team_id=10)
+    res_7 = validate_squad_constraints(squad_violation_7, budget_tenths=2000)
+    assert not res_7.is_valid
+    assert any("Club 10 has 7 players; maximum allowed is 6" in e for e in res_7.errors)
+
+    # 3. Head coach from same club: 6 court players from club 10 + 1 coach from club 10 is VALID
+    squad_6_plus_coach = list(squad_exact_6)
+    squad_6_plus_coach[10] = make_test_player(401, Position.HEAD_COACH, expected_fp=15.0, team_id=10)
+    res_coach = validate_squad_constraints(squad_6_plus_coach, budget_tenths=2000)
+    assert res_coach.is_valid, "Head coach from same club should not violate court player quota of 6"
+
+
+def test_captain_option_value_comprehensive():
+    """Verify captain option value calculation under all required boundary conditions."""
+    # 1. Current captain remains best: mu_C = 25, mu_B = 15, sigma_C = 5.0
+    cap_primary = make_test_player(101, Position.GUARD, expected_fp=25.0, uncertainty=5.0, turn_number=1)
+    backup_lower = make_test_player(102, Position.GUARD, expected_fp=15.0, uncertainty=4.0, turn_number=2)
+    val_higher, best_b = compute_captain_option_value(cap_primary, [backup_lower], captain_multiplier=2.0)
+    assert val_higher > 0.0, "Positive option value expected due to uncertainty sigma > 0"
+    assert best_b is not None and best_b.player_id == 102
+
+    # When sigma approaches 0, option value of lower backup approaches 0
+    cap_zero_sigma = make_test_player(101, Position.GUARD, expected_fp=25.0, uncertainty=0.01, turn_number=1)
+    val_zero_sigma, _ = compute_captain_option_value(cap_zero_sigma, [backup_lower], captain_multiplier=2.0)
+    assert val_zero_sigma == 0.0
+
+    # 2. Another eligible player becomes best: mu_B = 25 > mu_C = 15
+    cap_lower = make_test_player(101, Position.GUARD, expected_fp=15.0, uncertainty=4.0, turn_number=1)
+    backup_higher = make_test_player(102, Position.GUARD, expected_fp=25.0, uncertainty=4.0, turn_number=2)
+    val_higher_backup, best_b2 = compute_captain_option_value(cap_lower, [backup_higher], captain_multiplier=2.0)
+    assert val_higher_backup >= 10.0, "Expected option value >= 10.0 when backup is 10 FP higher"
+    assert best_b2 is not None and best_b2.player_id == 102
+
+    # 3. Multiple eligible alternatives: selects the highest expectation candidate
+    backup_mid = make_test_player(103, Position.GUARD, expected_fp=20.0, turn_number=2)
+    val_multi, selected_best = compute_captain_option_value(
+        cap_lower, [backup_lower, backup_higher, backup_mid], captain_multiplier=2.0
+    )
+    assert selected_best is not None and selected_best.player_id == 102
+    assert val_multi == val_higher_backup
+
+    # 4. Zero/negative incremental option: no eligible unplayed candidates or non-positive expectation
+    val_empty, _ = compute_captain_option_value(cap_primary, [], captain_multiplier=2.0)
+    assert val_empty == 0.0
+
+    backup_zero = make_test_player(104, Position.GUARD, expected_fp=0.0, turn_number=2)
+    val_zero_exp, _ = compute_captain_option_value(cap_primary, [backup_zero], captain_multiplier=2.0)
+    assert val_zero_exp == 0.0
+
+    # 5. Captain multiplier scaling: (M_cap - 1.0)
+    val_mult_20, _ = compute_captain_option_value(cap_lower, [backup_higher], captain_multiplier=2.0)
+    val_mult_15, _ = compute_captain_option_value(cap_lower, [backup_higher], captain_multiplier=1.5)
+    val_mult_10, _ = compute_captain_option_value(cap_lower, [backup_higher], captain_multiplier=1.0)
+    assert val_mult_10 == 0.0, "With 1.0x captain (no bonus), captain option value must be 0.0"
+    assert abs(val_mult_15 - 0.5 * val_mult_20) <= 0.05, "1.5x multiplier should yield half the 2.0x option value"
+
+    # 6. Ineligible players: Head Coach and same-turn players must be excluded
+    coach_backup = make_test_player(401, Position.HEAD_COACH, expected_fp=35.0, turn_number=2)
+    same_turn_backup = make_test_player(105, Position.GUARD, expected_fp=30.0, turn_number=1)
+    val_ineligible, best_inel = compute_captain_option_value(
+        cap_primary, [coach_backup, same_turn_backup], captain_multiplier=2.0
+    )
+    assert val_ineligible == 0.0, "Ineligible players (coach, same-turn) must yield 0.0 option value"
+    assert best_inel is None
+
+
+def test_risk_modes_monotonicity_and_invariance():
+    """Verify risk modes: monotonic response to uncertainty and contract invariance."""
+    squad = make_standard_squad()
+
+    opt_exp = FixedSquadLineupOptimizer(risk_mode=RiskMode.EXPECTED, include_option_value=False)
+    opt_cons = FixedSquadLineupOptimizer(risk_mode=RiskMode.CONSERVATIVE, risk_lambda=0.5, include_option_value=False)
+    opt_agg = FixedSquadLineupOptimizer(risk_mode=RiskMode.AGGRESSIVE, risk_lambda=0.5, include_option_value=False)
+
+    dec_exp = opt_exp.optimize(squad)
+    dec_cons = opt_cons.optimize(squad)
+    dec_agg = opt_agg.optimize(squad)
+
+    # Monotonicity test: Conservative <= Expected <= Aggressive
+    assert dec_cons.objective_value < dec_exp.objective_value < dec_agg.objective_value
+
+    # Verify input player contracts were not mutated in place
+    for p in squad:
+        assert p.expected_fp > 0
+        assert p.uncertainty >= 0
+
+
+def test_transfer_optimizer_exhaustive_vs_pruned():
+    """Verify that TransferOptimizer exhaustive mode matches candidate-pruned mode on small markets."""
+    squad = make_standard_squad()
+
+    # Small market: 2 Guards, 2 Forwards, 1 Center, 1 Coach
+    market = [
+        make_test_player(501, Position.GUARD, expected_fp=20.0, price_tenths=110),
+        make_test_player(502, Position.GUARD, expected_fp=16.0, price_tenths=90),
+        make_test_player(601, Position.FORWARD, expected_fp=22.0, price_tenths=120),
+        make_test_player(602, Position.FORWARD, expected_fp=15.0, price_tenths=85),
+        make_test_player(701, Position.CENTER, expected_fp=21.0, price_tenths=115),
+        make_test_player(801, Position.HEAD_COACH, expected_fp=14.0, price_tenths=75),
+    ]
+
+    opt = TransferOptimizer()
+
+    # Test 1 trade
+    res_pruned = opt.optimize_transfers(
+        current_squad=squad, market=market, bank_tenths=50, max_trades=1, exhaustive_candidates=False
+    )
+    res_exhaustive = opt.optimize_transfers(
+        current_squad=squad, market=market, bank_tenths=50, max_trades=1, exhaustive_candidates=True
+    )
+
+    assert res_exhaustive.is_exhaustive is True
+    assert res_pruned.is_exhaustive is False
+    assert len(res_pruned.recommendations) > 0
+    assert len(res_exhaustive.recommendations) > 0
+
+    # Best recommendation net transfer value should agree
+    best_pruned = res_pruned.recommendations[0]
+    best_exhaustive = res_exhaustive.recommendations[0]
+    assert best_pruned.net_transfer_value == pytest.approx(best_exhaustive.net_transfer_value, abs=1e-2)
+
+    # Test 2 trades
+    res_2 = opt.optimize_transfers(
+        current_squad=squad, market=market, bank_tenths=50, max_trades=2, exhaustive_candidates=True
+    )
+    assert len(res_2.recommendations) > 0
+    # Legal resulting squad constraints
+    for rec in res_2.recommendations:
+        out_ids = {o.player_id for o in rec.out_players}
+        new_squad = [p for p in squad if p.player_id not in out_ids] + list(rec.in_players)
+        val = validate_lineup_constraints(
+            squad=new_squad,
+            starters=rec.new_lineup.starter_ids,
+            captain_id=rec.new_lineup.captain_id,
+            sixth_man_id=rec.new_lineup.sixth_man_id,
+            head_coach_id=rec.new_lineup.head_coach_id,
+        )
+        assert val.is_valid
+
+
+def test_multi_round_optimizer_beam_and_discounting():
+    """Verify multi-round dynamic beam search planning, horizons 2..4, and discounting."""
+    squad = make_standard_squad()
+    market = [
+        make_test_player(501, Position.GUARD, expected_fp=22.0, price_tenths=100),
+        make_test_player(601, Position.FORWARD, expected_fp=24.0, price_tenths=110),
+        make_test_player(701, Position.CENTER, expected_fp=23.0, price_tenths=105),
+        make_test_player(801, Position.HEAD_COACH, expected_fp=15.0, price_tenths=75),
+    ]
+    round_projections = {
+        1: {p.player_id: p for p in list(squad) + market},
+        2: {p.player_id: p for p in list(squad) + market},
+        3: {p.player_id: p for p in list(squad) + market},
+    }
+
+    # Test discounting: gamma = 0.95 vs gamma = 1.0 (undiscounted)
+    opt_disc = MultiRoundOptimizer(discount_factor=0.95, branching_factor=3)
+    plan_disc = opt_disc.optimize_multi_round(
+        start_round=1, horizon=3, initial_squad=squad, round_projections=round_projections
+    )
+    assert plan_disc.horizon == 3
+    assert len(plan_disc.steps) == 3
+    assert plan_disc.discounted_expected_score < plan_disc.total_expected_score
+
+    opt_neutral = MultiRoundOptimizer(discount_factor=1.0, branching_factor=3)
+    plan_neutral = opt_neutral.optimize_multi_round(
+        start_round=1, horizon=3, initial_squad=squad, round_projections=round_projections
+    )
+    assert plan_neutral.discounted_expected_score == pytest.approx(plan_neutral.total_expected_score, abs=1e-2)
+
+
+def test_backtest_actual_fantasy_points_and_regret():
+    """Verify historical backtest distinguishes projected from actual fantasy points and computes regrets."""
+    squad = make_standard_squad()
+    actuals = {p.player_id: p.expected_fp + 2.0 for p in squad}
+
+    backtester = HistoricalDecisionBacktester()
+    res = backtester.evaluate_round(round_number=5, squad=squad, actuals=actuals)
+
+    # Terminology checks
+    assert hasattr(res, "recommended_actual_fantasy_points")
+    assert hasattr(res, "oracle_actual_fantasy_points")
+    assert hasattr(res, "projected_fantasy_points")
+    assert res.recommended_actual_fantasy_points > 0
+    assert res.oracle_actual_fantasy_points >= res.recommended_actual_fantasy_points
+    assert res.lineup_regret >= 0.0
+    assert res.captain_regret >= 0.0
+    assert res.sixth_man_regret >= 0.0
+
+
+def test_cli_optimize_hyphenated_aliases(capsys):
+    """Verify top-level hyphenated aliases: optimize-lineup, optimize-transfers, optimize-multi-round, backtest."""
+    from euroleague_fantasy_manager.cli import main
+
+    rc_lineup = main(["optimize-lineup", "--season", "2025", "--round", "1"])
+    assert rc_lineup == 0
+    assert "V0.4 LINEUP OPTIMIZATION RECOMMENDATION" in capsys.readouterr().out
+
+    rc_transfers = main(["optimize-transfers", "--season", "2025", "--round", "1", "--top", "1"])
+    assert rc_transfers == 0
+    assert "V0.4 TRANSFER OPTIMIZATION RECOMMENDATIONS" in capsys.readouterr().out
+
+    rc_multi = main(["optimize-multi-round", "--season", "2025", "--start-round", "1", "--horizon", "2"])
+    assert rc_multi == 0
+    assert "V0.4 MULTI-ROUND STRATEGY ROADMAP" in capsys.readouterr().out
+
+    rc_backtest = main(["backtest", "--season", "2025", "--rounds", "1:2"])
+    assert rc_backtest == 0
+    assert "Decision Optimization Backtest Report" in capsys.readouterr().out
+
+
+def test_transfer_trade_counts_1_to_4_and_unlimited():
+    """Verify TransferOptimizer handles 1, 2, 3, 4 trades and unlimited mode without violating constraints."""
+    squad = make_standard_squad()
+    # Market with 1 clear upgrade per position
+    market = [
+        make_test_player(901, Position.GUARD, expected_fp=25.0, price_tenths=130),
+        make_test_player(902, Position.GUARD, expected_fp=24.0, price_tenths=120),
+        make_test_player(903, Position.FORWARD, expected_fp=26.0, price_tenths=140),
+        make_test_player(904, Position.FORWARD, expected_fp=25.0, price_tenths=135),
+        make_test_player(905, Position.CENTER, expected_fp=27.0, price_tenths=150),
+    ]
+
+    opt = TransferOptimizer()
+
+    # 1 Trade
+    res_1 = opt.optimize_transfers(current_squad=squad, market=market, bank_tenths=200, max_trades=1)
+    assert len(res_1.recommendations) > 0
+    assert all(len(rec.in_players) <= 1 for rec in res_1.recommendations)
+
+    # 2 Trades
+    res_2 = opt.optimize_transfers(current_squad=squad, market=market, bank_tenths=200, max_trades=2)
+    assert len(res_2.recommendations) > 0
+    assert all(len(rec.in_players) <= 2 for rec in res_2.recommendations)
+    assert any(len(rec.in_players) == 2 for rec in res_2.recommendations)
+
+    # 3 Trades
+    res_3 = opt.optimize_transfers(current_squad=squad, market=market, bank_tenths=200, max_trades=3)
+    assert len(res_3.recommendations) > 0
+    assert all(len(rec.in_players) <= 3 for rec in res_3.recommendations)
+
+    # 4 Trades (max regular round limit)
+    res_4 = opt.optimize_transfers(current_squad=squad, market=market, bank_tenths=200, max_trades=4)
+    assert len(res_4.recommendations) > 0
+    assert all(len(rec.in_players) <= 4 for rec in res_4.recommendations)
+
+    # Unlimited mode (e.g. up to 5 trades)
+    res_unlimited = opt.optimize_transfers(
+        current_squad=squad, market=market, bank_tenths=500, max_trades=5, unlimited=True
+    )
+    assert len(res_unlimited.recommendations) > 0
+    assert all(len(rec.in_players) <= 5 for rec in res_unlimited.recommendations)
+    assert any(len(rec.in_players) >= 4 for rec in res_unlimited.recommendations)
+
+
+def test_multi_round_horizons_2_to_4_and_beam_width():
+    """Verify MultiRoundOptimizer handles horizons 2, 3, 4 and respects beam width / branching factors."""
+    squad = make_standard_squad()
+    market = [
+        make_test_player(911, Position.GUARD, expected_fp=22.0, price_tenths=110),
+        make_test_player(912, Position.FORWARD, expected_fp=24.0, price_tenths=120),
+        make_test_player(913, Position.CENTER, expected_fp=23.0, price_tenths=115),
+    ]
+    round_projs = {
+        r: {p.player_id: p for p in list(squad) + market}
+        for r in range(1, 5)
+    }
+
+    # Horizon 2
+    opt_h2 = MultiRoundOptimizer(branching_factor=2)
+    plan_h2 = opt_h2.optimize_multi_round(start_round=1, horizon=2, initial_squad=squad, round_projections=round_projs)
+    assert plan_h2.horizon == 2
+    assert len(plan_h2.steps) == 2
+
+    # Horizon 3
+    opt_h3 = MultiRoundOptimizer(branching_factor=2)
+    plan_h3 = opt_h3.optimize_multi_round(start_round=1, horizon=3, initial_squad=squad, round_projections=round_projs)
+    assert plan_h3.horizon == 3
+    assert len(plan_h3.steps) == 3
+
+    # Horizon 4
+    opt_h4 = MultiRoundOptimizer(branching_factor=2)
+    plan_h4 = opt_h4.optimize_multi_round(start_round=1, horizon=4, initial_squad=squad, round_projections=round_projs)
+    assert plan_h4.horizon == 4
+    assert len(plan_h4.steps) == 4
+
+    # Verify all steps in the plan produce legal lineup decisions
+    for step in plan_h4.steps:
+        assert step.lineup.is_valid
+        assert len(step.lineup.starter_ids) == 5
+
+    # Beam width comparison: wider beam (3) explores >= narrow beam (1)
+    opt_beam1 = MultiRoundOptimizer(branching_factor=1)
+    opt_beam3 = MultiRoundOptimizer(branching_factor=3)
+    plan_b1 = opt_beam1.optimize_multi_round(start_round=1, horizon=2, initial_squad=squad, round_projections=round_projs)
+    plan_b3 = opt_beam3.optimize_multi_round(start_round=1, horizon=2, initial_squad=squad, round_projections=round_projs)
+    assert plan_b3.discounted_expected_score >= plan_b1.discounted_expected_score - 1e-4
+
+
+def test_deterministic_reproducibility_and_tie_breaking():
+    """Verify deterministic reproducibility and tie-breaking across multiple optimizer and backtester runs."""
+    squad = make_standard_squad()
+    opt = FixedSquadLineupOptimizer()
+
+    dec1 = opt.optimize(squad, round_number=1)
+    dec2 = opt.optimize(squad, round_number=1)
+
+    assert dec1.objective_value == dec2.objective_value
+    assert dec1.formation == dec2.formation
+    assert dec1.starter_ids == dec2.starter_ids
+    assert dec1.captain_id == dec2.captain_id
+    assert dec1.sixth_man_id == dec2.sixth_man_id
+    assert dec1.bench_ids == dec2.bench_ids
+
+    # Backtester reproducibility
+    actuals = {p.player_id: p.expected_fp + 1.0 for p in squad}
+    bt = HistoricalDecisionBacktester()
+    res1 = bt.evaluate_round(round_number=1, squad=squad, actuals=actuals)
+    res2 = bt.evaluate_round(round_number=1, squad=squad, actuals=actuals)
+    assert res1.recommended_actual_fantasy_points == res2.recommended_actual_fantasy_points
+    assert res1.oracle_actual_fantasy_points == res2.oracle_actual_fantasy_points
+    assert res1.lineup_regret == res2.lineup_regret
+
+

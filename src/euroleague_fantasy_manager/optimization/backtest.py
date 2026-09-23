@@ -1,4 +1,12 @@
-"""Historical decision backtesting and oracle regret evaluation (Phase L)."""
+"""Historical decision backtesting and static hindsight oracle regret evaluation (Phase L).
+
+Boundary Note:
+The V0.4 historical backtester uses a static single-round hindsight oracle using
+realized outcomes (actual_fantasy_points) to evaluate the best legal decision for
+that round. It measures decision regret for single-round recommendations.
+Longitudinal turn-by-turn human manager reconstruction, live decision logs,
+and outcome updates belong strictly to V0.45.
+"""
 
 from dataclasses import dataclass
 from typing import Mapping, Sequence
@@ -11,22 +19,37 @@ from .objective import RiskMode
 
 @dataclass(frozen=True, slots=True)
 class RoundBacktestResult:
-    """Audited backtest outcome for a single historical round."""
+    """Audited backtest outcome for a single historical round.
+
+    Distinguishes projected_fantasy_points (pre-round optimizer expectation)
+    from actual_fantasy_points (post-round verified box-score points).
+    """
 
     round_number: int
-    recommended_score: float
-    oracle_score: float
-    lineup_regret: float
-    captain_regret: float
-    sixth_man_regret: float
-    bench_regret: float
-    formation_regret: float
-    recommended_formation: str
-    oracle_formation: str
-    recommended_captain_id: int
-    oracle_captain_id: int
-    recommended_sixth_man_id: int
-    oracle_sixth_man_id: int
+    recommended_actual_fantasy_points: float
+    oracle_actual_fantasy_points: float
+    projected_fantasy_points: float = 0.0
+    lineup_regret: float = 0.0
+    captain_regret: float = 0.0
+    sixth_man_regret: float = 0.0
+    bench_regret: float = 0.0
+    formation_regret: float = 0.0
+    recommended_formation: str = ""
+    oracle_formation: str = ""
+    recommended_captain_id: int = 0
+    oracle_captain_id: int = 0
+    recommended_sixth_man_id: int = 0
+    oracle_sixth_man_id: int = 0
+
+    @property
+    def recommended_score(self) -> float:
+        """Alias for recommended_actual_fantasy_points."""
+        return self.recommended_actual_fantasy_points
+
+    @property
+    def oracle_score(self) -> float:
+        """Alias for oracle_actual_fantasy_points."""
+        return self.oracle_actual_fantasy_points
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,8 +59,8 @@ class OptimizationBacktestSummary:
     season: str
     model_name: str
     rounds_evaluated: int
-    avg_recommended_score: float
-    avg_oracle_score: float
+    avg_recommended_actual_fantasy_points: float
+    avg_oracle_actual_fantasy_points: float
     avg_lineup_regret: float
     avg_captain_regret: float
     avg_sixth_man_regret: float
@@ -45,14 +68,24 @@ class OptimizationBacktestSummary:
     avg_formation_regret: float
     round_results: tuple[RoundBacktestResult, ...]
 
+    @property
+    def avg_recommended_score(self) -> float:
+        """Alias for avg_recommended_actual_fantasy_points."""
+        return self.avg_recommended_actual_fantasy_points
+
+    @property
+    def avg_oracle_score(self) -> float:
+        """Alias for avg_oracle_actual_fantasy_points."""
+        return self.avg_oracle_actual_fantasy_points
+
     def to_markdown(self) -> str:
         lines = [
             f"# Decision Optimization Backtest Report -- {self.season}",
             "",
             f"- **Model:** `{self.model_name}`",
             f"- **Rounds Evaluated:** {self.rounds_evaluated}",
-            f"- **Avg Recommended Realized Score:** {self.avg_recommended_score:.2f} FP",
-            f"- **Avg Oracle Realized Score:** {self.avg_oracle_score:.2f} FP",
+            f"- **Avg Recommended Realized Score (actual FP):** {self.avg_recommended_actual_fantasy_points:.2f} FP",
+            f"- **Avg Oracle Realized Score (actual FP):** {self.avg_oracle_actual_fantasy_points:.2f} FP",
             f"- **Avg Lineup Regret:** {self.avg_lineup_regret:.2f} FP",
             f"- **Avg Captain Regret:** {self.avg_captain_regret:.2f} FP",
             f"- **Avg Sixth Man Regret:** {self.avg_sixth_man_regret:.2f} FP",
@@ -110,13 +143,20 @@ class HistoricalDecisionBacktester:
     def evaluate_round(
         self,
         round_number: int,
-        squad_contracts: Sequence[PlayerProjectionContract],
-        actuals_by_id: Mapping[int, float],
+        squad_contracts: Sequence[PlayerProjectionContract] | None = None,
+        actuals_by_id: Mapping[int, float] | None = None,
+        squad: Sequence[PlayerProjectionContract] | None = None,
+        actuals: Mapping[int, float] | None = None,
     ) -> RoundBacktestResult:
         """Evaluate a single round's recommendation and compare with hindsight oracle."""
+        eff_squad = squad_contracts if squad_contracts is not None else squad
+        eff_actuals = actuals_by_id if actuals_by_id is not None else actuals
+        if eff_squad is None or eff_actuals is None:
+            raise ValueError("squad_contracts and actuals_by_id must be provided.")
+
         # 1. Model's recommended lineup based strictly on pre-round predictions
         rec_decision = self.optimizer.optimize(
-            squad_contracts, round_number=round_number, top_alternatives=0
+            eff_squad, round_number=round_number, top_alternatives=0
         )
 
         # 2. Oracle lineup: solved using actual realization as the projection
@@ -128,14 +168,14 @@ class HistoricalDecisionBacktester:
                 team_id=p.team_id,
                 team_code=p.team_code,
                 price_tenths=p.price_tenths,
-                expected_fp=actuals_by_id.get(p.player_id, 0.0),
+                expected_fp=eff_actuals.get(p.player_id, 0.0),
                 probability_play=1.0,
                 expected_minutes=20.0,
                 fp_per_minute=1.0,
                 uncertainty=0.0,
                 turn_number=1,
             )
-            for p in squad_contracts
+            for p in eff_squad
         ]
         oracle_decision = self.optimizer.optimize(
             oracle_contracts, round_number=round_number, top_alternatives=0
@@ -148,7 +188,7 @@ class HistoricalDecisionBacktester:
             sixth_man_id=rec_decision.sixth_man_id,
             bench_ids=rec_decision.bench_ids,
             head_coach_id=rec_decision.head_coach_id,
-            actuals=actuals_by_id,
+            actuals=eff_actuals,
         )
         oracle_score = score_lineup_with_actuals(
             starter_ids=oracle_decision.starter_ids,
@@ -156,37 +196,38 @@ class HistoricalDecisionBacktester:
             sixth_man_id=oracle_decision.sixth_man_id,
             bench_ids=oracle_decision.bench_ids,
             head_coach_id=oracle_decision.head_coach_id,
-            actuals=actuals_by_id,
+            actuals=eff_actuals,
         )
 
         # 4. Regret components
         lineup_reg = max(0.0, round(oracle_score - rec_score, 2))
 
         # Captain regret: difference between best possible starter and chosen captain
-        best_starter_act = max(actuals_by_id.get(sid, 0.0) for sid in rec_decision.starter_ids)
-        chosen_cap_act = actuals_by_id.get(rec_decision.captain_id, 0.0)
+        best_starter_act = max(eff_actuals.get(sid, 0.0) for sid in rec_decision.starter_ids)
+        chosen_cap_act = eff_actuals.get(rec_decision.captain_id, 0.0)
         cap_reg = max(0.0, round(best_starter_act - chosen_cap_act, 2))
 
         # Sixth man regret: bench player moving from 0.5x to 1.0x gives 0.5x gain
         bench_pool = [rec_decision.sixth_man_id] + list(rec_decision.bench_ids)
-        best_bench_act = max(actuals_by_id.get(pid, 0.0) for pid in bench_pool)
-        chosen_sixth_act = actuals_by_id.get(rec_decision.sixth_man_id, 0.0)
+        best_bench_act = max(eff_actuals.get(pid, 0.0) for pid in bench_pool)
+        chosen_sixth_act = eff_actuals.get(rec_decision.sixth_man_id, 0.0)
         sixth_reg = max(0.0, round(0.5 * (best_bench_act - chosen_sixth_act), 2))
 
         # Bench regret: 0.5 * (oracle bench - model bench)
-        oracle_bench_fpts = 0.5 * sum(actuals_by_id.get(bid, 0.0) for bid in oracle_decision.bench_ids)
-        model_bench_fpts = 0.5 * sum(actuals_by_id.get(bid, 0.0) for bid in rec_decision.bench_ids)
+        oracle_bench_fpts = 0.5 * sum(eff_actuals.get(bid, 0.0) for bid in oracle_decision.bench_ids)
+        model_bench_fpts = 0.5 * sum(eff_actuals.get(bid, 0.0) for bid in rec_decision.bench_ids)
         bench_reg = max(0.0, round(oracle_bench_fpts - model_bench_fpts, 2))
 
         # Formation regret: difference in court starters sum
-        oracle_starters_sum = sum(actuals_by_id.get(sid, 0.0) for sid in oracle_decision.starter_ids)
-        model_starters_sum = sum(actuals_by_id.get(sid, 0.0) for sid in rec_decision.starter_ids)
+        oracle_starters_sum = sum(eff_actuals.get(sid, 0.0) for sid in oracle_decision.starter_ids)
+        model_starters_sum = sum(eff_actuals.get(sid, 0.0) for sid in rec_decision.starter_ids)
         form_reg = max(0.0, round(oracle_starters_sum - model_starters_sum, 2))
 
         return RoundBacktestResult(
             round_number=round_number,
-            recommended_score=rec_score,
-            oracle_score=oracle_score,
+            recommended_actual_fantasy_points=rec_score,
+            oracle_actual_fantasy_points=oracle_score,
+            projected_fantasy_points=rec_decision.expected_score,
             lineup_regret=lineup_reg,
             captain_regret=cap_reg,
             sixth_man_regret=sixth_reg,
@@ -218,8 +259,8 @@ class HistoricalDecisionBacktester:
                 season=season,
                 model_name=model_name,
                 rounds_evaluated=0,
-                avg_recommended_score=0.0,
-                avg_oracle_score=0.0,
+                avg_recommended_actual_fantasy_points=0.0,
+                avg_oracle_actual_fantasy_points=0.0,
                 avg_lineup_regret=0.0,
                 avg_captain_regret=0.0,
                 avg_sixth_man_regret=0.0,
@@ -233,8 +274,12 @@ class HistoricalDecisionBacktester:
             season=season,
             model_name=model_name,
             rounds_evaluated=n,
-            avg_recommended_score=round(sum(r.recommended_score for r in results) / n, 2),
-            avg_oracle_score=round(sum(r.oracle_score for r in results) / n, 2),
+            avg_recommended_actual_fantasy_points=round(
+                sum(r.recommended_actual_fantasy_points for r in results) / n, 2
+            ),
+            avg_oracle_actual_fantasy_points=round(
+                sum(r.oracle_actual_fantasy_points for r in results) / n, 2
+            ),
             avg_lineup_regret=round(sum(r.lineup_regret for r in results) / n, 2),
             avg_captain_regret=round(sum(r.captain_regret for r in results) / n, 2),
             avg_sixth_man_regret=round(sum(r.sixth_man_regret for r in results) / n, 2),

@@ -369,60 +369,76 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print full JSON evaluation payload instead of formatted terminal tables.",
     )
 
+    def _add_lineup_args(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
+        p.add_argument("--season", type=str, default="2025", help="Season code (default: 2025).")
+        p.add_argument("--round", "-r", type=int, default=1, help="Round number (default: 1).")
+        p.add_argument("--squad", type=Path, default=DEFAULT_SQUAD_PATH, help="Path to current_squad.json.")
+        p.add_argument("--model", "-m", type=str, default="fp_decomposed_v03", help="Predictive model (default: fp_decomposed_v03).")
+        p.add_argument("--risk-mode", type=str, default="expected", choices=["expected", "conservative", "aggressive"], help="Risk mode (default: expected).")
+        p.add_argument("--risk-lambda", type=float, default=0.15, help="Risk lambda (default: 0.15).")
+        p.add_argument("--no-option-value", action="store_true", help="Disable Turn 1 -> Turn 2 substitution option value.")
+        p.add_argument("--alpha", type=float, default=0.25, help="EWMA alpha for features (default: 0.25).")
+        p.add_argument("--json", action="store_true", help="Output JSON payload.")
+        return p
+
+    def _add_transfers_args(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
+        p.add_argument("--season", type=str, default="2025", help="Season code (default: 2025).")
+        p.add_argument("--round", "-r", type=int, default=1, help="Round number (default: 1).")
+        p.add_argument("--squad", type=Path, default=DEFAULT_SQUAD_PATH, help="Path to current_squad.json.")
+        p.add_argument("--trades", "-t", type=int, default=1, help="Max number of trades (1..4, default: 1).")
+        p.add_argument("--unlimited", action="store_true", help="Allow unlimited trades (Unlimited Trade Window).")
+        p.add_argument("--top", type=int, default=5, help="Number of top trade recommendations (default: 5).")
+        p.add_argument("--model", "-m", type=str, default="fp_decomposed_v03", help="Predictive model (default: fp_decomposed_v03).")
+        p.add_argument("--exhaustive", action="store_true", help="Exhaustive candidate search mode.")
+        p.add_argument("--risk-mode", type=str, default="expected", choices=["expected", "conservative", "aggressive"], help="Risk mode (default: expected).")
+        p.add_argument("--risk-lambda", type=float, default=0.15, help="Risk lambda (default: 0.15).")
+        p.add_argument("--alpha", type=float, default=0.25, help="EWMA alpha for features (default: 0.25).")
+        p.add_argument("--json", action="store_true", help="Output JSON payload.")
+        return p
+
+    def _add_multi_round_args(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
+        p.add_argument("--season", type=str, default="2025", help="Season code (default: 2025).")
+        p.add_argument("--start-round", type=int, default=1, help="Start round number (default: 1).")
+        p.add_argument("--horizon", type=int, default=2, help="Planning horizon rounds (2..4, default: 2).")
+        p.add_argument("--squad", type=Path, default=DEFAULT_SQUAD_PATH, help="Path to current_squad.json.")
+        p.add_argument("--max-trades", type=int, default=2, help="Max trades per round (default: 2).")
+        p.add_argument("--discount", type=float, default=0.95, help="Discount factor gamma (default: 0.95).")
+        p.add_argument("--model", "-m", type=str, default="fp_decomposed_v03", help="Predictive model (default: fp_decomposed_v03).")
+        p.add_argument("--risk-mode", type=str, default="expected", choices=["expected", "conservative", "aggressive"], help="Risk mode (default: expected).")
+        p.add_argument("--risk-lambda", type=float, default=0.15, help="Risk lambda (default: 0.15).")
+        p.add_argument("--alpha", type=float, default=0.25, help="EWMA alpha for features (default: 0.25).")
+        p.add_argument("--json", action="store_true", help="Output JSON payload.")
+        return p
+
+    def _add_backtest_args(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
+        p.add_argument("--season", type=str, default="2025", help="Season code (default: 2025).")
+        p.add_argument("--rounds", type=str, default="1:4", help="Round range (e.g. 1:4, default: 1:4).")
+        p.add_argument("--squad", type=Path, default=DEFAULT_SQUAD_PATH, help="Path to current_squad.json (optional).")
+        p.add_argument("--model", "-m", type=str, default="fp_decomposed_v03", help="Predictive model (default: fp_decomposed_v03).")
+        p.add_argument("--risk-mode", type=str, default="expected", choices=["expected", "conservative", "aggressive"], help="Risk mode (default: expected).")
+        p.add_argument("--risk-lambda", type=float, default=0.15, help="Risk lambda (default: 0.15).")
+        p.add_argument("--alpha", type=float, default=0.25, help="EWMA alpha for features (default: 0.25).")
+        p.add_argument("--json", action="store_true", help="Output JSON summary.")
+        return p
+
     # V0.4 Decision & Optimization Commands
     optimize_parser = subparsers.add_parser(
         "optimize",
         help="V0.4 Decision & Optimization layer: deterministic lineup, transfers, and multi-round planning.",
     )
-    opt_sub = optimize_parser.add_subparsers(dest="opt_command", required=True)
+    opt_sub = optimize_parser.add_subparsers(dest="opt_command", required=False)
 
-    opt_lineup = opt_sub.add_parser("lineup", help="Jointly optimize Starting 5, Captain, Sixth Man, Bench, and Formation.")
-    opt_lineup.add_argument("--season", type=str, default="2025", help="Season code (default: 2025).")
-    opt_lineup.add_argument("--round", "-r", type=int, default=1, help="Round number (default: 1).")
-    opt_lineup.add_argument("--squad", type=Path, default=DEFAULT_SQUAD_PATH, help="Path to current_squad.json.")
-    opt_lineup.add_argument("--model", "-m", type=str, default="fp_decomposed_v03", help="Predictive model (default: fp_decomposed_v03).")
-    opt_lineup.add_argument("--risk-mode", type=str, default="expected", choices=["expected", "conservative", "aggressive"], help="Risk mode (default: expected).")
-    opt_lineup.add_argument("--risk-lambda", type=float, default=0.15, help="Risk lambda (default: 0.15).")
-    opt_lineup.add_argument("--no-option-value", action="store_true", help="Disable Turn 1 -> Turn 2 substitution option value.")
-    opt_lineup.add_argument("--alpha", type=float, default=0.25, help="EWMA alpha for features (default: 0.25).")
-    opt_lineup.add_argument("--json", action="store_true", help="Output JSON payload.")
+    _add_lineup_args(opt_sub.add_parser("lineup", help="Jointly optimize Starting 5, Captain, Sixth Man, Bench, and Formation."))
+    _add_lineup_args(subparsers.add_parser("optimize-lineup", help="Jointly optimize Starting 5, Captain, Sixth Man, Bench, and Formation."))
 
-    opt_transfers = opt_sub.add_parser("transfers", help="Optimize 1..4 legal transfers under budget and club constraints.")
-    opt_transfers.add_argument("--season", type=str, default="2025", help="Season code (default: 2025).")
-    opt_transfers.add_argument("--round", "-r", type=int, default=1, help="Round number (default: 1).")
-    opt_transfers.add_argument("--squad", type=Path, default=DEFAULT_SQUAD_PATH, help="Path to current_squad.json.")
-    opt_transfers.add_argument("--trades", "-t", type=int, default=1, help="Max number of trades (1..4, default: 1).")
-    opt_transfers.add_argument("--unlimited", action="store_true", help="Allow unlimited trades (Unlimited Trade Window).")
-    opt_transfers.add_argument("--top", type=int, default=5, help="Number of top trade recommendations (default: 5).")
-    opt_transfers.add_argument("--model", "-m", type=str, default="fp_decomposed_v03", help="Predictive model (default: fp_decomposed_v03).")
-    opt_transfers.add_argument("--exhaustive", action="store_true", help="Exhaustive candidate search mode.")
-    opt_transfers.add_argument("--risk-mode", type=str, default="expected", choices=["expected", "conservative", "aggressive"], help="Risk mode (default: expected).")
-    opt_transfers.add_argument("--risk-lambda", type=float, default=0.15, help="Risk lambda (default: 0.15).")
-    opt_transfers.add_argument("--alpha", type=float, default=0.25, help="EWMA alpha for features (default: 0.25).")
-    opt_transfers.add_argument("--json", action="store_true", help="Output JSON payload.")
+    _add_transfers_args(opt_sub.add_parser("transfers", help="Optimize 1..4 legal transfers under budget and club constraints."))
+    _add_transfers_args(subparsers.add_parser("optimize-transfers", help="Optimize 1..4 legal transfers under budget and club constraints."))
 
-    opt_multi = opt_sub.add_parser("multi-round", help="Short-horizon multi-round planning (horizon N=2..4).")
-    opt_multi.add_argument("--season", type=str, default="2025", help="Season code (default: 2025).")
-    opt_multi.add_argument("--start-round", type=int, default=1, help="Start round number (default: 1).")
-    opt_multi.add_argument("--horizon", type=int, default=2, help="Planning horizon rounds (2..4, default: 2).")
-    opt_multi.add_argument("--squad", type=Path, default=DEFAULT_SQUAD_PATH, help="Path to current_squad.json.")
-    opt_multi.add_argument("--max-trades", type=int, default=2, help="Max trades per round (default: 2).")
-    opt_multi.add_argument("--discount", type=float, default=0.95, help="Discount factor gamma (default: 0.95).")
-    opt_multi.add_argument("--model", "-m", type=str, default="fp_decomposed_v03", help="Predictive model (default: fp_decomposed_v03).")
-    opt_multi.add_argument("--risk-mode", type=str, default="expected", choices=["expected", "conservative", "aggressive"], help="Risk mode (default: expected).")
-    opt_multi.add_argument("--risk-lambda", type=float, default=0.15, help="Risk lambda (default: 0.15).")
-    opt_multi.add_argument("--alpha", type=float, default=0.25, help="EWMA alpha for features (default: 0.25).")
-    opt_multi.add_argument("--json", action="store_true", help="Output JSON payload.")
+    _add_multi_round_args(opt_sub.add_parser("multi-round", help="Short-horizon multi-round planning (horizon N=2..4)."))
+    _add_multi_round_args(subparsers.add_parser("optimize-multi-round", help="Short-horizon multi-round planning (horizon N=2..4)."))
 
-    opt_backtest = opt_sub.add_parser("backtest", help="Backtest decision optimizer against historical rounds and oracle regret.")
-    opt_backtest.add_argument("--season", type=str, default="2025", help="Season code (default: 2025).")
-    opt_backtest.add_argument("--rounds", type=str, default="1:4", help="Round range (e.g. 1:4, default: 1:4).")
-    opt_backtest.add_argument("--squad", type=Path, default=DEFAULT_SQUAD_PATH, help="Path to current_squad.json (optional).")
-    opt_backtest.add_argument("--model", "-m", type=str, default="fp_decomposed_v03", help="Predictive model (default: fp_decomposed_v03).")
-    opt_backtest.add_argument("--risk-mode", type=str, default="expected", choices=["expected", "conservative", "aggressive"], help="Risk mode (default: expected).")
-    opt_backtest.add_argument("--risk-lambda", type=float, default=0.15, help="Risk lambda (default: 0.15).")
-    opt_backtest.add_argument("--alpha", type=float, default=0.25, help="EWMA alpha for features (default: 0.25).")
-    opt_backtest.add_argument("--json", action="store_true", help="Output JSON summary.")
+    _add_backtest_args(opt_sub.add_parser("backtest", help="Backtest decision optimizer against historical rounds and oracle regret."))
+    _add_backtest_args(subparsers.add_parser("backtest", help="Backtest decision optimizer against historical rounds and oracle regret."))
 
     return parser
 
@@ -609,6 +625,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             print(eval_report["console_table"])
         return 0
+
+    if args.command in ("optimize-lineup", "optimize-transfers", "optimize-multi-round", "backtest"):
+        if args.command == "optimize-lineup":
+            args.command = "optimize"
+            args.opt_command = "lineup"
+        elif args.command == "optimize-transfers":
+            args.command = "optimize"
+            args.opt_command = "transfers"
+        elif args.command == "optimize-multi-round":
+            args.command = "optimize"
+            args.opt_command = "multi-round"
+        elif args.command == "backtest":
+            args.command = "optimize"
+            args.opt_command = "backtest"
 
     if args.command == "optimize":
         norm_season = normalize_season_code(args.season)

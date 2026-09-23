@@ -6,7 +6,7 @@ from typing import Mapping, Sequence
 
 from ..fixtures import normal_cdf, normal_pdf
 from ..models import Position
-from ..rules import LEGAL_COURT_FORMATIONS
+from ..rules import CAPTAIN_MULTIPLIER, LEGAL_COURT_FORMATIONS
 from .constraints import PlayerProjectionContract
 
 
@@ -38,34 +38,100 @@ def can_substitute_into_valid_formation(
     return formation in legal_formations
 
 
+def compute_captain_option_value(
+    captain: PlayerProjectionContract,
+    eligible_backups: Sequence[PlayerProjectionContract],
+    captain_multiplier: float = CAPTAIN_MULTIPLIER,
+    min_sigma: float = 0.05,
+) -> tuple[float, PlayerProjectionContract | None]:
+    """Compute incremental option value of switching captaincy to an unplayed player in a later turn.
+
+    EuroLeague Fantasy Classic rules allow changing team captain between turns, provided
+    the new captain has not yet taken the court (scheduled in a later turn) and is an eligible
+    court player (Head Coaches cannot be captain).
+
+    Mathematical Formulation:
+      Delta_cap = (captain_multiplier - 1.0) * E[max(0, mu_backup - S_primary)]
+    where S_primary ~ N(mu_primary, sigma_primary^2).
+    For the official 2.0x captain multiplier, the incremental bonus is (2.0 - 1.0) = 1.0x.
+
+    Candidate Selection:
+      Evaluates all eligible unplayed court players (turn_number > captain.turn_number),
+      selecting the highest-expectation candidate: argmax_{p} E[FP_p].
+    """
+    if captain.position == Position.HEAD_COACH:
+        return 0.0, None
+
+    # Filter eligible future captains:
+    # 1. Exclude the captain himself
+    # 2. Exclude Head Coaches (ineligible for captaincy)
+    # 3. Must play in a strictly later turn (has not played yet)
+    # 4. Must have positive expected fantasy score
+    candidates = [
+        p for p in eligible_backups
+        if p.player_id != captain.player_id
+        and p.position != Position.HEAD_COACH
+        and p.turn_number > captain.turn_number
+        and p.expected_fp > 0.0
+    ]
+    if not candidates:
+        return 0.0, None
+
+    # Best future candidate by expected score (tie-break price desc, id asc)
+    best_backup = max(
+        candidates,
+        key=lambda p: (p.expected_fp, p.price_tenths, -p.player_id),
+    )
+
+    sigma = captain.uncertainty if captain.uncertainty >= 0.0 else 4.0
+    call_value = gaussian_call_option(
+        mu_backup=best_backup.expected_fp,
+        mu_primary=captain.expected_fp,
+        sigma_primary=sigma,
+    )
+
+    # Scale strictly by captain multiplier bonus: (M_cap - 1.0)
+    multiplier_factor = max(0.0, captain_multiplier - 1.0)
+    option_value = multiplier_factor * call_value
+
+    return round(option_value, 2), best_backup
+
+
 def compute_turn_substitution_option_bonus(
     starter_ids: Sequence[int],
     captain_id: int,
-    vice_captain_id: int,
     sixth_man_id: int,
     bench_ids: Sequence[int],
     projections: Mapping[int, PlayerProjectionContract],
+    vice_captain_id: int | None = None,
+    captain_multiplier: float = CAPTAIN_MULTIPLIER,
 ) -> tuple[float, float]:
     """Compute (captain_option_bonus, slot_option_bonus) from intra-round Turn 1 -> Turn 2 substitution rights.
 
     1. Captain Option:
-       If Captain plays in Turn 1 and Vice-Captain plays in Turn 2+, we have the option
-       to switch 2x captaincy if Captain scores below Vice-Captain's expectation.
+       Evaluates the right to switch the 2.0x captaincy to the best eligible court player
+       playing in a later turn if the Turn 1 captain underperforms.
     2. Slot Substitution Option:
        If a starter plays in Turn 1 and an unplayed bench player plays in Turn 2+,
        we can substitute out the starter if their realized score is below bench expectation.
     """
     cap_proj = projections[captain_id]
-    vc_proj = projections[vice_captain_id]
 
-    cap_option = 0.0
-    if cap_proj.turn_number < vc_proj.turn_number and vc_proj.expected_fp > 0.0:
-        sigma = cap_proj.uncertainty if cap_proj.uncertainty > 0.0 else 4.0
-        cap_option = gaussian_call_option(
-            mu_backup=vc_proj.expected_fp,
-            mu_primary=cap_proj.expected_fp,
-            sigma_primary=sigma,
-        )
+    # Evaluate captain option candidates among all court players in the squad
+    all_squad_ids = [sid for sid in starter_ids if sid != captain_id] + [sixth_man_id] + list(bench_ids)
+    all_squad_court = [projections[pid] for pid in all_squad_ids if projections[pid].position != Position.HEAD_COACH]
+
+    # If an explicit vice_captain_id was given, ensure it is in the backup candidate pool
+    if vice_captain_id is not None and vice_captain_id in projections:
+        vc_p = projections[vice_captain_id]
+        if vc_p not in all_squad_court and vc_p.position != Position.HEAD_COACH:
+            all_squad_court.append(vc_p)
+
+    cap_option, _ = compute_captain_option_value(
+        captain=cap_proj,
+        eligible_backups=all_squad_court,
+        captain_multiplier=captain_multiplier,
+    )
 
     # 2. Slot substitution options
     starter_projs = [projections[sid] for sid in starter_ids]
@@ -94,7 +160,7 @@ def compute_turn_substitution_option_bonus(
             sigma_primary=sigma,
         )
         # Factor in bench points difference: starter was 1.0x, bench was 0.5x
-        # Real net gain from subbing: delta = S_bench - S_starter + 0.5*S_starter - 0.5*S_bench = 0.5 * (S_bench - S_starter)
+        # Real net gain from subbing: delta = 0.5 * (S_bench - S_starter)
         slot_option += 0.5 * gain
         matched_bench_ids.add(best_b.player_id)
 

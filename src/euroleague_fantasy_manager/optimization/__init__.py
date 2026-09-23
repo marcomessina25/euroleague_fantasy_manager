@@ -34,7 +34,10 @@ from .objective import (
     compute_positional_replacement_levels,
     evaluate_lineup_objective,
 )
-from .option_value import compute_turn_substitution_option_bonus
+from .option_value import (
+    compute_captain_option_value,
+    compute_turn_substitution_option_bonus,
+)
 from .transfers import (
     TransferOptimizationResult,
     TransferOptimizer,
@@ -52,6 +55,7 @@ __all__ = [
     "LineupScoreBreakdown",
     "evaluate_lineup_objective",
     "compute_positional_replacement_levels",
+    "compute_captain_option_value",
     "compute_turn_substitution_option_bonus",
     "FixedSquadLineupOptimizer",
     "OptimalLineupDecision",

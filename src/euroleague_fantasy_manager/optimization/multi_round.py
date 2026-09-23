@@ -1,7 +1,7 @@
 """Multi-round short-horizon planning optimizer (Phase H) for V0.4."""
 
 from dataclasses import dataclass
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from ..models import Player
 from .candidates import CandidateGenerator
@@ -34,7 +34,17 @@ class MultiRoundPlan:
 
 
 class MultiRoundOptimizer:
-    """Short-horizon multi-round dynamic optimizer."""
+    """Short-horizon multi-round dynamic beam search planner (horizons N=2..4).
+
+    Search Method & Strategy Boundaries:
+      - Search Strategy: Heuristic dynamic beam search. Retains the top `branching_factor`
+        squad states at each step to avoid exponential combinatorial explosion.
+      - Not Globally Optimal: Beam search is a disciplined approximation; it does not
+        guarantee finding the global optimum across all conceivable combinatorial paths.
+      - Discount Factor (gamma): Default gamma = 0.95 is a strategic modeling assumption
+        (valuing immediate known points slightly more than distant uncertain points),
+        NOT an official fantasy game rule. Setting gamma = 1.0 provides undiscounted cumulative points.
+    """
 
     def __init__(
         self,
@@ -43,6 +53,19 @@ class MultiRoundOptimizer:
         max_trades_per_round: int = 2,
         branching_factor: int = 4,
     ) -> None:
+        """Initialize MultiRoundOptimizer.
+
+        Parameters
+        ----------
+        constraints : OptimizationConstraints, optional
+            EuroLeague Fantasy constraints.
+        discount_factor : float, default 0.95
+            Strategic modeling parameter gamma in [0.0, 1.0].
+        max_trades_per_round : int, default 2
+            Maximum trades explored per step in the planning horizon.
+        branching_factor : int, default 4
+            Number of top beam states retained at each round transition.
+        """
         self.constraints = constraints or OptimizationConstraints()
         self.discount_factor = discount_factor
         self.max_trades_per_round = max_trades_per_round
@@ -59,11 +82,18 @@ class MultiRoundOptimizer:
         self,
         start_round: int,
         horizon: int,
-        initial_squad: Sequence[PlayerProjectionContract | Player],
-        projections_by_round: Mapping[int, Sequence[PlayerProjectionContract]],
+        initial_squad: Sequence[PlayerProjectionContract | Player] | None = None,
+        projections_by_round: Mapping[int, Any] | None = None,
         initial_bank_tenths: int = 0,
+        current_squad: Sequence[PlayerProjectionContract | Player] | None = None,
+        round_projections: Mapping[int, Any] | None = None,
     ) -> MultiRoundPlan:
         """Find the optimal sequential plan over rounds [start_round, start_round + horizon - 1]."""
+        eff_squad = initial_squad if initial_squad is not None else current_squad
+        eff_projs = projections_by_round if projections_by_round is not None else round_projections
+        if eff_squad is None or eff_projs is None:
+            raise ValueError("initial_squad and projections_by_round must be provided.")
+
         horizon = max(1, min(horizon, 4))
         rounds = [start_round + i for i in range(horizon)]
 
@@ -71,7 +101,7 @@ class MultiRoundOptimizer:
         # (cumulative_discounted_score, cumulative_raw_score, current_squad_ids, current_bank, steps_tuple)
         initial_contracts = [
             p if isinstance(p, PlayerProjectionContract) else PlayerProjectionContract.from_player(p)
-            for p in initial_squad
+            for p in eff_squad
         ]
 
         states: list[tuple[float, float, list[PlayerProjectionContract], int, list[RoundDecisionStep]]] = [
@@ -80,7 +110,11 @@ class MultiRoundOptimizer:
 
         for step_idx, r_num in enumerate(rounds):
             discount = self.discount_factor ** step_idx
-            market_r = projections_by_round.get(r_num, ())
+            raw_market = eff_projs.get(r_num, ())
+            if isinstance(raw_market, Mapping):
+                market_r = list(raw_market.values())
+            else:
+                market_r = list(raw_market)
             proj_dict = {p.player_id: p for p in market_r}
 
             next_states: list[tuple[float, float, list[PlayerProjectionContract], int, list[RoundDecisionStep]]] = []

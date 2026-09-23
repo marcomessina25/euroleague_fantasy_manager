@@ -45,7 +45,15 @@ class TransferOptimizationResult:
 
 
 class TransferOptimizer:
-    """Evaluate and recommend optimal legal 1..4 transfers."""
+    """Evaluate and recommend optimal legal 1..4 transfers.
+
+    Search Boundaries:
+      - Default mode: Candidate-pruned fast heuristic search. Filters incoming player
+        pool using candidate generator and applies mathematical upper-bound pruning
+        (2.0 * sum(in) < 0.5 * sum(out)) to eliminate non-viable trade packages.
+      - Exhaustive mode (`exhaustive_candidates=True`): Exact search evaluating all
+        possible legal transfer combinations within the defined candidate pool.
+    """
 
     def __init__(
         self,
@@ -54,6 +62,21 @@ class TransferOptimizer:
         candidate_generator: CandidateGenerator | None = None,
         transfer_penalty_cost: float = 0.0,
     ) -> None:
+        """Initialize TransferOptimizer.
+
+        Parameters
+        ----------
+        constraints : OptimizationConstraints, optional
+            Fantasy rules and budget constraints.
+        lineup_optimizer : FixedSquadLineupOptimizer, optional
+            Inner lineup optimizer for evaluated squads.
+        candidate_generator : CandidateGenerator, optional
+            Candidate pool generator for incoming targets.
+        transfer_penalty_cost : float, default 0.0
+            Subjective strategy parameter (not an official fantasy rule) used to penalize
+            turnover or preserve trades across rounds. In official EuroLeague Fantasy
+            Classic rules, legal scheduled trades incur 0 penalty.
+        """
         self.constraints = constraints or OptimizationConstraints()
         self.lineup_optimizer = lineup_optimizer or FixedSquadLineupOptimizer(
             constraints=self.constraints
@@ -75,7 +98,14 @@ class TransferOptimizer:
         top_n: int = 5,
         market_projections: Mapping[int, PlayerProjectionContract] | None = None,
     ) -> TransferOptimizationResult:
-        """Find the top legal trade packages ranked by net score gain."""
+        """Find the top legal trade packages ranked by net score gain.
+
+        Parameters
+        ----------
+        exhaustive_candidates : bool, default False
+            When False, uses fast candidate pruning to accelerate large market searches.
+            When True, runs exact exhaustive evaluation across all candidate combinations.
+        """
         # 1. Normalize current squad
         squad_contracts: list[PlayerProjectionContract] = []
         for p in current_squad:
@@ -116,7 +146,10 @@ class TransferOptimizer:
         all_recommendations: list[TransferRecommendation] = []
         evaluated_count = 0
 
-        effective_max_trades = min(max_trades, 4) if not unlimited else min(max_trades, 11)
+        if unlimited:
+            effective_max_trades = min(max_trades, 11) if max_trades > 1 else 11
+        else:
+            effective_max_trades = min(max_trades, 4)
 
         # 5. Evaluate trade counts 1..effective_max_trades
         for k in range(1, effective_max_trades + 1):

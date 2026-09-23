@@ -199,10 +199,10 @@ class FixedSquadLineupOptimizer:
                                     cap_opt, slot_opt = compute_turn_substitution_option_bonus(
                                         starter_ids=starter_ids,
                                         captain_id=cap_id,
-                                        vice_captain_id=vc_id,
                                         sixth_man_id=sixth_id,
                                         bench_ids=remaining_bench_ids,
                                         projections=proj_map,
+                                        vice_captain_id=vc_id,
                                     )
                                     opt_bonus = cap_opt + slot_opt
 
@@ -293,12 +293,144 @@ def brute_force_exhaustive_lineup(
     projections: Mapping[int, PlayerProjectionContract] | None = None,
     risk_mode: RiskMode = RiskMode.EXPECTED,
     risk_lambda: float = 0.15,
-    include_option_value: bool = True,
+    include_option_value: bool = False,
 ) -> OptimalLineupDecision:
-    """Reference implementation that checks all possible partitions (Phase 18 correctness)."""
-    optimizer = FixedSquadLineupOptimizer(
-        risk_mode=risk_mode,
-        risk_lambda=risk_lambda,
-        include_option_value=include_option_value,
-    )
-    return optimizer.optimize(squad, projections=projections, top_alternatives=0)
+    """Independent unpruned exhaustive reference implementation (correctness oracle).
+
+    Exhaustively checks every legal formation, every starting five combination,
+    every one of the 5 starters as captain, and every one of the 5 bench players
+    as sixth man (4,600+ states).
+
+    Used as a golden reference to verify that the pruned FixedSquadLineupOptimizer
+    never misses an optimal decision.
+    """
+    contracts: list[PlayerProjectionContract] = []
+    proj_map = dict(projections) if projections is not None else {}
+    for item in squad:
+        if isinstance(item, PlayerProjectionContract):
+            contracts.append(item)
+            proj_map[item.player_id] = item
+        elif isinstance(item, Player):
+            c = proj_map.get(item.id, PlayerProjectionContract.from_player(item))
+            contracts.append(c)
+            proj_map[item.id] = c
+
+    # Validation
+    val_res = validate_squad_constraints(contracts, check_budget=False)
+    if not val_res.is_valid:
+        return OptimalLineupDecision(
+            round_number=None,
+            formation="",
+            starter_ids=(),
+            captain_id=0,
+            vice_captain_id=0,
+            sixth_man_id=0,
+            bench_ids=(),
+            head_coach_id=0,
+            breakdown=LineupScoreBreakdown(
+                formation="",
+                starter_score=0.0,
+                captain_bonus=0.0,
+                sixth_man_score=0.0,
+                bench_score=0.0,
+                head_coach_score=0.0,
+                raw_expected_total=0.0,
+                risk_adjustment=0.0,
+                option_value_bonus=0.0,
+                objective_value=0.0,
+            ),
+            is_valid=False,
+            validation_errors=val_res.errors,
+            alternatives=(),
+        )
+
+    coaches = [p for p in contracts if p.position == Position.HEAD_COACH]
+    head_coach = coaches[0]
+    guards = [p for p in contracts if p.position == Position.GUARD]
+    forwards = [p for p in contracts if p.position == Position.FORWARD]
+    centers = [p for p in contracts if p.position == Position.CENTER]
+
+    best_candidate: OptimalLineupDecision | None = None
+    best_key: tuple[float, float, int, int, int, tuple[int, ...]] | None = None
+
+    for num_g, num_f, num_c in sorted(LEGAL_COURT_FORMATIONS):
+        formation_str = f"({num_g},{num_f},{num_c})"
+        for g_combo in combinations(guards, num_g):
+            for f_combo in combinations(forwards, num_f):
+                for c_combo in combinations(centers, num_c):
+                    starters = g_combo + f_combo + c_combo
+                    starter_ids = tuple(sorted(p.player_id for p in starters))
+                    starter_set = set(starter_ids)
+                    bench_court = tuple(
+                        p for p in contracts
+                        if p.player_id not in starter_set and p.position != Position.HEAD_COACH
+                    )
+
+                    # Exhaustively test all 5 starters as captain
+                    for cap in starters:
+                        cap_id = cap.player_id
+                        # Exhaustively test all 5 bench players as sixth man
+                        for sixth in bench_court:
+                            sixth_id = sixth.player_id
+                            remaining_bench_ids = tuple(
+                                p.player_id for p in bench_court if p.player_id != sixth_id
+                            )
+
+                            opt_bonus = 0.0
+                            if include_option_value:
+                                cap_opt, slot_opt = compute_turn_substitution_option_bonus(
+                                    starter_ids=starter_ids,
+                                    captain_id=cap_id,
+                                    sixth_man_id=sixth_id,
+                                    bench_ids=remaining_bench_ids,
+                                    projections=proj_map,
+                                )
+                                opt_bonus = cap_opt + slot_opt
+
+                            breakdown = evaluate_lineup_objective(
+                                starter_ids=starter_ids,
+                                captain_id=cap_id,
+                                sixth_man_id=sixth_id,
+                                bench_ids=remaining_bench_ids,
+                                head_coach_id=head_coach.player_id,
+                                projections=proj_map,
+                                formation_str=formation_str,
+                                risk_mode=risk_mode,
+                                risk_lambda=risk_lambda,
+                                option_value_bonus=opt_bonus,
+                            )
+
+                            # Deterministic tie-breaking key:
+                            # 1. Highest objective value
+                            # 2. Highest starter score
+                            # 3. Highest total starter price
+                            # 4. Deterministic player ID tie-breakers
+                            starters_price = sum(p.price_tenths for p in starters)
+                            sort_key = (
+                                breakdown.objective_value,
+                                breakdown.starter_score,
+                                starters_price,
+                                -cap_id,
+                                -sixth_id,
+                                starter_ids,
+                            )
+
+                            if best_key is None or sort_key > best_key:
+                                best_key = sort_key
+                                best_candidate = OptimalLineupDecision(
+                                    round_number=None,
+                                    formation=formation_str,
+                                    starter_ids=starter_ids,
+                                    captain_id=cap_id,
+                                    vice_captain_id=0,
+                                    sixth_man_id=sixth_id,
+                                    bench_ids=remaining_bench_ids,
+                                    head_coach_id=head_coach.player_id,
+                                    breakdown=breakdown,
+                                    is_valid=True,
+                                    validation_errors=(),
+                                    alternatives=(),
+                                )
+
+    assert best_candidate is not None
+    return best_candidate

@@ -15,11 +15,12 @@ EuroLeague Fantasy & Feeds APIs -> local SQLite snapshots -> rules + validation 
 ## Living roadmap
 
 - [`docs/architecture.md`](docs/architecture.md) defines the purpose, architectural boundaries, and responsibilities of each layer.
-- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1`, `V0.2`, `V0.2.5`, `V0.3`, and `V0.4` completed; `V0.45 / V0.5` is next).
-- [`docs/v02/v02.md`](docs/v02/v02.md) and [`docs/v02/items_left_for_v02.md`](docs/v02/items_left_for_v02.md) define the **V0.2** heuristic decision-support baseline specification and pre-merge checklist.
-- [`docs/v025/v025.md`](docs/v025/v025.md) and [`docs/v025/v025_cleanup.md`](docs/v025/v025_cleanup.md) define the **V0.2.5** historical evaluation foundation.
-- [`docs/v03/v03.md`](docs/v03/v03.md) and [`docs/v03/items_left_for_v03.md`](docs/v03/items_left_for_v03.md) define the **V0.3** validated predictive projection layer (`0.3.0`) and merge checklist.
-- [`docs/v04/v04.md`](docs/v04/v04.md) and [`docs/v04/items_left_for_v04.md`](docs/v04/items_left_for_v04.md) define the **V0.4** decision and optimization layer (`0.4.0`).
+- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1`, `V0.2`, `V0.2.5`, `V0.3`, and `V0.4` completed; `V0.45` is next).
+- [`docs/specs/v02.md`](docs/specs/v02.md) and [`docs/specs/items_left_for_v02.md`](docs/specs/items_left_for_v02.md) define the **V0.2** heuristic decision-support baseline specification and pre-merge checklist.
+- [`docs/specs/v025.md`](docs/specs/v025.md) and [`docs/specs/v025_cleanup.md`](docs/specs/v025_cleanup.md) define the **V0.2.5** historical evaluation foundation.
+- [`docs/specs/v03.md`](docs/specs/v03.md) and [`docs/specs/items_left_for_v03.md`](docs/specs/items_left_for_v03.md) define the **V0.3** validated predictive projection layer (`0.3.0`) and merge checklist.
+- [`docs/specs/v04.md`](docs/specs/v04.md), [`docs/specs/v04_items_left.md`](docs/specs/v04_items_left.md), and [`docs/specs/items_left_for_v04.md`](docs/specs/items_left_for_v04.md) define the **V0.4** decision and optimization layer (`0.4.0`).
+- [`docs/specs/v045.md`](docs/specs/v045.md) defines the upcoming **V0.45** closed-loop evaluation and live decision state.
 
 Both human contributors and AI agents must read the relevant living documents before making material changes and update them whenever architecture, scope, priorities, or delivery status changes.
 
@@ -140,42 +141,49 @@ elf evaluate --season 2025 --rounds 1:12 --models season_mean,xpdk_v02,fp_decomp
 elf evaluate --season 2025 --rounds 1:12 --compare-models fp_decomposed_calibrated_v03,xpdk_v02
 ```
 
-## V0.4 Decision & Optimization Layer (`elf optimize`)
+## V0.4 Decision & Optimization Layer (`elf optimize` / `elf optimize-*` / `elf backtest`)
 
-Turn V0.3 projections into optimal, deterministic fantasy decisions under real Classic Mode constraints (Starting 5 `1.0x`, Captain `2.0x`, Sixth Man `1.0x`, Bench `0.5x`, Head Coach `1.0x`, legal formations `2-2-1`, `1-2-2`, `2-1-2`, `1-3-1`, `3-1-1`, and Turn 1 $\to$ Turn 2 substitution option value):
+Turn V0.3 projections into optimal, deterministic fantasy decisions under official Classic Mode constraints (Starting 5 `1.0x`, Captain `2.0x`, Sixth Man `1.0x`, Bench `0.5x`, Head Coach `1.0x`, legal formations `2-2-1`, `1-2-2`, `2-1-2`, `1-3-1`, `3-1-1`, verified club limits of max 6 court players with Head Coach separate, and Turn 1 $\to$ Turn 2 substitution option value):
 
 ### 1. Joint Lineup Optimization
 
-Optimize Starting 5, Captaincy, Sixth Man, and Bench across all 5 legal basketball formations:
+Optimize Starting 5, Captaincy, Sixth Man, and Bench across all 5 legal basketball formations with exact pruning validated against an exhaustive 4,600+ state enumeration oracle:
 
 ```powershell
 elf optimize lineup --season 2025 --round 1
-elf optimize lineup --season 2025 --round 1 --risk-mode conservative
-elf optimize lineup --season 2025 --round 1 --json
+# Or top-level hyphenated alias:
+elf optimize-lineup --season 2025 --round 1 --risk-mode conservative
+elf optimize-lineup --season 2025 --round 1 --json
 ```
 
 ### 2. Single-Round Transfer Optimization
 
-Find top legal `1..4` trade packages maximizing net expected score under budget and club constraints:
+Find top legal `1..4` trade packages (and unlimited window overhauls) maximizing net expected score under budget and club constraints, supporting both candidate-pruned and exhaustive search modes:
 
 ```powershell
 elf optimize transfers --season 2025 --round 1 --trades 2 --top 5
+# Or top-level hyphenated alias:
+elf optimize-transfers --season 2025 --round 1 --trades 2 --top 5
 ```
 
 ### 3. Multi-Round Strategy Roadmap
 
-Plan sequential transfer moves over short horizons ($N = 2..4$ rounds) with discounted forward planning:
+Plan sequential transfer moves over short horizons ($N = 2..4$ rounds) using dynamic beam search with strategic discounting ($\gamma = 0.95$ default):
 
 ```powershell
 elf optimize multi-round --season 2025 --start-round 1 --horizon 3
+# Or top-level hyphenated alias:
+elf optimize-multi-round --season 2025 --start-round 1 --horizon 3
 ```
 
 ### 4. Historical Decision Backtesting & Oracle Regret
 
-Backtest decision quality against historical rounds and compare against the hindsight oracle:
+Evaluate decision quality against historical rounds comparing recommended decisions against a static hindsight oracle, distinguishing `projected_fantasy_points` from realized `actual_fantasy_points`:
 
 ```powershell
 elf optimize backtest --season 2025 --rounds 1:12
+# Or top-level alias:
+elf backtest --season 2025 --rounds 1:12
 ```
 
 ## License

@@ -35,10 +35,10 @@ V0.4 does **not** need persistent real-world decision tracking.
 
 ## 2.1 Documentation cleanup
 
-- [ ] Remove duplicate/outdated V0.4 status statements.
-- [ ] Make README, roadmap and V0.4 documentation agree on release status.
-- [ ] Clearly separate V0.4 from V0.45 scope.
-- [ ] Ensure terminology is consistent:
+- [x] Remove duplicate/outdated V0.4 status statements.
+- [x] Make README, roadmap and V0.4 documentation agree on release status.
+- [x] Clearly separate V0.4 from V0.45 scope.
+- [x] Ensure terminology is consistent:
   - recommendation;
   - optimization;
   - oracle;
@@ -63,10 +63,10 @@ V0.45:
 
 ## 3.1 Club quota
 
-- [ ] Verify the currently implemented club-player quota against the official/current fantasy rules.
-- [ ] Resolve the discrepancy between the documented default quota and the current-season rules.
-- [ ] Add a regression test for the verified rule.
-- [ ] Document the rule source/version.
+- [x] Verify the currently implemented club-player quota against the official/current fantasy rules.
+- [x] Resolve the discrepancy between the documented default quota and the current-season rules.
+- [x] Add a regression test for the verified rule.
+- [x] Document the rule source/version.
 
 Do not leave a historical rule silently presented as the current rule.
 
@@ -76,10 +76,10 @@ Do not leave a historical rule silently presented as the current rule.
 
 V0.4 should consume projections rather than redesigning the prediction model.
 
-- [ ] Ensure `PlayerProjectionContract` is clearly defined.
-- [ ] Ensure optimizer inputs are independent of the V0.3 model implementation.
-- [ ] Verify optimizer behavior with deterministic synthetic projections.
-- [ ] Keep prediction generation and decision optimization separate.
+- [x] Ensure `PlayerProjectionContract` is clearly defined.
+- [x] Ensure optimizer inputs are independent of the V0.3 model implementation.
+- [x] Verify optimizer behavior with deterministic synthetic projections.
+- [x] Keep prediction generation and decision optimization separate.
 
 The intended architecture remains:
 
@@ -99,16 +99,16 @@ V0.4 should not introduce another prediction model.
 
 The exhaustive optimizer is an important correctness oracle.
 
-- [ ] Preserve the exhaustive implementation.
-- [ ] Verify all implemented constraints.
-- [ ] Verify formation legality.
-- [ ] Verify squad-size constraints.
-- [ ] Verify club quota.
-- [ ] Verify budget constraints.
-- [ ] Verify captain/sixth/bench legality.
-- [ ] Verify objective calculation.
-- [ ] Verify deterministic tie-breaking.
-- [ ] Retain brute-force comparison tests.
+- [x] Preserve the exhaustive implementation.
+- [x] Verify all implemented constraints.
+- [x] Verify formation legality.
+- [x] Verify squad-size constraints.
+- [x] Verify club quota.
+- [x] Verify budget constraints.
+- [x] Verify captain/sixth/bench legality.
+- [x] Verify objective calculation.
+- [x] Verify deterministic tie-breaking.
+- [x] Retain brute-force comparison tests.
 
 The optimized implementation must continue to agree with exhaustive enumeration for testable small state spaces.
 
@@ -167,10 +167,10 @@ E[score] ± λσ
 
 describe this as a **risk-adjusted heuristic**, not as a complete portfolio variance model.
 
-- [ ] Document the mathematical interpretation.
-- [ ] Test monotonic behavior with increasing uncertainty.
-- [ ] Test expected/conservative/aggressive modes.
-- [ ] Ensure risk mode does not alter deterministic inputs unexpectedly.
+- [x] Document the mathematical interpretation.
+- [x] Test monotonic behavior with increasing uncertainty.
+- [x] Test expected/conservative/aggressive modes.
+- [x] Ensure risk mode does not alter deterministic inputs unexpectedly.
 
 Covariance modelling remains out of scope for V0.4.
 
@@ -182,12 +182,12 @@ The transfer optimizer needs an explicit exactness boundary.
 
 If the default implementation uses candidate pruning:
 
-- [ ] Document that default optimization is candidate-pruned.
-- [ ] Do not describe it as globally exhaustive.
-- [ ] Document exhaustive mode.
-- [ ] Verify exhaustive mode on small synthetic cases.
-- [ ] Test that candidate pruning does not violate hard constraints.
-- [ ] Test transfer counts 1..4 and unlimited mode.
+- [x] Document that default optimization is candidate-pruned.
+- [x] Do not describe it as globally exhaustive.
+- [x] Document exhaustive mode.
+- [x] Verify exhaustive mode on small synthetic cases.
+- [x] Test that candidate pruning does not violate hard constraints.
+- [x] Test transfer counts 1..4 and unlimited mode.
 
 Important distinction:
 
@@ -207,13 +207,13 @@ If `transfer_penalty_cost` is configurable, document it as a **strategy paramete
 
 The multi-round optimizer is a beam-search strategy.
 
-- [ ] Clearly document that it is beam search.
-- [ ] Do not describe it as globally optimal.
-- [ ] Test deterministic ordering/tie-breaking.
-- [ ] Test horizon 2–4.
-- [ ] Test discounting.
-- [ ] Test that legal state transitions are preserved.
-- [ ] Verify that the returned path is the best path among the retained beam states.
+- [x] Clearly document that it is beam search.
+- [x] Do not describe it as globally optimal.
+- [x] Test deterministic ordering/tie-breaking.
+- [x] Test horizon 2–4.
+- [x] Test discounting.
+- [x] Test that legal state transitions are preserved.
+- [x] Verify that the returned path is the best path among the retained beam states.
 
 Document:
 
@@ -255,9 +255,9 @@ Those belong to V0.45.
 
 Where the backtester evaluates realized fantasy performance:
 
-- [ ] Use explicit terminology such as `actual_fantasy_points`.
-- [ ] Do not ambiguously call realized values simply “actual score” if multiple score concepts exist.
-- [ ] Keep projected score and realized fantasy score distinct.
+- [x] Use explicit terminology such as `actual_fantasy_points`.
+- [x] Do not ambiguously call realized values simply “actual score” if multiple score concepts exist.
+- [x] Keep projected score and realized fantasy score distinct.
 
 Example:
 
@@ -274,55 +274,55 @@ Before merge, verify at minimum:
 
 ### Core optimizer
 
-- [ ] Exact optimizer vs exhaustive optimizer.
-- [ ] Formation legality.
-- [ ] Budget legality.
-- [ ] Club quota.
-- [ ] Squad-size constraints.
-- [ ] Captain legality.
-- [ ] Sixth-man legality.
-- [ ] Bench legality.
-- [ ] Deterministic tie-breaking.
+- [x] Exact optimizer vs exhaustive optimizer.
+- [x] Formation legality.
+- [x] Budget legality.
+- [x] Club quota.
+- [x] Squad-size constraints.
+- [x] Captain legality.
+- [x] Sixth-man legality.
+- [x] Bench legality.
+- [x] Deterministic tie-breaking.
 
 ### Captain option value
 
-- [ ] Captain multiplier.
-- [ ] Multiple eligible future captains.
-- [ ] Ineligible players excluded.
-- [ ] Zero option value.
-- [ ] Positive option value.
+- [x] Captain multiplier.
+- [x] Multiple eligible future captains.
+- [x] Ineligible players excluded.
+- [x] Zero option value.
+- [x] Positive option value.
 
 ### Risk
 
-- [ ] Expected mode.
-- [ ] Conservative mode.
-- [ ] Aggressive mode.
-- [ ] Uncertainty sensitivity.
+- [x] Expected mode.
+- [x] Conservative mode.
+- [x] Aggressive mode.
+- [x] Uncertainty sensitivity.
 
 ### Transfers
 
-- [ ] 1 transfer.
-- [ ] 2 transfers.
-- [ ] 3 transfers.
-- [ ] 4 transfers.
-- [ ] Unlimited.
-- [ ] Candidate-pruned mode.
-- [ ] Exhaustive mode.
+- [x] 1 transfer.
+- [x] 2 transfers.
+- [x] 3 transfers.
+- [x] 4 transfers.
+- [x] Unlimited.
+- [x] Candidate-pruned mode.
+- [x] Exhaustive mode.
 
 ### Multi-round
 
-- [ ] Horizons 2–4.
-- [ ] Beam width behavior.
-- [ ] Deterministic output.
-- [ ] Legal state transitions.
-- [ ] Discounting.
+- [x] Horizons 2–4.
+- [x] Beam width behavior.
+- [x] Deterministic output.
+- [x] Legal state transitions.
+- [x] Discounting.
 
 ### Backtesting
 
-- [ ] Actual fantasy points.
-- [ ] Static oracle.
-- [ ] Regret calculation.
-- [ ] Deterministic replay.
+- [x] Actual fantasy points.
+- [x] Static oracle.
+- [x] Regret calculation.
+- [x] Deterministic replay.
 
 ---
 
@@ -339,11 +339,11 @@ elf optimize-multi-round
 elf backtest
 ```
 
-- [ ] Help text is accurate.
-- [ ] Inputs are validated.
-- [ ] Outputs identify the optimizer/model version.
-- [ ] Results are deterministic.
-- [ ] CLI documentation matches actual commands.
+- [x] Help text is accurate.
+- [x] Inputs are validated.
+- [x] Outputs identify the optimizer/model version.
+- [x] Results are deterministic.
+- [x] CLI documentation matches actual commands.
 
 V0.45 commands such as:
 
@@ -513,44 +513,44 @@ The GUI should not need to reimplement optimizer or evaluation logic.
 
 ### Rules
 
-- [ ] Current club quota verified.
-- [ ] All fantasy constraints tested.
+- [x] Current club quota verified.
+- [x] All fantasy constraints tested.
 
 ### Optimizer
 
-- [ ] Exact fixed-squad optimizer verified.
-- [ ] Exhaustive correctness oracle retained.
-- [ ] Captain option-value formula corrected.
-- [ ] Captain option candidate set correct.
-- [ ] Risk modes documented/tested.
-- [ ] Transfer exact-vs-pruned distinction documented.
-- [ ] Multi-round beam-search distinction documented.
-- [ ] Gamma documented as strategic parameter.
+- [x] Exact fixed-squad optimizer verified.
+- [x] Exhaustive correctness oracle retained.
+- [x] Captain option-value formula corrected.
+- [x] Captain option candidate set correct.
+- [x] Risk modes documented/tested.
+- [x] Transfer exact-vs-pruned distinction documented.
+- [x] Multi-round beam-search distinction documented.
+- [x] Gamma documented as strategic parameter.
 
 ### Backtester
 
-- [ ] Static hindsight oracle scope documented.
-- [ ] `actual_fantasy_points` terminology clarified.
-- [ ] Backtest tests pass.
+- [x] Static hindsight oracle scope documented.
+- [x] `actual_fantasy_points` terminology clarified.
+- [x] Backtest tests pass.
 
 ### CLI
 
-- [ ] V0.4 commands work.
-- [ ] Help/documentation matches implementation.
-- [ ] Deterministic output verified.
+- [x] V0.4 commands work.
+- [x] Help/documentation matches implementation.
+- [x] Deterministic output verified.
 
 ### Reproducibility
 
-- [ ] Optimizer runs are deterministic.
-- [ ] Optimizer/projection provenance is available.
-- [ ] Replay tests pass.
+- [x] Optimizer runs are deterministic.
+- [x] Optimizer/projection provenance is available.
+- [x] Replay tests pass.
 
 ### Documentation
 
-- [ ] README updated.
-- [ ] Roadmap updated.
-- [ ] V0.4/V0.45 boundary documented.
-- [ ] No V0.45 functionality is incorrectly described as V0.4.
+- [x] README updated.
+- [x] Roadmap updated.
+- [x] V0.4/V0.45 boundary documented.
+- [x] No V0.45 functionality is incorrectly described as V0.4.
 
 ---
 
