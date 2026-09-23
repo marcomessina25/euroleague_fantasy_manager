@@ -617,3 +617,191 @@ def test_initial_team_decision_persistence(tmp_path: Path):
     assert "INITIAL_TEAM" in detail_str
     assert "CHOSEN SQUAD (11 units)" in detail_str
     assert "RECOMMENDED SQUAD (11 units)" in detail_str
+
+
+# ---------------------------------------------------------------------------
+# Phase 9: Production Oracle Metadata Resolution
+# ---------------------------------------------------------------------------
+
+
+def test_oracle_metadata_resolution_from_snapshot(tmp_path: Path):
+    """Verify that OutcomeUpdater obtains true positions and club metadata from StateSnapshot
+    instead of hard-coded ID ranges or fabricated defaults.
+    """
+    db_file = tmp_path / "test_snapshot_meta.db"
+    store = DecisionStore(db_file)
+    logger = DecisionLogger(store=store)
+    updater = OutcomeUpdater(store=store)
+
+    # Real-world-like IDs that do NOT match any synthetic test conventions (e.g. 5011..5021)
+    squad = [
+        make_test_player(5011, Position.GUARD, expected_fp=20.0, team_id=1),      # G
+        make_test_player(5012, Position.GUARD, expected_fp=15.0, team_id=2),      # G
+        make_test_player(5013, Position.GUARD, expected_fp=12.0, team_id=3),      # G
+        make_test_player(5014, Position.GUARD, expected_fp=10.0, team_id=4),      # G
+        make_test_player(5015, Position.FORWARD, expected_fp=25.0, team_id=1),    # F
+        make_test_player(5016, Position.FORWARD, expected_fp=18.0, team_id=2),    # F
+        make_test_player(5017, Position.FORWARD, expected_fp=14.0, team_id=3),    # F
+        make_test_player(5018, Position.FORWARD, expected_fp=8.0, team_id=4),     # F
+        make_test_player(5019, Position.CENTER, expected_fp=22.0, team_id=1),     # C
+        make_test_player(5020, Position.CENTER, expected_fp=16.0, team_id=2),     # C
+        make_test_player(5021, Position.HEAD_COACH, expected_fp=15.0, team_id=5), # HC
+    ]
+
+    opt = FixedSquadLineupOptimizer()
+    rec = opt.optimize(squad, round_number=1)
+
+    # Log lineup decision with squad_contracts
+    record = logger.log_lineup_decision(
+        round_number=1,
+        season="2026",
+        team_id="my_team",
+        recommended_decision=rec,
+        squad_contracts=squad,
+    )
+
+    # Verify StateSnapshot contains player metadata
+    snap = store.get_snapshot(record.state_snapshot_id)
+    assert snap is not None
+    assert 5019 in snap.player_metadata
+    assert snap.player_metadata[5019]["position"] == "C"
+    assert snap.player_metadata[5015]["position"] == "F"
+    assert snap.player_metadata[5021]["position"] == "HC"
+
+    # Evaluate outcomes
+    actuals = {
+        5011: 18.0, 5012: 14.0, 5013: 16.0, 5014: 8.0,
+        5015: 30.0, 5016: 20.0, 5017: 12.0, 5018: 6.0,
+        5019: 24.0, 5020: 18.0, 5021: 15.0,
+    }
+    outcome = updater.update_decision_outcomes(record.decision_id, actuals)
+    assert outcome.outcome_status == OutcomeStatus.FINAL
+    assert outcome.oracle_actual_score >= outcome.human_actual_score
+    assert outcome.human_regret >= 0.0
+
+
+def test_oracle_metadata_resolution_from_database_eval_players(tmp_path: Path):
+    """Verify that OutcomeUpdater queries eval_players/eval_teams from SQLite when snapshot lacks metadata."""
+    db_file = tmp_path / "test_db_eval.db"
+    store = DecisionStore(db_file)
+    updater = OutcomeUpdater(store=store)
+
+    # Populate eval_players & eval_teams in the SQLite database
+    with store._connect() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS eval_teams (
+                team_id INTEGER PRIMARY KEY,
+                code TEXT NOT NULL,
+                name TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS eval_players (
+                player_id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                position TEXT NOT NULL,
+                canonical_team_id INTEGER,
+                base_quotation_tenths INTEGER
+            );
+            INSERT INTO eval_teams (team_id, code, name) VALUES (1, 'RMB', 'Real Madrid'), (2, 'OLY', 'Olympiacos');
+            INSERT INTO eval_players (player_id, name, position, canonical_team_id, base_quotation_tenths) VALUES
+                (9001, 'Guard Alpha', 'G', 1, 150),
+                (9002, 'Guard Beta', 'G', 2, 130),
+                (9003, 'Guard Gamma', 'G', 1, 110),
+                (9004, 'Guard Delta', 'G', 2, 90),
+                (9005, 'Forward Alpha', 'F', 1, 180),
+                (9006, 'Forward Beta', 'F', 2, 140),
+                (9007, 'Forward Gamma', 'F', 1, 120),
+                (9008, 'Forward Delta', 'F', 2, 85),
+                (9009, 'Center Alpha', 'C', 1, 175),
+                (9010, 'Center Beta', 'C', 2, 125),
+                (9011, 'Coach Alpha', 'HC', 1, 100);
+            """
+        )
+
+    # Create a decision without snapshot metadata
+    lineup = LineupPayload(
+        formation="2-2-1",
+        starter_ids=(9001, 9002, 9005, 9006, 9009),
+        captain_id=9005,
+        sixth_man_id=9010,
+        bench_ids=(9003, 9004, 9007, 9008),
+        head_coach_id=9011,
+        expected_score=135.0,
+    )
+    rec = DecisionRecord(
+        decision_id="dec_eval_db_001",
+        team_id="team_test",
+        season="2026",
+        round_number=1,
+        turn_number=1,
+        decision_type=DecisionType.LINEUP,
+        created_at="2026-09-23T12:00:00Z",
+        provenance=DecisionProvenance(),
+        actual_lineup=lineup,
+    )
+    store.log_decision(rec)
+
+    # Ingest actuals
+    actuals = {
+        9001: 22.0, 9002: 18.0, 9003: 10.0, 9004: 6.0,
+        9005: 28.0, 9006: 19.0, 9007: 12.0, 9008: 5.0,
+        9009: 25.0, 9010: 17.0, 9011: 15.0,
+    }
+
+    outcome = updater.update_decision_outcomes(rec.decision_id, actuals)
+    assert outcome.outcome_status == OutcomeStatus.FINAL
+    assert outcome.oracle_actual_score >= outcome.human_actual_score
+
+
+def test_oracle_metadata_resolution_from_explicit_input(tmp_path: Path):
+    """Verify that OutcomeUpdater accepts explicit player_metadata or squad_contracts during evaluation."""
+    db_file = tmp_path / "test_explicit_meta.db"
+    store = DecisionStore(db_file)
+    updater = OutcomeUpdater(store=store)
+
+    squad = [
+        make_test_player(7701, Position.GUARD, expected_fp=18.0, team_id=1),
+        make_test_player(7702, Position.GUARD, expected_fp=14.0, team_id=2),
+        make_test_player(7703, Position.GUARD, expected_fp=11.0, team_id=3),
+        make_test_player(7704, Position.GUARD, expected_fp=8.0, team_id=4),
+        make_test_player(7705, Position.FORWARD, expected_fp=22.0, team_id=1),
+        make_test_player(7706, Position.FORWARD, expected_fp=16.0, team_id=2),
+        make_test_player(7707, Position.FORWARD, expected_fp=13.0, team_id=3),
+        make_test_player(7708, Position.FORWARD, expected_fp=7.0, team_id=4),
+        make_test_player(7709, Position.CENTER, expected_fp=20.0, team_id=1),
+        make_test_player(7710, Position.CENTER, expected_fp=15.0, team_id=2),
+        make_test_player(7711, Position.HEAD_COACH, expected_fp=12.0, team_id=5),
+    ]
+
+    lineup = LineupPayload(
+        formation="2-2-1",
+        starter_ids=(7701, 7702, 7705, 7706, 7709),
+        captain_id=7705,
+        sixth_man_id=7710,
+        bench_ids=(7703, 7704, 7707, 7708),
+        head_coach_id=7711,
+    )
+    rec = DecisionRecord(
+        decision_id="dec_explicit_001",
+        team_id="team_test",
+        season="2026",
+        round_number=1,
+        turn_number=1,
+        decision_type=DecisionType.LINEUP,
+        created_at="2026-09-23T12:00:00Z",
+        provenance=DecisionProvenance(),
+        actual_lineup=lineup,
+    )
+    store.log_decision(rec)
+
+    actuals = {p.player_id: p.expected_fp + 2.0 for p in squad}
+
+    # Pass squad_contracts explicitly to update_decision_outcomes
+    outcome = updater.update_decision_outcomes(
+        decision_id=rec.decision_id,
+        actual_scores=actuals,
+        squad_contracts=squad,
+    )
+    assert outcome.outcome_status == OutcomeStatus.FINAL
+    assert outcome.oracle_actual_score >= outcome.human_actual_score
+

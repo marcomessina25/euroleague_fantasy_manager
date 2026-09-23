@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 import uuid
 
 from ..optimization.constraints import PlayerProjectionContract
@@ -54,6 +54,18 @@ class DecisionLogger:
         snapshot_id: str | None = None
         if squad_contracts:
             snapshot_id = f"snap_{season}_r{round_number:02d}_t{turn_number}_{uuid.uuid4().hex[:8]}"
+            player_meta = {
+                p.player_id: {
+                    "player_id": p.player_id,
+                    "name": p.player_name,
+                    "position": p.position.short_code if hasattr(p.position, "short_code") else str(p.position),
+                    "team_id": p.team_id,
+                    "team_code": p.team_code,
+                    "price_tenths": p.price_tenths,
+                    "turn_number": p.turn_number,
+                }
+                for p in squad_contracts
+            }
             snap = StateSnapshot(
                 snapshot_id=snapshot_id,
                 team_id=team_id,
@@ -63,6 +75,7 @@ class DecisionLogger:
                 squad_ids=tuple(p.player_id for p in squad_contracts),
                 prices_tenths={p.player_id: p.price_tenths for p in squad_contracts},
                 bank_tenths=bank_tenths,
+                player_metadata=player_meta,
                 created_at=now_iso,
             )
             self.store.save_snapshot(snap)
@@ -276,6 +289,8 @@ class DecisionLogger:
         actual_lineup: LineupPayload | None = None,
         prices_tenths: Mapping[int, int] | None = None,
         bank_tenths: int = 0,
+        squad_contracts: Sequence[PlayerProjectionContract] | None = None,
+        player_metadata: Mapping[int, Any] | None = None,
         provenance: DecisionProvenance | None = None,
         notes: str | None = None,
     ) -> DecisionRecord:
@@ -290,6 +305,34 @@ class DecisionLogger:
         squad_to_snap = act_squad or rec_squad
         if squad_to_snap:
             snapshot_id = f"snap_init_{season}_{team_id}_{uuid.uuid4().hex[:8]}"
+            player_meta: dict[int, dict[str, Any]] = {}
+            if squad_contracts:
+                for p in squad_contracts:
+                    player_meta[p.player_id] = {
+                        "player_id": p.player_id,
+                        "name": p.player_name,
+                        "position": p.position.short_code if hasattr(p.position, "short_code") else str(p.position),
+                        "team_id": p.team_id,
+                        "team_code": p.team_code,
+                        "price_tenths": p.price_tenths,
+                        "turn_number": p.turn_number,
+                    }
+            elif player_metadata:
+                for pid_raw, pdata in player_metadata.items():
+                    pid = int(pid_raw)
+                    if isinstance(pdata, PlayerProjectionContract):
+                        player_meta[pid] = {
+                            "player_id": pdata.player_id,
+                            "name": pdata.player_name,
+                            "position": pdata.position.short_code if hasattr(pdata.position, "short_code") else str(pdata.position),
+                            "team_id": pdata.team_id,
+                            "team_code": pdata.team_code,
+                            "price_tenths": pdata.price_tenths,
+                            "turn_number": pdata.turn_number,
+                        }
+                    elif isinstance(pdata, dict):
+                        player_meta[pid] = dict(pdata)
+
             snap = StateSnapshot(
                 snapshot_id=snapshot_id,
                 team_id=team_id,
@@ -299,6 +342,7 @@ class DecisionLogger:
                 squad_ids=squad_to_snap,
                 prices_tenths={int(k): int(v) for k, v in (prices_tenths or {}).items()},
                 bank_tenths=bank_tenths,
+                player_metadata=player_meta,
                 created_at=now_iso,
             )
             self.store.save_snapshot(snap)

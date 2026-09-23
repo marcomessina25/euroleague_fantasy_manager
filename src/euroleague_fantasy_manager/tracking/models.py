@@ -185,6 +185,7 @@ class StateSnapshot:
     squad_ids: tuple[int, ...]
     prices_tenths: dict[int, int]
     bank_tenths: int
+    player_metadata: dict[int, dict[str, Any]] = field(default_factory=dict)
     dataset_version: str = "1.0.0"
     created_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -200,12 +201,16 @@ class StateSnapshot:
             "squad_ids": list(self.squad_ids),
             "prices_tenths": {str(k): v for k, v in self.prices_tenths.items()},
             "bank_tenths": self.bank_tenths,
+            "player_metadata": {str(k): dict(v) for k, v in self.player_metadata.items()},
             "dataset_version": self.dataset_version,
             "created_at": self.created_at,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "StateSnapshot":
+        meta = {
+            int(k): dict(v) for k, v in data.get("player_metadata", {}).items()
+        }
         return cls(
             snapshot_id=data["snapshot_id"],
             team_id=data["team_id"],
@@ -215,6 +220,7 @@ class StateSnapshot:
             squad_ids=tuple(int(x) for x in data["squad_ids"]),
             prices_tenths={int(k): int(v) for k, v in data.get("prices_tenths", {}).items()},
             bank_tenths=int(data.get("bank_tenths", 0)),
+            player_metadata=meta,
             dataset_version=data.get("dataset_version", "1.0.0"),
             created_at=data.get("created_at", ""),
         )

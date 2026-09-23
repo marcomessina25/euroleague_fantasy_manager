@@ -286,13 +286,14 @@ Connect the quantitative engine to real management decisions and actual outcomes
 1. **Deterministic Decision Logging & Auditing (`src/euroleague_fantasy_manager/tracking/`)**:
    - `DecisionLogger` and `DecisionStore` (SQLite tables: `decision_logs`, `decision_outcomes`, `state_snapshots`, `decision_events`).
    - Supports Lineup (`DecisionType.LINEUP`), Transfer (`DecisionType.TRANSFERS`), Turn 1 $\to$ Turn 2 Substitution / Captain Switch (`DecisionType.TURN_SUB`), and Initial Team (`DecisionType.INITIAL_TEAM`) decisions.
-   - Preserves complete `DecisionProvenance` (model ID, optimizer version, risk parameters) and immutable pre-decision `StateSnapshot`.
+   - Minimal immutable `StateSnapshot` captures the exact pre-decision environment (`team_id`, `season`, `round`, `turn`, `squad_ids`, `prices_tenths`, `bank_tenths`, `dataset_version`, `created_at`, plus metadata) while decision-specific configuration and provenance are stored in `DecisionRecord` / `DecisionProvenance`.
    - Distinctly logs `recommended_decision` vs `actual_decision` with automated override detection.
 2. **Generic `INITIAL_TEAM` Decision Support (Bridge for V0.5 Initial Team Builder)**:
    - Persists recommended vs actual 11-player squad lists (`recommended_squad_ids`, `actual_squad_ids`) along with pre-season bank and player pricing snapshots.
    - V0.5 Initial Team Builder will directly consume this interface to log draft recommendations and user overrides without coupling 0.4.5 to GUI or drafting optimization algorithms.
 3. **Deterministic Fantasy Outcome Scoring & Retrospective Regret**:
    - `OutcomeUpdater` ingests realized actual player scores using official EuroLeague Fantasy scoring rules.
+   - Hindsight oracle resolves real player positions, teams, and names from snapshot metadata, underlying SQLite tables (`eval_players`, `eval_teams`, `players`), or explicit projection inputs, ensuring true regret calculations for real squads without hard-coded ID heuristics.
    - Calculates regret metrics: `human_regret` (Oracle - Human), `model_regret` (Oracle - Model), `human_vs_model` (Human - Model), `captain_regret`, `sixth_man_regret`, `bench_regret`, `formation_regret`, `turn_sub_regret`, and `transfer_regret`.
    - Evaluates prediction errors: MAE, RMSE, and bias across active squads.
 4. **Longitudinal Closed-Loop Evaluation & Drift Monitoring**:

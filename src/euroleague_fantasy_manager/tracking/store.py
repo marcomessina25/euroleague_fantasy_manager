@@ -50,7 +50,8 @@ class DecisionStore:
                     prices_tenths TEXT NOT NULL,
                     bank_tenths INTEGER NOT NULL,
                     dataset_version TEXT NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    player_metadata_json TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS decision_logs (
@@ -111,19 +112,30 @@ class DecisionStore:
                 ON decision_logs(team_id, season, round_number);
                 """
             )
+            # Ensure player_metadata_json column exists in case of existing database
+            cur = conn.execute("PRAGMA table_info(state_snapshots);")
+            existing_cols = {r["name"] for r in cur.fetchall()}
+            if "player_metadata_json" not in existing_cols:
+                conn.execute("ALTER TABLE state_snapshots ADD COLUMN player_metadata_json TEXT;")
 
     # ---------------------------------------------------------------------------
     # Snapshots
     # ---------------------------------------------------------------------------
 
     def save_snapshot(self, snapshot: StateSnapshot) -> None:
+        meta_json = (
+            json.dumps({str(k): v for k, v in snapshot.player_metadata.items()})
+            if snapshot.player_metadata
+            else None
+        )
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO state_snapshots (
                     snapshot_id, team_id, season, round_number, turn_number,
-                    squad_ids, prices_tenths, bank_tenths, dataset_version, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    squad_ids, prices_tenths, bank_tenths, dataset_version, created_at,
+                    player_metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     snapshot.snapshot_id,
@@ -136,6 +148,7 @@ class DecisionStore:
                     snapshot.bank_tenths,
                     snapshot.dataset_version,
                     snapshot.created_at,
+                    meta_json,
                 ),
             )
 
@@ -147,6 +160,12 @@ class DecisionStore:
             ).fetchone()
             if row is None:
                 return None
+            meta_dict = {}
+            if "player_metadata_json" in row.keys() and row["player_metadata_json"]:
+                meta_dict = {
+                    int(k): dict(v)
+                    for k, v in json.loads(row["player_metadata_json"]).items()
+                }
             return StateSnapshot(
                 snapshot_id=row["snapshot_id"],
                 team_id=row["team_id"],
@@ -156,6 +175,7 @@ class DecisionStore:
                 squad_ids=tuple(json.loads(row["squad_ids"])),
                 prices_tenths={int(k): v for k, v in json.loads(row["prices_tenths"]).items()},
                 bank_tenths=row["bank_tenths"],
+                player_metadata=meta_dict,
                 dataset_version=row["dataset_version"],
                 created_at=row["created_at"],
             )
