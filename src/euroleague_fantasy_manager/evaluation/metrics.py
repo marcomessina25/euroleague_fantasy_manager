@@ -40,6 +40,8 @@ class ModelEvaluationSummary:
     active_bias: float = 0.0
     active_spearman: float = 0.0
     price_provenance_counts: dict[str, int] | None = None
+    brier_score: float = 0.0
+    log_loss: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,7 +234,18 @@ def compute_point_and_ranking_metrics(
         c_bias = sum(c_sig) / n_c
     else:
         n_c = 0
-        c_mae = c_rmse = c_bias = 0.0
+    # Availability metrics (Brier score and binary cross-entropy log-loss)
+    if player_recs:
+        probs = [getattr(r, "play_probability", 1.0) for r in player_recs]
+        played_acts = [1.0 if r.actual_status not in ("DNP", "out") else 0.0 for r in player_recs]
+        brier = sum((p - y) ** 2 for p, y in zip(probs, played_acts)) / len(player_recs)
+        eps = 1e-4
+        log_loss_val = sum(
+            -(y * math.log(max(eps, min(1.0 - eps, p))) + (1.0 - y) * math.log(max(eps, min(1.0 - eps, 1.0 - p))))
+            for p, y in zip(probs, played_acts)
+        ) / len(player_recs)
+    else:
+        brier = log_loss_val = 0.0
 
     n_rounds = max(1, len(by_round) or rounds_evaluated)
     return ModelEvaluationSummary(
@@ -263,6 +276,8 @@ def compute_point_and_ranking_metrics(
         active_bias=round(act_bias, 3),
         active_spearman=round(sum(act_sp_list) / len(act_sp_list), 4) if act_sp_list else 0.0,
         price_provenance_counts=prov_counts,
+        brier_score=round(brier, 4),
+        log_loss=round(log_loss_val, 4),
     )
 
 
@@ -431,4 +446,113 @@ def evaluate_round_lineup_decisions(
         avg_sixth_man_regret=round(sum(sixth_regrets) / n, 2),
         avg_bench_regret=round(sum(bench_regrets) / n, 2),
         avg_formation_regret=round(sum(form_regrets) / n, 2),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class PairedModelComparison:
+    """Head-to-head paired model comparison across matched player-round observations (Phase A)."""
+
+    model_a: str
+    model_b: str
+    sample_count: int
+    delta_mae: float  # MAE(A) - MAE(B) (<0 means A is better)
+    delta_mae_ci95: float
+    delta_rmse: float  # RMSE(A) - RMSE(B) (<0 means A is better)
+    delta_spearman: float  # Spearman(A) - Spearman(B) (>0 means A is better)
+    delta_top10_recall: float  # Top10(A) - Top10(B) (>0 means A is better)
+    delta_value_spearman: float  # ValSpearman(A) - ValSpearman(B) (>0 means A is better)
+    delta_lineup_score: float  # Score(A) - Score(B) (>0 means A is better)
+    delta_captain_regret: float  # Regret(A) - Regret(B) (<0 means A is better)
+
+
+def compute_paired_model_comparison(
+    records_a: Sequence[PredictionRecord],
+    records_b: Sequence[PredictionRecord],
+    decision_summary_a: DecisionEvaluationSummary | None = None,
+    decision_summary_b: DecisionEvaluationSummary | None = None,
+) -> PairedModelComparison:
+    """Compute paired differences with confidence intervals between two model prediction sets."""
+    if not records_a or not records_b:
+        raise ValueError("Cannot compute paired comparison with empty records.")
+
+    map_b = {(r.season, r.round, r.player_id): r for r in records_b if r.position != "HC"}
+    pairs: list[tuple[PredictionRecord, PredictionRecord]] = []
+    for ra in records_a:
+        if ra.position == "HC":
+            continue
+        key = (ra.season, ra.round, ra.player_id)
+        if key in map_b:
+            pairs.append((ra, map_b[key]))
+
+    if not pairs:
+        raise ValueError("No common player-round observations found between models.")
+
+    diff_ae: list[float] = []
+    for ra, rb in pairs:
+        err_a = abs(ra.prediction - ra.actual_fantasy_points)
+        err_b = abs(rb.prediction - rb.actual_fantasy_points)
+        diff_ae.append(err_a - err_b)
+
+    n = len(diff_ae)
+    mean_diff_ae = sum(diff_ae) / n
+    var_diff_ae = sum((d - mean_diff_ae) ** 2 for d in diff_ae) / max(1, n - 1)
+    se_mae = math.sqrt(var_diff_ae / n)
+    ci95 = 1.96 * se_mae
+
+    rmse_a = math.sqrt(sum((ra.prediction - ra.actual_fantasy_points) ** 2 for ra, _ in pairs) / n)
+    rmse_b = math.sqrt(sum((rb.prediction - rb.actual_fantasy_points) ** 2 for _, rb in pairs) / n)
+    delta_rmse = rmse_a - rmse_b
+
+    # Round-level ranking comparisons
+    by_round_a: dict[tuple[str, int], list[PredictionRecord]] = {}
+    by_round_b: dict[tuple[str, int], list[PredictionRecord]] = {}
+    for ra, rb in pairs:
+        r_key = (ra.season, ra.round)
+        by_round_a.setdefault(r_key, []).append(ra)
+        by_round_b.setdefault(r_key, []).append(rb)
+
+    sp_diffs: list[float] = []
+    t10_diffs: list[float] = []
+    vsp_diffs: list[float] = []
+
+    for r_key in sorted(by_round_a.keys()):
+        list_a = by_round_a[r_key]
+        list_b = by_round_b[r_key]
+        p_a = [x.prediction for x in list_a]
+        p_b = [x.prediction for x in list_b]
+        y_act = [x.actual_fantasy_points for x in list_a]
+        sp_a = spearman_correlation(p_a, y_act)
+        sp_b = spearman_correlation(p_b, y_act)
+        sp_diffs.append(sp_a - sp_b)
+
+        t10_a = top_k_recall(p_a, y_act, k=10)
+        t10_b = top_k_recall(p_b, y_act, k=10)
+        t10_diffs.append(t10_a - t10_b)
+
+        v_a = [x.prediction / max(4.0, x.quotation_at_decision_tenths / 10.0) for x in list_a]
+        v_b = [x.prediction / max(4.0, x.quotation_at_decision_tenths / 10.0) for x in list_b]
+        v_act = [x.actual_fantasy_points / max(4.0, x.quotation_at_decision_tenths / 10.0) for x in list_a]
+        vsp_a = spearman_correlation(v_a, v_act)
+        vsp_b = spearman_correlation(v_b, v_act)
+        vsp_diffs.append(vsp_a - vsp_b)
+
+    d_lineup = 0.0
+    d_cap_reg = 0.0
+    if decision_summary_a is not None and decision_summary_b is not None:
+        d_lineup = decision_summary_a.avg_recommended_actual_score - decision_summary_b.avg_recommended_actual_score
+        d_cap_reg = decision_summary_a.avg_captain_regret - decision_summary_b.avg_captain_regret
+
+    return PairedModelComparison(
+        model_a=records_a[0].model_name,
+        model_b=records_b[0].model_name,
+        sample_count=n,
+        delta_mae=round(mean_diff_ae, 3),
+        delta_mae_ci95=round(ci95, 3),
+        delta_rmse=round(delta_rmse, 3),
+        delta_spearman=round(sum(sp_diffs) / len(sp_diffs), 4) if sp_diffs else 0.0,
+        delta_top10_recall=round(sum(t10_diffs) / len(t10_diffs), 4) if t10_diffs else 0.0,
+        delta_value_spearman=round(sum(vsp_diffs) / len(vsp_diffs), 4) if vsp_diffs else 0.0,
+        delta_lineup_score=round(d_lineup, 2),
+        delta_captain_regret=round(d_cap_reg, 2),
     )

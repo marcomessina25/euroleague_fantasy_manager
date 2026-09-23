@@ -197,6 +197,69 @@ class EvaluationDatasetStore:
                     quotation_at_decision_tenths INTEGER NOT NULL,
                     PRIMARY KEY (dataset_version, model_name, season, round, player_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS prediction_runs (
+                    run_id TEXT PRIMARY KEY,
+                    model_name TEXT NOT NULL,
+                    model_version TEXT NOT NULL,
+                    model_family TEXT NOT NULL,
+                    target_type TEXT NOT NULL,
+                    training_window TEXT NOT NULL,
+                    feature_set_version TEXT NOT NULL,
+                    hyperparameters_json TEXT NOT NULL,
+                    calibration_method TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS player_predictions (
+                    run_id TEXT NOT NULL,
+                    season TEXT NOT NULL,
+                    round INTEGER NOT NULL,
+                    decision_cutoff TEXT NOT NULL,
+                    player_id INTEGER NOT NULL,
+                    position TEXT NOT NULL,
+                    cold_start_source TEXT NOT NULL,
+                    quotation_at_decision_tenths INTEGER NOT NULL,
+                    play_probability REAL NOT NULL,
+                    expected_minutes_if_play REAL NOT NULL,
+                    expected_fp_per_min_if_play REAL NOT NULL,
+                    expected_conditional_fp REAL NOT NULL,
+                    expected_fantasy_points REAL NOT NULL,
+                    lower_bound REAL NOT NULL,
+                    upper_bound REAL NOT NULL,
+                    prediction_spread REAL NOT NULL,
+                    expected_fp_per_credit REAL NOT NULL,
+                    points_above_replacement REAL NOT NULL,
+                    risk_adjusted_value REAL NOT NULL,
+                    actual_fantasy_points REAL,
+                    PRIMARY KEY (run_id, season, round, player_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS model_metrics (
+                    run_id TEXT NOT NULL,
+                    evaluation_mode TEXT NOT NULL,
+                    season_scope TEXT NOT NULL,
+                    round_scope TEXT NOT NULL,
+                    slice_type TEXT NOT NULL,
+                    slice_value TEXT NOT NULL,
+                    sample_count INTEGER NOT NULL,
+                    mae REAL NOT NULL,
+                    rmse REAL NOT NULL,
+                    medae REAL NOT NULL,
+                    bias REAL NOT NULL,
+                    spearman_rho REAL NOT NULL,
+                    top10_recall REAL NOT NULL,
+                    top20_recall REAL NOT NULL,
+                    captain_hit_rate REAL NOT NULL,
+                    captain_regret REAL NOT NULL,
+                    value_spearman_rho REAL NOT NULL,
+                    selected_lineup_score REAL NOT NULL,
+                    oracle_lineup_score REAL NOT NULL,
+                    lineup_efficiency REAL NOT NULL,
+                    brier_score REAL NOT NULL DEFAULT 0.0,
+                    log_loss REAL NOT NULL DEFAULT 0.0,
+                    PRIMARY KEY (run_id, evaluation_mode, season_scope, round_scope, slice_type, slice_value)
+                );
                 """
             )
             cols = {
@@ -418,6 +481,160 @@ class EvaluationDatasetStore:
                 prov = str(r["price_provenance"])
                 result[s_code][prov] = int(r["cnt"])
         return result
+
+    def save_prediction_run(self, run: dict[str, Any]) -> None:
+        """Persist a model execution run record with full parameter and training provenance."""
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO prediction_runs (
+                    run_id, model_name, model_version, model_family, target_type,
+                    training_window, feature_set_version, hyperparameters_json,
+                    calibration_method, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(run["run_id"]),
+                    str(run["model_name"]),
+                    str(run["model_version"]),
+                    str(run["model_family"]),
+                    str(run["target_type"]),
+                    str(run["training_window"]),
+                    str(run["feature_set_version"]),
+                    str(run.get("hyperparameters_json", "{}")),
+                    str(run.get("calibration_method", "none")),
+                    str(run["created_at"]),
+                ),
+            )
+
+    def save_player_predictions(self, predictions: Sequence[dict[str, Any]]) -> None:
+        """Persist point-in-time player predictions carrying full component breakdown and uncertainty."""
+        if not predictions:
+            return
+        with self._connect() as conn:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO player_predictions (
+                    run_id, season, round, decision_cutoff, player_id, position,
+                    cold_start_source, quotation_at_decision_tenths, play_probability,
+                    expected_minutes_if_play, expected_fp_per_min_if_play,
+                    expected_conditional_fp, expected_fantasy_points, lower_bound,
+                    upper_bound, prediction_spread, expected_fp_per_credit,
+                    points_above_replacement, risk_adjusted_value, actual_fantasy_points
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        str(p["run_id"]),
+                        str(p["season"]),
+                        int(p["round"]),
+                        str(p["decision_cutoff"]),
+                        int(p["player_id"]),
+                        str(p["position"]),
+                        str(p["cold_start_source"]),
+                        int(p["quotation_at_decision_tenths"]),
+                        float(p["play_probability"]),
+                        float(p["expected_minutes_if_play"]),
+                        float(p["expected_fp_per_min_if_play"]),
+                        float(p["expected_conditional_fp"]),
+                        float(p["expected_fantasy_points"]),
+                        float(p["lower_bound"]),
+                        float(p["upper_bound"]),
+                        float(p["prediction_spread"]),
+                        float(p["expected_fp_per_credit"]),
+                        float(p["points_above_replacement"]),
+                        float(p["risk_adjusted_value"]),
+                        float(p["actual_fantasy_points"]) if p.get("actual_fantasy_points") is not None else None,
+                    )
+                    for p in predictions
+                ],
+            )
+
+    def save_model_metrics(self, metrics: Sequence[dict[str, Any]]) -> None:
+        """Persist aggregated model evaluation and calibration metrics."""
+        if not metrics:
+            return
+        with self._connect() as conn:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO model_metrics (
+                    run_id, evaluation_mode, season_scope, round_scope, slice_type, slice_value,
+                    sample_count, mae, rmse, medae, bias, spearman_rho, top10_recall,
+                    top20_recall, captain_hit_rate, captain_regret, value_spearman_rho,
+                    selected_lineup_score, oracle_lineup_score, lineup_efficiency,
+                    brier_score, log_loss
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        str(m["run_id"]),
+                        str(m["evaluation_mode"]),
+                        str(m["season_scope"]),
+                        str(m["round_scope"]),
+                        str(m["slice_type"]),
+                        str(m["slice_value"]),
+                        int(m["sample_count"]),
+                        float(m["mae"]),
+                        float(m["rmse"]),
+                        float(m["medae"]),
+                        float(m["bias"]),
+                        float(m["spearman_rho"]),
+                        float(m["top10_recall"]),
+                        float(m["top20_recall"]),
+                        float(m.get("captain_hit_rate", 0.0)),
+                        float(m.get("captain_regret", 0.0)),
+                        float(m.get("value_spearman_rho", 0.0)),
+                        float(m.get("selected_lineup_score", 0.0)),
+                        float(m.get("oracle_lineup_score", 0.0)),
+                        float(m.get("lineup_efficiency", 0.0)),
+                        float(m.get("brier_score", 0.0)),
+                        float(m.get("log_loss", 0.0)),
+                    )
+                    for m in metrics
+                ],
+            )
+
+    def get_prediction_run(self, run_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM prediction_runs WHERE run_id = ?", (str(run_id),)).fetchone()
+            return dict(row) if row else None
+
+    def get_player_predictions(
+        self,
+        run_id: str,
+        season: str | None = None,
+        round_number: int | None = None,
+    ) -> list[dict[str, Any]]:
+        query = "SELECT * FROM player_predictions WHERE run_id = ?"
+        params: list[Any] = [str(run_id)]
+        if season is not None:
+            query += " AND season = ?"
+            params.append(normalize_season_code(season))
+        if round_number is not None:
+            query += " AND round = ?"
+            params.append(int(round_number))
+        query += " ORDER BY season, round, player_id"
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_model_metrics(
+        self,
+        run_id: str | None = None,
+        evaluation_mode: str | None = None,
+    ) -> list[dict[str, Any]]:
+        query = "SELECT * FROM model_metrics WHERE 1=1"
+        params: list[Any] = []
+        if run_id is not None:
+            query += " AND run_id = ?"
+            params.append(str(run_id))
+        if evaluation_mode is not None:
+            query += " AND evaluation_mode = ?"
+            params.append(str(evaluation_mode))
+        query += " ORDER BY run_id, slice_type, slice_value"
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+            return [dict(r) for r in rows]
 
 
 def _det_int(seed_str: str, low: int, high: int) -> int:

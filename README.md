@@ -2,7 +2,7 @@
 
 A deterministic, local-first **EuroLeague Fantasy Challenge (Classic Mode)** decision engine for the 2026/27 season (`E2026`), architected to share its core engine with **EuroCup Fantasy Challenge** (`U2026`).
 
-![Version](https://img.shields.io/badge/Version-0.2.5-purple) ![Python](https://img.shields.io/badge/Python-3.12-blue) ![License](https://img.shields.io/badge/License-MIT-green)
+![Version](https://img.shields.io/badge/Version-0.3.0-purple) ![Python](https://img.shields.io/badge/Python-3.12-blue) ![License](https://img.shields.io/badge/License-MIT-green)
 
 ---
 
@@ -15,11 +15,14 @@ EuroLeague Fantasy & Feeds APIs -> local SQLite snapshots -> rules + validation 
 ## Living roadmap
 
 - [`docs/architecture.md`](docs/architecture.md) defines the purpose, architectural boundaries, and responsibilities of each layer.
-- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1`, `V0.2`, and `V0.2.5` completed; `V0.3` is the next milestone).
+- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1`, `V0.2`, `V0.2.5`, and `V0.3` completed; `V0.4` is the next milestone).
 - [`docs/v02/v02.md`](docs/v02/v02.md) and [`docs/v02/items_left_for_v02.md`](docs/v02/items_left_for_v02.md) define the **V0.2** heuristic decision-support baseline specification and pre-merge checklist.
-- [`docs/v025/v025.md`](docs/v025/v025.md), [`docs/v025/v025_cleanup.md`](docs/v025/v025_cleanup.md), and [`docs/v03/v03.md`](docs/v03/v03.md) define the **V0.2.5** historical evaluation foundation (`0.2.5`) and **V0.3** validated predictive projection layer.
+- [`docs/v025/v025.md`](docs/v025/v025.md) and [`docs/v025/v025_cleanup.md`](docs/v025/v025_cleanup.md) define the **V0.2.5** historical evaluation foundation.
+- [`docs/v03/v03.md`](docs/v03/v03.md) and [`docs/v03/items_left_for_v03.md`](docs/v03/items_left_for_v03.md) define the **V0.3** validated predictive projection layer (`0.3.0`) and merge checklist.
+- [`docs/v04/v04.md`](docs/v04/v04.md) defines the **V0.4** decision and optimization layer.
 
 Both human contributors and AI agents must read the relevant living documents before making material changes and update them whenever architecture, scope, priorities, or delivery status changes.
+
 
 ## Quick start
 
@@ -119,6 +122,25 @@ elf evaluation inspect --season 2025 --round 8
 elf evaluate --season 2025 --rounds 1:12 --models season_mean,last5,ewma,xpdk_v02
 ```
 
+## V0.3 Validated Predictive Projections (`elf predict`, `elf evaluate`)
+
+Generate strictly point-in-time, component-decomposed player projections:
+$$\mathbb{E}[\mathrm{FP}] = P(\mathrm{play}) \times \mathbb{E}[\mathrm{minutes} \mid \mathrm{play}] \times \mathbb{E}[\mathrm{FP/min} \mid \mathrm{play}]$$
+with out-of-sample calibration (zero test leakage), prediction uncertainty intervals ($[\mathrm{lower}, \mathrm{upper}]$), and player valuation metrics ($\mathrm{FP/Cr}$, $\mathrm{PAR}$, $\mathrm{Risk\text{-}Adjusted\ Value}$):
+
+```powershell
+elf predict --season 2025 --round 5 --model fp_decomposed_v03 --top 10
+elf predict --season 2025 --round 5 --model fp_decomposed_v03 --position G --json
+```
+
+Run walk-forward evaluation across multiple seasons with out-of-sample calibration and paired model comparisons ($\Delta\text{MAE} \pm 95\%\text{ CI}$, $\Delta\text{RMSE}$, $\Delta\text{Spearman}$, $\Delta\text{Lineup Score}$, $\Delta\text{Captain Regret}$):
+
+```powershell
+elf evaluate --season 2025 --rounds 1:12 --models season_mean,xpdk_v02,fp_decomposed_v03,fp_decomposed_calibrated_v03
+elf evaluate --season 2025 --rounds 1:12 --compare-models fp_decomposed_calibrated_v03,xpdk_v02
+```
+
 ## License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details. You are free to use, modify, and reproduce this software with attribution to Marco Messina.
+

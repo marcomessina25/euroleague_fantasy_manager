@@ -2,9 +2,10 @@
 
 > **Living document.** This is the source of truth for delivery status, engineering priorities, release criteria, known risks, and long-term direction. Human contributors and AI agents must read it before material work and update it when priorities or milestone status changes.
 >
-> **Current planning baseline:** V0.1, V0.2, and V0.2.5 (`0.2.5`) are completed (2026-09-22). **V0.3** is the single next milestone.
+> **Current planning baseline:** V0.1, V0.2, V0.2.5, and V0.3 (`0.3.0`) are completed (2026-09-23). **V0.4** (Lineup & Transfer Optimizer on Validated Projections) is the single next milestone.
 >
-> See [`docs/architecture.md`](architecture.md), [`docs/v02/v02.md`](v02/v02.md), [`docs/v02/items_left_for_v02.md`](v02/items_left_for_v02.md), [`docs/v025/v025.md`](v025/v025.md), [`docs/v025/v025_cleanup.md`](v025/v025_cleanup.md), and [`docs/v03/v03.md`](v03/v03.md) for architectural and implementation details.
+> See [`docs/architecture.md`](architecture.md), [`docs/v02/v02.md`](v02/v02.md), [`docs/v02/items_left_for_v02.md`](v02/items_left_for_v02.md), [`docs/v025/v025.md`](v025/v025.md), [`docs/v025/v025_cleanup.md`](v025/v025_cleanup.md), [`docs/v03/v03.md`](v03/v03.md), [`docs/v03/items_left_for_v03.md`](v03/items_left_for_v03.md), and [`docs/v04/v04.md`](v04/v04.md) for architectural and implementation details.
+
 
 ---
 
@@ -154,9 +155,9 @@ See [`docs/v025/v025.md`](v025/v025.md) and [`docs/v025/v025_cleanup.md`](v025/v
 
 ---
 
-## V0.3 — Validated Predictive Projection Layer (Next Milestone)
+## V0.3 — Validated Predictive Projection Layer
 
-**Status: planned (next milestone).**
+**Status: completed on 2026-09-23 (`0.3.0`).**
 
 ### Objective
 
@@ -184,97 +185,86 @@ player valuation             [Phase I: Expected FP / price & value above replace
 V0.4 optimizer               [Downstream decision layer]
 ```
 
-### Synthesized V0.3 delivery phases (`docs/v03/v03.md`)
+### Delivered V0.3 components
 
-1. **Phase A — Multi-Season Evaluation Laboratory & Paired Comparisons**:
-   - Within-season walk-forward (`R1..R_n`), cross-season (`E2022+E2023+E2024 -> E2025`), and rolling cross-season modes.
-   - Paired model deltas ($\Delta\text{MAE}$, $\Delta\text{RMSE}$, $\Delta\text{Spearman}$, $\Delta\text{Top-K}$, $\Delta\text{Value Spearman}$, $\Delta\text{Lineup Score}$, $\Delta\text{Captain Regret}$) with bootstrap confidence intervals and explicit sample-size reporting (`players`, `active_players`, `rounds`, `games`, `price_observations`).
-2. **Phase B — Point-in-Time Availability Model (`P(play)`)**:
-   - Predict `P(play | cutoff)` from rolling appearance/DNP rates, minutes volatility, starter rate, rest, and double-round congestion; evaluate via Brier score, log loss, and probability calibration.
-3. **Phase C — Conditional Minutes Model (`E[minutes | play]`)**:
-   - Predict conditional playing time from EWMA minutes, minutes std, starter rate, rotation depth, rest, and home/away context.
-4. **Phase D — Conditional Production-Per-Minute Model (`E[FP/min | play]`)**:
-   - Shrinkage and regularized rate models combining player `FP/min` / `PIR/min` rates, positional/role priors, and opponent defensive strength while keeping `HC` prediction as a separate target family.
-5. **Phases E & F — Fantasy-Point Composition & Out-of-Sample Calibration**:
-   - Combine `E[FP] = P(play) × E[minutes | play] × E[FP/min | play]` using the deterministic fantasy scoring layer as the single source of truth.
-   - Fit intercept, linear, and multi-model (`xpdk_v02 + ewma + season_mean`) calibration strictly on rounds `< r` to eliminate the `-1.97` xPDK level bias without test-set leakage.
-6. **Phases G, H & I — Uncertainty, Oracle Regret & Player Valuation**:
-   - Empirical out-of-sample residual intervals (`lower_bound`, `upper_bound`, `prediction_spread`), hindsight oracle lineup regret (`oracle_score - model_selected_score`), and risk-adjusted player valuation (`expected_FP / price`, replacement value).
-7. **Phases J, K & L — Cold-Start Hierarchy, Feature Diagnostics & Model Registry**:
-   - Granular `fallback_source` (`current_season -> previous_season -> career -> position_prior -> team_role_prior -> league_prior`), ablation diagnostics, and `prediction/` + `valuation/` package architecture (`prediction_runs`, `player_predictions`, `model_metrics`).
-
-### Recommended incremental experiment order
-
-1. Re-run V0.2.5 baselines across multiple seasons (`E2022`–`E2025`).
-2. Calibrate `xpdk_v02` out-of-sample.
-3. Build availability model (`P(play)`).
-4. Build conditional minutes model (`E[minutes | play]`).
-5. Build conditional production-per-minute model (`E[FP/min | play]`).
-6. Combine `P(play) × E[minutes | play] × E[FP/min | play]` and calibrate.
-7. Add empirical uncertainty bounds and oracle lineup regret evaluation.
-8. Test regularized ML / ensembles only where paired out-of-sample evidence justifies complexity over interpretable components.
+1. **Explicit Component Decomposition (`src/euroleague_fantasy_manager/prediction/`)**:
+   - Availability: `availability_logistic_v03`, status lookup, historical and rolling rates, Brier score, and binary log-loss evaluation.
+   - Minutes: `minutes_ewma_v03` with empirical Bayes shrinkage to starter/bench role priors and rest/congestion adjustments.
+   - Production: `production_ridge_v03` component rate proxy conditioned on playing time, plus dedicated Head Coach model (`predict_expected_coach_conditional_fp`).
+   - Fantasy points composition: $\mathbb{E}[\text{FP}] = P(\text{play}) \times \mathbb{E}[\text{minutes} \mid \text{play}] \times \mathbb{E}[\text{FP/min} \mid \text{play}]$.
+2. **Out-of-Sample Calibration (Zero Test Leakage)**:
+   - `fit_out_of_sample_calibrator`: Fits linear/intercept adjustments strictly on accumulated historical rounds $r' < r$ with empirical Bayes prior shrinkage $(n < 20 \to \text{intercept}=0.0, \text{slope}=1.0)$, completely eliminating the V0.2 xPDK level bias without test leakage.
+3. **Uncertainty & Risk Bounds**:
+   - Out-of-sample residual error analysis providing `lower_bound`, `upper_bound`, `prediction_spread`, and $\sigma$ segmented by position and availability state.
+4. **Player Valuation (`src/euroleague_fantasy_manager/valuation/`)**:
+   - Exposes `expected_fp_per_credit`, positional `points_above_replacement` (PAR), and `risk_adjusted_value` ($\mathbb{E}[\text{FP}] - \lambda \cdot \text{spread}$).
+5. **Evaluation Laboratory Hardening & Paired Comparisons**:
+   - Multi-season walk-forward backtest (`E2022`–`E2025`), automated paired model comparisons ($\Delta\text{MAE} \pm 95\%\text{ CI}$, $\Delta\text{RMSE}$, $\Delta\text{Spearman}$, $\Delta\text{Lineup Score}$, $\Delta\text{Captain Regret}$), and CSV report generation (`paired_comparisons.csv`).
+6. **Persistence & Provenance**:
+   - SQLite tables `prediction_runs`, `player_predictions`, and `model_metrics` for complete auditability.
+   - Model registry tracking model IDs, versions, target families, and hyperparameters.
+7. **CLI Integration**:
+   - `elf predict --season ... --round ... --model ... [--position ...] [--top ...] [--json]`
+   - `elf evaluate --seasons ... --compare-models ... --calibration ...`
 
 ### Important boundary
 
 > **V0.2.5 tells us whether our predictions are good. V0.3 builds better predictions. V0.4 decides what to do with them.**
 
-See [`docs/v03/v03.md`](v03/v03.md) for the complete V0.3 specification.
+See [`docs/v03/v03.md`](v03/v03.md) for the complete V0.3 specification and verified benchmark results.
+
 
 ---
 
-## V0.35 / V0.4 — Optimization on validated projections
+## V0.4 — Fantasy Decision & Optimization Layer (Next Milestone)
 
-**Status: planned.**
+**Status: planned (next milestone).**  
+**Prerequisite:** V0.3 validated predictive projection layer.  
+**Core boundary:** **V0.3 predicts. V0.4 decides.**
 
 ### Objective
 
-Use the validated projection layer to improve fantasy decisions.
+Turn V0.3 projections into optimal fantasy decisions under the actual EuroLeague Fantasy rules and constraints.
 
-### Scope
-
-- Exact/more efficient trade optimization.
-- Multi-player trade bundles.
-- Unlimited Trade Window solver.
-- Multi-round rolling planner.
-- Future fixture horizon.
-- Capital-gain-aware planning.
-- Risk-aware objectives.
-- Portfolio-style roster evaluation.
-
-### Important design rule
-
-Do not introduce Branch-and-Bound simply because the roadmap says so.
-
-First measure the actual search space.
-
-The current single-round 10-player lineup problem is small enough for exhaustive enumeration. More advanced solvers should be introduced where multi-round or multi-trade combinatorics justify them.
-
----
-
-## V0.4 — Exact Intra-Turn Decision Engine
-
-**Status: planned.**
-
-### Scope
-
-- Exact Turn 1 -> Turn 2 substitution optimizer.
-- Legal formation transitions.
-- Captain switches.
-- Sixth-Man transitions.
-- Bench ordering.
-- Realized T1 score handling.
-- T2/T3 unplayed player handling.
-- Decision logging.
-- Post-round outcome logging.
-- Turn-sub regret.
-
-### Target interface
-
-```bash
-elf turn-subs
+```text
+V0.3 projections
+  ├─ expected FP
+  ├─ uncertainty
+  ├─ P(play)
+  ├─ expected minutes
+  └─ value
+        ↓
+Decision engine (V0.4)
+  ├─ legal lineup
+  ├─ formation
+  ├─ captain
+  ├─ sixth man
+  ├─ bench
+  ├─ transfers
+  └─ future-round planning
+        ↓
+Historical decision backtest
+        ↓
+Oracle regret
 ```
 
-The engine should enumerate legal decisions rather than relying on a greedy pairwise heuristic.
+### Scope
+
+1. **Prediction Contract & Separation**:
+   - The optimizer consumes a clean projection contract (`PlayerProjection`: `player_id`, `expected_fp`, `probability_play`, `expected_minutes`, `fp_per_minute`, `uncertainty`, `price`, `position`, `team_id`) without coupling to internal modeling details.
+2. **Deterministic Constraint Layer**:
+   - Exact enforcement of squad (11 units: 4G, 4F, 2C, 1HC), budget, club limits (max 3 players from same club), legal court formations (`2-2-1`, `1-2-2`, `2-1-2`, `1-3-1`, `3-1-1`), and transfer limits (`1..4` trades or unlimited windows).
+3. **Joint Lineup Optimizer**:
+   - Starting 5 (`1.0x`), Captain (`2.0x`), Sixth Man (`1.0x`), and 4 Bench units (`0.5x`) optimized under official scoring rules rather than raw expectation sums.
+4. **Intra-Round Decisions & Substitutions**:
+   - Exact Turn 1 $\to$ Turn 2 substitution optimizer (`elf turn-subs`), formation transitions, captain switches, and unplayed T2/T3 player handling.
+5. **Transfer Optimization**:
+   - Optimal legal `1..4` trade alternatives with capital-gain-aware selling prices (`0%` sell-on tax).
+6. **Historical Decision Backtesting & Oracle Regret**:
+   - Multi-round decision logging, realization tracking, and hindsight oracle regret evaluation.
+
+See [`docs/v04/v04.md`](v04/v04.md) for the complete V0.4 specification.
+
 
 ---
 
@@ -462,16 +452,14 @@ Never allow level 4 to override levels 1–3 silently.
         ↓
 2. V0.2.5 historical evaluation foundation (`0.2.5`) [Completed]
         ↓
-3. V0.3 validated predictive projection layer [Next Milestone]
-   (P(play) × E(minutes|play) × E(FP/min|play) + calibration + uncertainty)
+3. V0.3 validated predictive projection layer (`0.3.0`) [Completed]
+   (P(play) × E(minutes|play) × E(FP/min|play) + calibration + uncertainty + valuation)
         ↓
-4. V0.35 / V0.4 optimize using validated projections
+4. V0.4 Lineup & Transfer Optimizer on Validated Projections [Next Milestone]
         ↓
-5. V0.4 exact live Turn 1 -> Turn 2 decisions
+5. V0.45 exact live Turn 1 -> Turn 2 decisions & closed-loop backtesting
         ↓
-6. V0.45 closed-loop decision/outcome backtesting
-        ↓
-7. V0.5+ GUI / LLM strategic layer
+6. V0.5+ GUI / LLM strategic layer
 ```
 
 This ordering is intentional.
@@ -479,3 +467,4 @@ This ordering is intentional.
 The objective is not maximum feature count.
 
 The objective is a system whose recommendations can eventually be **measured, reproduced, explained, and improved**.
+
