@@ -1,0 +1,436 @@
+"""Pure deterministic fixed-squad lineup optimizer for V0.4 (Phases B, C, D)."""
+
+from collections import Counter
+from dataclasses import dataclass
+from itertools import combinations
+from typing import Iterable, Mapping, Sequence
+
+from ..models import Player, Position
+from ..rules import (
+    COURT_STARTERS_SIZE,
+    LEGAL_COURT_FORMATIONS,
+    SQUAD_SIZE,
+)
+from .constraints import (
+    OptimizationConstraints,
+    PlayerProjectionContract,
+    validate_lineup_constraints,
+    validate_squad_constraints,
+)
+from .objective import (
+    LineupScoreBreakdown,
+    RiskMode,
+    evaluate_lineup_objective,
+)
+from .option_value import compute_turn_substitution_option_bonus
+
+
+@dataclass(frozen=True, slots=True)
+class OptimalLineupDecision:
+    """Complete audited decision output for a fixed-squad lineup optimization."""
+
+    round_number: int | None
+    formation: str
+    starter_ids: tuple[int, ...]
+    captain_id: int
+    vice_captain_id: int
+    sixth_man_id: int
+    bench_ids: tuple[int, ...]
+    head_coach_id: int
+    breakdown: LineupScoreBreakdown
+    is_valid: bool
+    validation_errors: tuple[str, ...]
+    alternatives: tuple["OptimalLineupDecision", ...] = ()
+
+    @property
+    def expected_score(self) -> float:
+        return self.breakdown.raw_expected_total
+
+    @property
+    def objective_value(self) -> float:
+        return self.breakdown.objective_value
+
+
+class FixedSquadLineupOptimizer:
+    """Deterministic joint optimizer for formation, Starting 5, Captain, Sixth Man, and Bench."""
+
+    def __init__(
+        self,
+        constraints: OptimizationConstraints | None = None,
+        risk_mode: RiskMode = RiskMode.EXPECTED,
+        risk_lambda: float = 0.15,
+        include_option_value: bool = True,
+    ) -> None:
+        self.constraints = constraints or OptimizationConstraints()
+        self.risk_mode = risk_mode
+        self.risk_lambda = risk_lambda
+        self.include_option_value = include_option_value
+
+    def optimize(
+        self,
+        squad: Sequence[PlayerProjectionContract | Player],
+        projections: Mapping[int, PlayerProjectionContract] | None = None,
+        round_number: int | None = None,
+        top_alternatives: int = 3,
+    ) -> OptimalLineupDecision:
+        """Find the globally optimal legal lineup assignment for an 11-unit squad."""
+        # 1. Normalize squad to projection contracts
+        proj_map: dict[int, PlayerProjectionContract] = {}
+        contracts: list[PlayerProjectionContract] = []
+
+        for p in squad:
+            pid = p.player_id if isinstance(p, PlayerProjectionContract) else p.id
+            if projections is not None and pid in projections:
+                contract = projections[pid]
+            elif isinstance(p, PlayerProjectionContract):
+                contract = p
+            else:
+                contract = PlayerProjectionContract.from_player(p)
+            proj_map[pid] = contract
+            contracts.append(contract)
+
+        # 2. Squad constraint pre-check (budget does not apply to fixed-squad lineup optimization)
+        squad_val = validate_squad_constraints(contracts, constraints=self.constraints, check_budget=False)
+        if not squad_val.is_valid:
+            # Construct a graceful fallback invalid decision
+            first_hc = next((p for p in contracts if p.position == Position.HEAD_COACH), contracts[0])
+            court = [p for p in contracts if p.player_id != first_hc.player_id][:5]
+            starter_ids = tuple(p.player_id for p in court)
+            cap_id = starter_ids[0] if starter_ids else first_hc.player_id
+            sixth_id = contracts[5].player_id if len(contracts) > 5 else cap_id
+            bench_ids = tuple(p.player_id for p in contracts[6:10])
+            breakdown = evaluate_lineup_objective(
+                starter_ids=starter_ids,
+                captain_id=cap_id,
+                sixth_man_id=sixth_id,
+                bench_ids=bench_ids,
+                head_coach_id=first_hc.player_id,
+                projections=proj_map,
+                formation_str="invalid",
+                risk_mode=self.risk_mode,
+                risk_lambda=self.risk_lambda,
+            )
+            return OptimalLineupDecision(
+                round_number=round_number,
+                formation="invalid",
+                starter_ids=starter_ids,
+                captain_id=cap_id,
+                vice_captain_id=cap_id,
+                sixth_man_id=sixth_id,
+                bench_ids=bench_ids,
+                head_coach_id=first_hc.player_id,
+                breakdown=breakdown,
+                is_valid=False,
+                validation_errors=squad_val.errors,
+            )
+
+        # 3. Segregate by position
+        guards = [p for p in contracts if p.position == Position.GUARD]
+        forwards = [p for p in contracts if p.position == Position.FORWARD]
+        centers = [p for p in contracts if p.position == Position.CENTER]
+        coaches = [p for p in contracts if p.position == Position.HEAD_COACH]
+        head_coach = coaches[0]
+
+        all_candidates: list[OptimalLineupDecision] = []
+
+        # 4. Enumerate all legal formations: (g, f, c) in LEGAL_COURT_FORMATIONS
+        for g_req, f_req, c_req in sorted(self.constraints.legal_formations):
+            if len(guards) < g_req or len(forwards) < f_req or len(centers) < c_req:
+                continue
+
+            formation_str = f"{g_req}-{f_req}-{c_req}"
+
+            for g_starters in combinations(guards, g_req):
+                for f_starters in combinations(forwards, f_req):
+                    for c_starters in combinations(centers, c_req):
+                        starters = tuple(g_starters + f_starters + c_starters)
+                        starter_ids = tuple(p.player_id for p in starters)
+                        starter_set = set(starter_ids)
+
+                        # Remaining 5 court units on the bench
+                        bench_court = tuple(p for p in contracts if p.player_id not in starter_set and p.position != Position.HEAD_COACH)
+
+                        # Best captain & vice-captain among the 5 starters
+                        # Deterministic sort starters by expected FP desc, price desc, id asc
+                        starters_sorted = sorted(
+                            starters,
+                            key=lambda p: (
+                                p.expected_fp,
+                                p.price_tenths,
+                                -p.player_id,
+                            ),
+                            reverse=True,
+                        )
+
+                        # When option value is not needed, top expected scorer is mathematically the optimal captain
+                        candidate_caps = starters_sorted if self.include_option_value else starters_sorted[:1]
+
+                        for cap in candidate_caps:
+                            cap_id = cap.player_id
+                            # Vice-captain is best remaining starter playing in a later turn if possible, else next best
+                            other_starters = [s for s in starters_sorted if s.player_id != cap_id]
+                            later_turn_starters = [s for s in other_starters if s.turn_number > cap.turn_number]
+                            vc = later_turn_starters[0] if later_turn_starters else other_starters[0]
+                            vc_id = vc.player_id
+
+                            # Best sixth man among the 5 court bench players
+                            # Sixth man gets 1.0x instead of 0.5x (+0.5x gain)
+                            # Top expected scorer on bench is always the optimal sixth man
+                            bench_sorted = sorted(
+                                bench_court,
+                                key=lambda p: (
+                                    p.expected_fp,
+                                    p.price_tenths,
+                                    -p.player_id,
+                                ),
+                                reverse=True,
+                            )
+                            candidate_sixths = bench_sorted[:1]
+
+                            for sixth in candidate_sixths:
+                                sixth_id = sixth.player_id
+                                remaining_bench_ids = tuple(
+                                    p.player_id for p in bench_court if p.player_id != sixth_id
+                                )
+
+                                # Turn substitution option value
+                                opt_bonus = 0.0
+                                if self.include_option_value:
+                                    cap_opt, slot_opt = compute_turn_substitution_option_bonus(
+                                        starter_ids=starter_ids,
+                                        captain_id=cap_id,
+                                        sixth_man_id=sixth_id,
+                                        bench_ids=remaining_bench_ids,
+                                        projections=proj_map,
+                                        vice_captain_id=vc_id,
+                                    )
+                                    opt_bonus = cap_opt + slot_opt
+
+                                breakdown = evaluate_lineup_objective(
+                                    starter_ids=starter_ids,
+                                    captain_id=cap_id,
+                                    sixth_man_id=sixth_id,
+                                    bench_ids=remaining_bench_ids,
+                                    head_coach_id=head_coach.player_id,
+                                    projections=proj_map,
+                                    formation_str=formation_str,
+                                    risk_mode=self.risk_mode,
+                                    risk_lambda=self.risk_lambda,
+                                    option_value_bonus=opt_bonus,
+                                )
+
+                                decision = OptimalLineupDecision(
+                                    round_number=round_number,
+                                    formation=formation_str,
+                                    starter_ids=starter_ids,
+                                    captain_id=cap_id,
+                                    vice_captain_id=vc_id,
+                                    sixth_man_id=sixth_id,
+                                    bench_ids=remaining_bench_ids,
+                                    head_coach_id=head_coach.player_id,
+                                    breakdown=breakdown,
+                                    is_valid=True,
+                                    validation_errors=(),
+                                )
+                                all_candidates.append(decision)
+
+        if not all_candidates:
+            raise RuntimeError("No legal court lineups could be formed from squad.")
+
+        # Deterministic sorting:
+        # 1. objective_value desc
+        # 2. raw_expected_total desc
+        # 3. starter_score desc (prefer high expectation in starting five)
+        # 4. captain bonus desc
+        # 5. formation string asc
+        # 6. captain ID asc
+        # 7. sixth man ID asc
+        all_candidates.sort(
+            key=lambda d: (
+                d.objective_value,
+                d.breakdown.raw_expected_total,
+                d.breakdown.starter_score,
+                d.breakdown.captain_bonus,
+                -len(d.formation),
+                d.formation,
+                d.captain_id,
+                d.sixth_man_id,
+            ),
+            reverse=True,
+        )
+
+        best = all_candidates[0]
+
+        # Gather distinct alternative formations / lineups
+        alternatives: list[OptimalLineupDecision] = []
+        seen_starters: set[frozenset[int]] = {frozenset(best.starter_ids)}
+        for cand in all_candidates[1:]:
+            s_set = frozenset(cand.starter_ids)
+            if s_set not in seen_starters:
+                seen_starters.add(s_set)
+                alternatives.append(cand)
+                if len(alternatives) >= top_alternatives:
+                    break
+
+        return OptimalLineupDecision(
+            round_number=best.round_number,
+            formation=best.formation,
+            starter_ids=best.starter_ids,
+            captain_id=best.captain_id,
+            vice_captain_id=best.vice_captain_id,
+            sixth_man_id=best.sixth_man_id,
+            bench_ids=best.bench_ids,
+            head_coach_id=best.head_coach_id,
+            breakdown=best.breakdown,
+            is_valid=True,
+            validation_errors=(),
+            alternatives=tuple(alternatives),
+        )
+
+
+def brute_force_exhaustive_lineup(
+    squad: Sequence[PlayerProjectionContract | Player],
+    projections: Mapping[int, PlayerProjectionContract] | None = None,
+    risk_mode: RiskMode = RiskMode.EXPECTED,
+    risk_lambda: float = 0.15,
+    include_option_value: bool = False,
+) -> OptimalLineupDecision:
+    """Independent unpruned exhaustive reference implementation (correctness oracle).
+
+    Exhaustively checks every legal formation, every starting five combination,
+    every one of the 5 starters as captain, and every one of the 5 bench players
+    as sixth man (4,600+ states).
+
+    Used as a golden reference to verify that the pruned FixedSquadLineupOptimizer
+    never misses an optimal decision.
+    """
+    contracts: list[PlayerProjectionContract] = []
+    proj_map = dict(projections) if projections is not None else {}
+    for item in squad:
+        if isinstance(item, PlayerProjectionContract):
+            contracts.append(item)
+            proj_map[item.player_id] = item
+        elif isinstance(item, Player):
+            c = proj_map.get(item.id, PlayerProjectionContract.from_player(item))
+            contracts.append(c)
+            proj_map[item.id] = c
+
+    # Validation
+    val_res = validate_squad_constraints(contracts, check_budget=False)
+    if not val_res.is_valid:
+        return OptimalLineupDecision(
+            round_number=None,
+            formation="",
+            starter_ids=(),
+            captain_id=0,
+            vice_captain_id=0,
+            sixth_man_id=0,
+            bench_ids=(),
+            head_coach_id=0,
+            breakdown=LineupScoreBreakdown(
+                formation="",
+                starter_score=0.0,
+                captain_bonus=0.0,
+                sixth_man_score=0.0,
+                bench_score=0.0,
+                head_coach_score=0.0,
+                raw_expected_total=0.0,
+                risk_adjustment=0.0,
+                option_value_bonus=0.0,
+                objective_value=0.0,
+            ),
+            is_valid=False,
+            validation_errors=val_res.errors,
+            alternatives=(),
+        )
+
+    coaches = [p for p in contracts if p.position == Position.HEAD_COACH]
+    head_coach = coaches[0]
+    guards = [p for p in contracts if p.position == Position.GUARD]
+    forwards = [p for p in contracts if p.position == Position.FORWARD]
+    centers = [p for p in contracts if p.position == Position.CENTER]
+
+    best_candidate: OptimalLineupDecision | None = None
+    best_key: tuple[float, float, int, int, int, tuple[int, ...]] | None = None
+
+    for num_g, num_f, num_c in sorted(LEGAL_COURT_FORMATIONS):
+        formation_str = f"({num_g},{num_f},{num_c})"
+        for g_combo in combinations(guards, num_g):
+            for f_combo in combinations(forwards, num_f):
+                for c_combo in combinations(centers, num_c):
+                    starters = g_combo + f_combo + c_combo
+                    starter_ids = tuple(sorted(p.player_id for p in starters))
+                    starter_set = set(starter_ids)
+                    bench_court = tuple(
+                        p for p in contracts
+                        if p.player_id not in starter_set and p.position != Position.HEAD_COACH
+                    )
+
+                    # Exhaustively test all 5 starters as captain
+                    for cap in starters:
+                        cap_id = cap.player_id
+                        # Exhaustively test all 5 bench players as sixth man
+                        for sixth in bench_court:
+                            sixth_id = sixth.player_id
+                            remaining_bench_ids = tuple(
+                                p.player_id for p in bench_court if p.player_id != sixth_id
+                            )
+
+                            opt_bonus = 0.0
+                            if include_option_value:
+                                cap_opt, slot_opt = compute_turn_substitution_option_bonus(
+                                    starter_ids=starter_ids,
+                                    captain_id=cap_id,
+                                    sixth_man_id=sixth_id,
+                                    bench_ids=remaining_bench_ids,
+                                    projections=proj_map,
+                                )
+                                opt_bonus = cap_opt + slot_opt
+
+                            breakdown = evaluate_lineup_objective(
+                                starter_ids=starter_ids,
+                                captain_id=cap_id,
+                                sixth_man_id=sixth_id,
+                                bench_ids=remaining_bench_ids,
+                                head_coach_id=head_coach.player_id,
+                                projections=proj_map,
+                                formation_str=formation_str,
+                                risk_mode=risk_mode,
+                                risk_lambda=risk_lambda,
+                                option_value_bonus=opt_bonus,
+                            )
+
+                            # Deterministic tie-breaking key:
+                            # 1. Highest objective value
+                            # 2. Highest starter score
+                            # 3. Highest total starter price
+                            # 4. Deterministic player ID tie-breakers
+                            starters_price = sum(p.price_tenths for p in starters)
+                            sort_key = (
+                                breakdown.objective_value,
+                                breakdown.starter_score,
+                                starters_price,
+                                -cap_id,
+                                -sixth_id,
+                                starter_ids,
+                            )
+
+                            if best_key is None or sort_key > best_key:
+                                best_key = sort_key
+                                best_candidate = OptimalLineupDecision(
+                                    round_number=None,
+                                    formation=formation_str,
+                                    starter_ids=starter_ids,
+                                    captain_id=cap_id,
+                                    vice_captain_id=0,
+                                    sixth_man_id=sixth_id,
+                                    bench_ids=remaining_bench_ids,
+                                    head_coach_id=head_coach.player_id,
+                                    breakdown=breakdown,
+                                    is_valid=True,
+                                    validation_errors=(),
+                                    alternatives=(),
+                                )
+
+    assert best_candidate is not None
+    return best_candidate

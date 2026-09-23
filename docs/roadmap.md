@@ -2,9 +2,9 @@
 
 > **Living document.** This is the source of truth for delivery status, engineering priorities, release criteria, known risks, and long-term direction. Human contributors and AI agents must read it before material work and update it when priorities or milestone status changes.
 >
-> **Current planning baseline:** V0.1, V0.2, V0.2.5, and V0.3 (`0.3.0`) are completed (2026-09-23). **V0.4** (Lineup & Transfer Optimizer on Validated Projections) is the single next milestone.
+> **Current planning baseline:** V0.1, V0.2, V0.2.5, V0.3, and V0.4 (`0.4.0`) are completed (2026-09-23). **V0.45** (Closed-Loop Evaluation & Live Decision State) is the next milestone.
 >
-> See [`docs/architecture.md`](architecture.md), [`docs/v02/v02.md`](v02/v02.md), [`docs/v02/items_left_for_v02.md`](v02/items_left_for_v02.md), [`docs/v025/v025.md`](v025/v025.md), [`docs/v025/v025_cleanup.md`](v025/v025_cleanup.md), [`docs/v03/v03.md`](v03/v03.md), [`docs/v03/items_left_for_v03.md`](v03/items_left_for_v03.md), and [`docs/v04/v04.md`](v04/v04.md) for architectural and implementation details.
+> See [`docs/architecture.md`](architecture.md), [`docs/specs/v02.md`](specs/v02.md), [`docs/specs/items_left_for_v02.md`](specs/items_left_for_v02.md), [`docs/specs/v025.md`](specs/v025.md), [`docs/specs/v025_cleanup.md`](specs/v025_cleanup.md), [`docs/specs/v03.md`](specs/v03.md), [`docs/specs/items_left_for_v03.md`](specs/items_left_for_v03.md), [`docs/specs/v04.md`](specs/v04.md), [`docs/specs/v04_items_left.md`](specs/v04_items_left.md), [`docs/specs/items_left_for_v04.md`](specs/items_left_for_v04.md), and [`docs/specs/v045.md`](specs/v045.md) for architectural and implementation details.
 
 
 ---
@@ -116,7 +116,7 @@ The purpose of V0.2 is to establish a useful deterministic + quantitative decisi
 See:
 
 ```text
-docs/v02/items_left_for_v02.md
+docs/specs/items_left_for_v02.md
 ```
 
 ---
@@ -151,7 +151,7 @@ These findings directly motivate V0.3's decomposed architecture and point-in-tim
 
 ### Detailed plan & cleanup
 
-See [`docs/v025/v025.md`](v025/v025.md) and [`docs/v025/v025_cleanup.md`](v025/v025_cleanup.md).
+See [`docs/specs/v025.md`](specs/v025.md) and [`docs/specs/v025_cleanup.md`](specs/v025_cleanup.md).
 
 ---
 
@@ -211,16 +211,16 @@ V0.4 optimizer               [Downstream decision layer]
 
 > **V0.2.5 tells us whether our predictions are good. V0.3 builds better predictions. V0.4 decides what to do with them.**
 
-See [`docs/v03/v03.md`](v03/v03.md) for the complete V0.3 specification and verified benchmark results.
+See [`docs/specs/v03.md`](specs/v03.md) for the complete V0.3 specification and verified benchmark results.
 
 
 ---
 
-## V0.4 — Fantasy Decision & Optimization Layer (Next Milestone)
+## V0.4 — Fantasy Decision & Optimization Layer
 
-**Status: planned (next milestone).**  
+**Status: completed on 2026-09-23 (`0.4.0`).**  
 **Prerequisite:** V0.3 validated predictive projection layer.  
-**Core boundary:** **V0.3 predicts. V0.4 decides.**
+**Core boundary:** **V0.3 predicts $\to$ V0.4 optimizes & recommends $\to$ V0.45 records & evaluates reality.**
 
 ### Objective
 
@@ -234,6 +234,8 @@ V0.3 projections
   ├─ expected minutes
   └─ value
         ↓
+PlayerProjectionContract
+        ↓
 Decision engine (V0.4)
   ├─ legal lineup
   ├─ formation
@@ -241,29 +243,32 @@ Decision engine (V0.4)
   ├─ sixth man
   ├─ bench
   ├─ transfers
-  └─ future-round planning
+  └─ multi-round planning
         ↓
 Historical decision backtest
         ↓
-Oracle regret
+Static hindsight oracle regret
 ```
 
 ### Scope
 
 1. **Prediction Contract & Separation**:
-   - The optimizer consumes a clean projection contract (`PlayerProjection`: `player_id`, `expected_fp`, `probability_play`, `expected_minutes`, `fp_per_minute`, `uncertainty`, `price`, `position`, `team_id`) without coupling to internal modeling details.
+   - The optimizer consumes a clean projection contract (`PlayerProjectionContract`: `player_id`, `expected_fp`, `probability_play`, `expected_minutes`, `fp_per_minute`, `uncertainty`, `price_tenths`, `position`, `team_id`, `turn_number`) without coupling to internal modeling details.
 2. **Deterministic Constraint Layer**:
-   - Exact enforcement of squad (11 units: 4G, 4F, 2C, 1HC), budget, club limits (max 3 players from same club), legal court formations (`2-2-1`, `1-2-2`, `2-1-2`, `1-3-1`, `3-1-1`), and transfer limits (`1..4` trades or unlimited windows).
-3. **Joint Lineup Optimizer**:
-   - Starting 5 (`1.0x`), Captain (`2.0x`), Sixth Man (`1.0x`), and 4 Bench units (`0.5x`) optimized under official scoring rules rather than raw expectation sums.
-4. **Intra-Round Decisions & Substitutions**:
-   - Exact Turn 1 $\to$ Turn 2 substitution optimizer (`elf turn-subs`), formation transitions, captain switches, and unplayed T2/T3 player handling.
+   - Exact enforcement of squad (11 units: 4G, 4F, 2C, 1HC), budget, verified official club limits (max 6 court players per club, with Head Coach separate), legal court formations (`2-2-1`, `1-2-2`, `2-1-2`, `1-3-1`, `3-1-1`), and transfer limits (`1..4` trades or unlimited windows).
+3. **Exact Fixed-Squad Optimizer & Exhaustive Oracle**:
+   - Starting 5 (`1.0x`), Captain (`2.0x`), Sixth Man (`1.0x`), 4 Bench units (`0.5x`), and Head Coach (`1.0x`) optimized under official scoring rules.
+   - Retains an unpruned exhaustive enumeration oracle (`brute_force_exhaustive_lineup`) for continuous correctness verification across 4,600+ states.
+4. **Intra-Round Decisions & Captain Option Value**:
+   - Explicitly scales captain option value by $(M_{\text{cap}} - 1.0) = 1.0\times$ for $2.0\times$ captain, evaluating all eligible unplayed court players across subsequent turns.
 5. **Transfer Optimization**:
-   - Optimal legal `1..4` trade alternatives with capital-gain-aware selling prices (`0%` sell-on tax).
-6. **Historical Decision Backtesting & Oracle Regret**:
-   - Multi-round decision logging, realization tracking, and hindsight oracle regret evaluation.
+   - Supports both fast candidate-pruned heuristic search and exact exhaustive combinatorial search (`exhaustive_candidates=True`) for 1..4 trades and unlimited modes.
+6. **Multi-Round Planning**:
+   - Dynamic beam search planner across horizons $N = 2..4$ rounds with configurable strategic discount factor ($\gamma = 0.95$ default, $\gamma = 1.0$ undiscounted).
+7. **Historical Decision Backtesting & Static Hindsight Oracle**:
+   - Single-round hindsight oracle evaluation strictly distinguishing `projected_fantasy_points` from `actual_fantasy_points` and reporting decision regret.
 
-See [`docs/v04/v04.md`](v04/v04.md) for the complete V0.4 specification.
+See [`docs/specs/v04.md`](specs/v04.md) and [`docs/specs/v04_items_left.md`](specs/v04_items_left.md) for the complete V0.4 specification.
 
 
 ---
