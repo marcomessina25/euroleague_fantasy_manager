@@ -2,7 +2,7 @@
 
 A deterministic, local-first **EuroLeague Fantasy Challenge (Classic Mode)** decision engine for the 2026/27 season (`E2026`), architected to share its core engine with **EuroCup Fantasy Challenge** (`U2026`).
 
-![Version](https://img.shields.io/badge/Version-0.4.0-purple) ![Python](https://img.shields.io/badge/Python-3.12-blue) ![License](https://img.shields.io/badge/License-MIT-green)
+![Version](https://img.shields.io/badge/Version-0.4.5-purple) ![Python](https://img.shields.io/badge/Python-3.12-blue) ![License](https://img.shields.io/badge/License-MIT-green)
 
 ---
 
@@ -15,12 +15,12 @@ EuroLeague Fantasy & Feeds APIs -> local SQLite snapshots -> rules + validation 
 ## Living roadmap
 
 - [`docs/architecture.md`](docs/architecture.md) defines the purpose, architectural boundaries, and responsibilities of each layer.
-- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1`, `V0.2`, `V0.2.5`, `V0.3`, and `V0.4` completed; `V0.45` is next).
+- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1`, `V0.2`, `V0.2.5`, `V0.3`, `V0.4`, and `0.4.5` completed; `V0.5` is next).
 - [`docs/specs/v02.md`](docs/specs/v02.md) and [`docs/specs/items_left_for_v02.md`](docs/specs/items_left_for_v02.md) define the **V0.2** heuristic decision-support baseline specification and pre-merge checklist.
 - [`docs/specs/v025.md`](docs/specs/v025.md) and [`docs/specs/v025_cleanup.md`](docs/specs/v025_cleanup.md) define the **V0.2.5** historical evaluation foundation.
 - [`docs/specs/v03.md`](docs/specs/v03.md) and [`docs/specs/items_left_for_v03.md`](docs/specs/items_left_for_v03.md) define the **V0.3** validated predictive projection layer (`0.3.0`) and merge checklist.
 - [`docs/specs/v04.md`](docs/specs/v04.md), [`docs/specs/v04_items_left.md`](docs/specs/v04_items_left.md), and [`docs/specs/items_left_for_v04.md`](docs/specs/items_left_for_v04.md) define the **V0.4** decision and optimization layer (`0.4.0`).
-- [`docs/specs/v045.md`](docs/specs/v045.md) defines the upcoming **V0.45** closed-loop evaluation and live decision state.
+- [`docs/specs/v045.md`](docs/specs/v045.md) defines **0.4.5** closed-loop evaluation and live decision state (`0.4.5`).
 
 Both human contributors and AI agents must read the relevant living documents before making material changes and update them whenever architecture, scope, priorities, or delivery status changes.
 
@@ -184,6 +184,47 @@ Evaluate decision quality against historical rounds comparing recommended decisi
 elf optimize backtest --season 2025 --rounds 1:12
 # Or top-level alias:
 elf backtest --season 2025 --rounds 1:12
+```
+
+## 0.4.5 Closed-Loop Evaluation & Decision State (`elf log-decision`, `elf decisions`, `elf update-scores`, `elf evaluate-decisions`)
+
+Connect the quantitative optimization engine with real managerial actions and realized game outcomes, creating the complete feedback loop (`prediction -> decision -> reality -> regret & evaluation -> improvement`):
+
+### 1. Log Fantasy Decisions
+
+Capture line-ups, transfers, intra-round Turn 1 $\to$ Turn 2 substitutions or captain switches, and initial team selections with immutable point-in-time state snapshots and full provenance:
+
+```powershell
+# Log a recommended lineup (or with human overrides)
+elf log-decision --season 2025 --round 1 --team my_team --recommend
+
+# Log intra-round Turn 1 -> Turn 2 substitution
+elf log-decision --season 2025 --round 1 --turn 2 --sub-out 101 --sub-in 103 --new-cap 302
+```
+
+### 2. Inspect Decision History
+
+Query and inspect logged decisions with team isolation, parameter provenance, and override tracking:
+
+```powershell
+elf decisions --team my_team
+elf decisions --id dec_lineup_2025_r01_t1_abc123
+```
+
+### 3. Ingest Realized Outcomes
+
+Attach official realized fantasy points to previously logged decisions:
+
+```powershell
+elf update-scores --season 2025 --round 1 --team my_team
+```
+
+### 4. Closed-Loop Evaluation & Regret Analysis
+
+Evaluate human decisions against model recommendations and hindsight oracles, reporting captain regret, sixth-man regret, bench regret, formation regret, turn-sub regret, transfer regret, rolling MAE windows (`last_3`, `last_5`, `last_10`), and positional segment errors (`G`, `F`, `C`, `HC`):
+
+```powershell
+elf evaluate-decisions --team my_team --csv reports/decisions/summary.csv
 ```
 
 ## License

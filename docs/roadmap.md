@@ -2,7 +2,7 @@
 
 > **Living document.** This is the source of truth for delivery status, engineering priorities, release criteria, known risks, and long-term direction. Human contributors and AI agents must read it before material work and update it when priorities or milestone status changes.
 >
-> **Current planning baseline:** V0.1, V0.2, V0.2.5, V0.3, and V0.4 (`0.4.0`) are completed (2026-09-23). **V0.45** (Closed-Loop Evaluation & Live Decision State) is the next milestone.
+> **Current planning baseline:** V0.1, V0.2, V0.2.5, V0.3, V0.4 (`0.4.0`), and **0.4.5** (Closed-Loop Evaluation & Live Decision State) are completed (2026-09-23). **V0.5** (Multi-Team Management, Local Web GUI, and Initial Team Builder) is the next milestone.
 >
 > See [`docs/architecture.md`](architecture.md), [`docs/specs/v02.md`](specs/v02.md), [`docs/specs/items_left_for_v02.md`](specs/items_left_for_v02.md), [`docs/specs/v025.md`](specs/v025.md), [`docs/specs/v025_cleanup.md`](specs/v025_cleanup.md), [`docs/specs/v03.md`](specs/v03.md), [`docs/specs/items_left_for_v03.md`](specs/items_left_for_v03.md), [`docs/specs/v04.md`](specs/v04.md), [`docs/specs/v04_items_left.md`](specs/v04_items_left.md), [`docs/specs/items_left_for_v04.md`](specs/items_left_for_v04.md), and [`docs/specs/v045.md`](specs/v045.md) for architectural and implementation details.
 
@@ -273,25 +273,37 @@ See [`docs/specs/v04.md`](specs/v04.md) and [`docs/specs/v04_items_left.md`](spe
 
 ---
 
-## V0.45 — Closed-loop Evaluation and Strategy
+## 0.4.5 — Closed-Loop Evaluation & Live Decision State
 
-**Status: planned.**
+**Status: completed on 2026-09-23 (`0.4.5`).**
 
-### Scope
+### Objective
 
-- `elf log-decision`
-- `elf decisions`
-- `elf update-scores`
-- `elf evaluate`
-- Prediction error tracking.
-- Captain regret.
-- Sixth-Man/Bench regret.
-- Turn-sub regret.
-- Lineup regret.
-- Trade regret.
-- Model drift monitoring.
+Connect the quantitative engine to real management decisions and actual outcomes, creating the first closed loop between **prediction → decision → reality → evaluation → improvement**.
 
-This phase turns the manager into a real experimentation platform.
+### Delivered Scope
+
+1. **Deterministic Decision Logging & Auditing (`src/euroleague_fantasy_manager/tracking/`)**:
+   - `DecisionLogger` and `DecisionStore` (SQLite tables: `decision_logs`, `decision_outcomes`, `state_snapshots`, `decision_events`).
+   - Supports Lineup (`DecisionType.LINEUP`), Transfer (`DecisionType.TRANSFERS`), Turn 1 $\to$ Turn 2 Substitution / Captain Switch (`DecisionType.TURN_SUB`), and Initial Team (`DecisionType.INITIAL_TEAM`) decisions.
+   - Minimal immutable `StateSnapshot` captures the exact pre-decision environment (`team_id`, `season`, `round`, `turn`, `squad_ids`, `prices_tenths`, `bank_tenths`, `dataset_version`, `created_at`, plus metadata) while decision-specific configuration and provenance are stored in `DecisionRecord` / `DecisionProvenance`.
+   - Distinctly logs `recommended_decision` vs `actual_decision` with automated override detection.
+2. **Generic `INITIAL_TEAM` Decision Support (Bridge for V0.5 Initial Team Builder)**:
+   - Persists recommended vs actual 11-player squad lists (`recommended_squad_ids`, `actual_squad_ids`) along with pre-season bank and player pricing snapshots.
+   - V0.5 Initial Team Builder will directly consume this interface to log draft recommendations and user overrides without coupling 0.4.5 to GUI or drafting optimization algorithms.
+3. **Deterministic Fantasy Outcome Scoring & Retrospective Regret**:
+   - `OutcomeUpdater` ingests realized actual player scores using official EuroLeague Fantasy scoring rules.
+   - Hindsight oracle resolves real player positions, teams, and names from snapshot metadata, underlying SQLite tables (`eval_players`, `eval_teams`, `players`), or explicit projection inputs, ensuring true regret calculations for real squads without hard-coded ID heuristics.
+   - Calculates regret metrics: `human_regret` (Oracle - Human), `model_regret` (Oracle - Model), `human_vs_model` (Human - Model), `captain_regret`, `sixth_man_regret`, `bench_regret`, `formation_regret`, `turn_sub_regret`, and `transfer_regret`.
+   - Evaluates prediction errors: MAE, RMSE, and bias across active squads.
+4. **Longitudinal Closed-Loop Evaluation & Drift Monitoring**:
+   - `ClosedLoopEvaluator` aggregates performance over time, computing win rates against model recommendations, rolling error windows (`last_3`, `last_5`, `last_10`), and positional segment errors (`G`, `F`, `C`, `HC`).
+   - Generates detailed ASCII tables, Markdown reports, and CSV exports (`export_closed_loop_csv`).
+5. **CLI Integration**:
+   - `elf log-decision`: Records lineup, transfer, turn substitution, and initial team decisions.
+   - `elf decisions`: Lists and inspects logged decisions with full provenance and team isolation.
+   - `elf update-scores`: Ingests actual realized fantasy scores and triggers regret calculations.
+   - `elf evaluate-decisions`: Produces closed-loop regret and prediction drift reports.
 
 ---
 
@@ -460,11 +472,13 @@ Never allow level 4 to override levels 1–3 silently.
 3. V0.3 validated predictive projection layer (`0.3.0`) [Completed]
    (P(play) × E(minutes|play) × E(FP/min|play) + calibration + uncertainty + valuation)
         ↓
-4. V0.4 Lineup & Transfer Optimizer on Validated Projections [Next Milestone]
+4. V0.4 Lineup & Transfer Optimizer on Validated Projections (`0.4.0`) [Completed]
         ↓
-5. V0.45 exact live Turn 1 -> Turn 2 decisions & closed-loop backtesting
+5. 0.4.5 Closed-loop Evaluation & Live Decision State [Completed]
         ↓
-6. V0.5+ GUI / LLM strategic layer
+6. V0.5 Multi-team management, local Web GUI & Initial Team Builder [Next Milestone]
+        ↓
+7. V0.6+ Strategic / LLM layer
 ```
 
 This ordering is intentional.
