@@ -5,7 +5,7 @@ from dataclasses import asdict
 import json
 from pathlib import Path
 import sys
-from typing import Sequence
+from typing import Any, Sequence
 
 from .api import fetch_current_data
 from .evaluation import (
@@ -26,6 +26,17 @@ from .import_squad import (
     import_squad_from_file,
 )
 from .lineup import generate_lineup_report
+from .evaluation.backtest import parse_rounds_spec
+from .models import Position
+from .optimization import (
+    FixedSquadLineupOptimizer,
+    HistoricalDecisionBacktester,
+    MultiRoundOptimizer,
+    OptimizationConstraints,
+    PlayerProjectionContract,
+    RiskMode,
+    TransferOptimizer,
+)
 from .rules import EUROCUP_LEAGUE_ID, EUROLEAGUE_LEAGUE_ID
 from .squad_report import generate_squad_report
 from .squad_state import load_current_squad
@@ -358,6 +369,61 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print full JSON evaluation payload instead of formatted terminal tables.",
     )
 
+    # V0.4 Decision & Optimization Commands
+    optimize_parser = subparsers.add_parser(
+        "optimize",
+        help="V0.4 Decision & Optimization layer: deterministic lineup, transfers, and multi-round planning.",
+    )
+    opt_sub = optimize_parser.add_subparsers(dest="opt_command", required=True)
+
+    opt_lineup = opt_sub.add_parser("lineup", help="Jointly optimize Starting 5, Captain, Sixth Man, Bench, and Formation.")
+    opt_lineup.add_argument("--season", type=str, default="2025", help="Season code (default: 2025).")
+    opt_lineup.add_argument("--round", "-r", type=int, default=1, help="Round number (default: 1).")
+    opt_lineup.add_argument("--squad", type=Path, default=DEFAULT_SQUAD_PATH, help="Path to current_squad.json.")
+    opt_lineup.add_argument("--model", "-m", type=str, default="fp_decomposed_v03", help="Predictive model (default: fp_decomposed_v03).")
+    opt_lineup.add_argument("--risk-mode", type=str, default="expected", choices=["expected", "conservative", "aggressive"], help="Risk mode (default: expected).")
+    opt_lineup.add_argument("--risk-lambda", type=float, default=0.15, help="Risk lambda (default: 0.15).")
+    opt_lineup.add_argument("--no-option-value", action="store_true", help="Disable Turn 1 -> Turn 2 substitution option value.")
+    opt_lineup.add_argument("--alpha", type=float, default=0.25, help="EWMA alpha for features (default: 0.25).")
+    opt_lineup.add_argument("--json", action="store_true", help="Output JSON payload.")
+
+    opt_transfers = opt_sub.add_parser("transfers", help="Optimize 1..4 legal transfers under budget and club constraints.")
+    opt_transfers.add_argument("--season", type=str, default="2025", help="Season code (default: 2025).")
+    opt_transfers.add_argument("--round", "-r", type=int, default=1, help="Round number (default: 1).")
+    opt_transfers.add_argument("--squad", type=Path, default=DEFAULT_SQUAD_PATH, help="Path to current_squad.json.")
+    opt_transfers.add_argument("--trades", "-t", type=int, default=1, help="Max number of trades (1..4, default: 1).")
+    opt_transfers.add_argument("--unlimited", action="store_true", help="Allow unlimited trades (Unlimited Trade Window).")
+    opt_transfers.add_argument("--top", type=int, default=5, help="Number of top trade recommendations (default: 5).")
+    opt_transfers.add_argument("--model", "-m", type=str, default="fp_decomposed_v03", help="Predictive model (default: fp_decomposed_v03).")
+    opt_transfers.add_argument("--exhaustive", action="store_true", help="Exhaustive candidate search mode.")
+    opt_transfers.add_argument("--risk-mode", type=str, default="expected", choices=["expected", "conservative", "aggressive"], help="Risk mode (default: expected).")
+    opt_transfers.add_argument("--risk-lambda", type=float, default=0.15, help="Risk lambda (default: 0.15).")
+    opt_transfers.add_argument("--alpha", type=float, default=0.25, help="EWMA alpha for features (default: 0.25).")
+    opt_transfers.add_argument("--json", action="store_true", help="Output JSON payload.")
+
+    opt_multi = opt_sub.add_parser("multi-round", help="Short-horizon multi-round planning (horizon N=2..4).")
+    opt_multi.add_argument("--season", type=str, default="2025", help="Season code (default: 2025).")
+    opt_multi.add_argument("--start-round", type=int, default=1, help="Start round number (default: 1).")
+    opt_multi.add_argument("--horizon", type=int, default=2, help="Planning horizon rounds (2..4, default: 2).")
+    opt_multi.add_argument("--squad", type=Path, default=DEFAULT_SQUAD_PATH, help="Path to current_squad.json.")
+    opt_multi.add_argument("--max-trades", type=int, default=2, help="Max trades per round (default: 2).")
+    opt_multi.add_argument("--discount", type=float, default=0.95, help="Discount factor gamma (default: 0.95).")
+    opt_multi.add_argument("--model", "-m", type=str, default="fp_decomposed_v03", help="Predictive model (default: fp_decomposed_v03).")
+    opt_multi.add_argument("--risk-mode", type=str, default="expected", choices=["expected", "conservative", "aggressive"], help="Risk mode (default: expected).")
+    opt_multi.add_argument("--risk-lambda", type=float, default=0.15, help="Risk lambda (default: 0.15).")
+    opt_multi.add_argument("--alpha", type=float, default=0.25, help="EWMA alpha for features (default: 0.25).")
+    opt_multi.add_argument("--json", action="store_true", help="Output JSON payload.")
+
+    opt_backtest = opt_sub.add_parser("backtest", help="Backtest decision optimizer against historical rounds and oracle regret.")
+    opt_backtest.add_argument("--season", type=str, default="2025", help="Season code (default: 2025).")
+    opt_backtest.add_argument("--rounds", type=str, default="1:4", help="Round range (e.g. 1:4, default: 1:4).")
+    opt_backtest.add_argument("--squad", type=Path, default=DEFAULT_SQUAD_PATH, help="Path to current_squad.json (optional).")
+    opt_backtest.add_argument("--model", "-m", type=str, default="fp_decomposed_v03", help="Predictive model (default: fp_decomposed_v03).")
+    opt_backtest.add_argument("--risk-mode", type=str, default="expected", choices=["expected", "conservative", "aggressive"], help="Risk mode (default: expected).")
+    opt_backtest.add_argument("--risk-lambda", type=float, default=0.15, help="Risk lambda (default: 0.15).")
+    opt_backtest.add_argument("--alpha", type=float, default=0.25, help="EWMA alpha for features (default: 0.25).")
+    opt_backtest.add_argument("--json", action="store_true", help="Output JSON summary.")
+
     return parser
 
 
@@ -544,7 +610,333 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(eval_report["console_table"])
         return 0
 
+    if args.command == "optimize":
+        norm_season = normalize_season_code(args.season)
+        canon_model = canonical_model_name(args.model)
+        risk_enum = RiskMode.from_str(getattr(args, "risk_mode", "expected"))
+
+        if args.opt_command == "lineup":
+            contracts, _ = _build_round_projection_contracts(
+                season=norm_season,
+                round_number=args.round,
+                model_name=canon_model,
+                database_path=args.db,
+                ewma_alpha=args.alpha,
+            )
+            squad_contracts, _ = _resolve_squad(args.squad, contracts)
+            opt = FixedSquadLineupOptimizer(
+                risk_mode=risk_enum,
+                risk_lambda=args.risk_lambda,
+                include_option_value=not args.no_option_value,
+            )
+            decision = opt.optimize(squad_contracts, round_number=args.round, top_alternatives=3)
+            if args.json:
+                print(json.dumps(asdict(decision), indent=2, ensure_ascii=False))
+            else:
+                print(_format_lineup_console(decision, contracts, norm_season, args.round, canon_model, args.risk_mode))
+            return 0
+
+        if args.opt_command == "transfers":
+            contracts, _ = _build_round_projection_contracts(
+                season=norm_season,
+                round_number=args.round,
+                model_name=canon_model,
+                database_path=args.db,
+                ewma_alpha=args.alpha,
+            )
+            squad_contracts, bank_tenths = _resolve_squad(args.squad, contracts)
+            tx_opt = TransferOptimizer()
+            res = tx_opt.optimize_transfers(
+                current_squad=squad_contracts,
+                market=list(contracts.values()),
+                bank_tenths=bank_tenths,
+                round_number=args.round,
+                max_trades=args.trades,
+                unlimited=args.unlimited,
+                exhaustive_candidates=args.exhaustive,
+                top_n=args.top,
+            )
+            if args.json:
+                print(json.dumps(asdict(res), indent=2, ensure_ascii=False))
+            else:
+                print(_format_transfers_console(res, norm_season, args.round, canon_model))
+            return 0
+
+        if args.opt_command == "multi-round":
+            rounds = [args.start_round + i for i in range(max(1, min(args.horizon, 4)))]
+            proj_by_r: dict[int, list[PlayerProjectionContract]] = {}
+            for r_num in rounds:
+                c_map, _ = _build_round_projection_contracts(
+                    season=norm_season,
+                    round_number=r_num,
+                    model_name=canon_model,
+                    database_path=args.db,
+                    ewma_alpha=args.alpha,
+                )
+                proj_by_r[r_num] = list(c_map.values())
+
+            initial_contracts, initial_bank = _resolve_squad(args.squad, {p.player_id: p for p in proj_by_r[args.start_round]})
+            mr_opt = MultiRoundOptimizer(
+                discount_factor=args.discount,
+                max_trades_per_round=args.max_trades,
+            )
+            plan = mr_opt.optimize_multi_round(
+                start_round=args.start_round,
+                horizon=args.horizon,
+                initial_squad=initial_contracts,
+                projections_by_round=proj_by_r,
+                initial_bank_tenths=initial_bank,
+            )
+            if args.json:
+                print(json.dumps(asdict(plan), indent=2, ensure_ascii=False))
+            else:
+                print(_format_multi_round_console(plan, norm_season, canon_model))
+            return 0
+
+        if args.opt_command == "backtest":
+            store_eval = EvaluationDatasetStore(args.db)
+            if norm_season not in store_eval.list_seasons():
+                build_historical_dataset(database_path=args.db, seasons=[norm_season])
+            avail_rounds = store_eval.list_season_rounds(norm_season)
+            rounds_to_eval = parse_rounds_spec(args.rounds, avail_rounds)
+            rounds_data: dict[int, tuple[list[PlayerProjectionContract], dict[int, float]]] = {}
+            for r_num in rounds_to_eval:
+                c_map, actuals = _build_round_projection_contracts(
+                    season=norm_season,
+                    round_number=r_num,
+                    model_name=canon_model,
+                    database_path=args.db,
+                    ewma_alpha=args.alpha,
+                )
+                # Resolve squad for round r_num
+                r_squad, _ = _resolve_squad(args.squad, c_map)
+                rounds_data[r_num] = (r_squad, actuals)
+
+            backtester = HistoricalDecisionBacktester(
+                risk_mode=risk_enum,
+                risk_lambda=args.risk_lambda,
+            )
+            summary = backtester.evaluate_season(
+                season=norm_season,
+                model_name=canon_model,
+                rounds_data=rounds_data,
+            )
+            if args.json:
+                print(json.dumps(asdict(summary), indent=2, ensure_ascii=False))
+            else:
+                print(summary.to_markdown())
+            return 0
+
     return 0
+
+
+def _build_round_projection_contracts(
+    season: str,
+    round_number: int,
+    model_name: str,
+    database_path: Path,
+    ewma_alpha: float = 0.25,
+) -> tuple[dict[int, PlayerProjectionContract], dict[int, float]]:
+    norm_season = normalize_season_code(season)
+    store_eval = EvaluationDatasetStore(database_path)
+    if norm_season not in store_eval.list_seasons():
+        build_historical_dataset(database_path=database_path, seasons=[norm_season])
+    cutoff = store_eval.get_round_decision_cutoff(norm_season, round_number)
+    feature_table = build_round_feature_table(
+        season=norm_season,
+        round_number=round_number,
+        database_path=database_path,
+        decision_cutoff=cutoff,
+        ewma_alpha=ewma_alpha,
+    )
+    canon_model = canonical_model_name(model_name)
+    contracts: dict[int, PlayerProjectionContract] = {}
+    actuals: dict[int, float] = {}
+
+    with store_eval._connect() as conn:
+        act_rows = conn.execute(
+            "SELECT player_id, fantasy_points FROM eval_player_games WHERE season = ? AND round = ?",
+            (norm_season, int(round_number)),
+        ).fetchall()
+        for r in act_rows:
+            actuals[int(r["player_id"])] = float(r["fantasy_points"])
+
+    for pid, feat in feature_table.items():
+        rec = predict_single_player_baseline(feature_row=feat, model_name=canon_model)
+        contracts[pid] = PlayerProjectionContract(
+            player_id=feat.player_id,
+            player_name=feat.player_name,
+            position=Position.from_raw(feat.position),
+            team_id=None,
+            team_code=feat.team_code,
+            price_tenths=feat.quotation_at_decision_tenths,
+            expected_fp=rec.prediction,
+            probability_play=rec.play_probability,
+            expected_minutes=rec.expected_minutes,
+            fp_per_minute=getattr(rec, "expected_fp_per_min", 0.0),
+            uncertainty=rec.sigma_prediction,
+            prediction_spread=getattr(rec, "upper_bound", 0.0) - getattr(rec, "lower_bound", 0.0),
+            turn_number=feat.turn_number,
+            opponent_code=feat.opponent_team_code,
+            is_home=feat.home,
+        )
+
+    return contracts, actuals
+
+
+def _resolve_squad(
+    squad_path: Path,
+    contracts: dict[int, PlayerProjectionContract],
+) -> tuple[list[PlayerProjectionContract], int]:
+    if squad_path.exists():
+        state = load_current_squad(squad_path)
+        squad_contracts: list[PlayerProjectionContract] = []
+        for p in state.players:
+            if p.id in contracts:
+                squad_contracts.append(contracts[p.id])
+            else:
+                squad_contracts.append(PlayerProjectionContract.from_player(p))
+        return squad_contracts, state.bank_tenths
+    else:
+        # Standard reference squad selected by top quotation
+        guards = sorted([c for c in contracts.values() if c.position == Position.GUARD], key=lambda x: (-x.price_tenths, x.player_id))[:4]
+        forwards = sorted([c for c in contracts.values() if c.position == Position.FORWARD], key=lambda x: (-x.price_tenths, x.player_id))[:4]
+        centers = sorted([c for c in contracts.values() if c.position == Position.CENTER], key=lambda x: (-x.price_tenths, x.player_id))[:2]
+        coaches = sorted([c for c in contracts.values() if c.position == Position.HEAD_COACH], key=lambda x: (-x.price_tenths, x.player_id))[:1]
+        return guards + forwards + centers + coaches, 0
+
+
+def _format_lineup_console(
+    decision: Any,
+    contracts_map: dict[int, PlayerProjectionContract],
+    season: str,
+    round_number: int,
+    model_name: str,
+    risk_mode: str,
+) -> str:
+    lines = []
+    lines.append("=" * 80)
+    lines.append(f"{'V0.4 LINEUP OPTIMIZATION RECOMMENDATION':^80}")
+    lines.append("=" * 80)
+    lines.append(f"Round:       {season} Round {round_number}")
+    lines.append(f"Model:       {model_name}")
+    lines.append(f"Formation:   {decision.formation}")
+    lines.append(f"Risk Mode:   {risk_mode}")
+    lines.append("")
+    lines.append("-" * 33 + " STARTING 5 " + "-" * 34)
+    for sid in decision.starter_ids:
+        p = contracts_map[sid]
+        mult_str = " (2.0x CAPTAIN)" if sid == decision.captain_id else " (1.0x)"
+        turn_str = f"Turn {p.turn_number}"
+        pos_str = f"[{p.position.name[:1]}]"
+        match_str = f"{p.team_code} vs {p.opponent_code}" if p.is_home else f"{p.team_code} @ {p.opponent_code}"
+        lines.append(f"{pos_str:<4} {p.player_name:<22} ({match_str:<10}) {p.credits:>4.1f} Cr  {turn_str:<7} E[FP]: {p.expected_fp:>5.2f}{mult_str}")
+
+    lines.append("")
+    lines.append("-" * 34 + " SIXTH MAN " + "-" * 35)
+    p6 = contracts_map[decision.sixth_man_id]
+    turn_str = f"Turn {p6.turn_number}"
+    match_str = f"{p6.team_code} vs {p6.opponent_code}" if p6.is_home else f"{p6.team_code} @ {p6.opponent_code}"
+    lines.append(f"[{p6.position.name[:1]:<2}] {p6.player_name:<22} ({match_str:<10}) {p6.credits:>4.1f} Cr  {turn_str:<7} E[FP]: {p6.expected_fp:>5.2f} (1.0x)")
+
+    lines.append("")
+    lines.append("-" * 36 + " BENCH " + "-" * 37)
+    for bid in decision.bench_ids:
+        pb = contracts_map[bid]
+        turn_str = f"Turn {pb.turn_number}"
+        match_str = f"{pb.team_code} vs {pb.opponent_code}" if pb.is_home else f"{pb.team_code} @ {pb.opponent_code}"
+        half_pts = pb.expected_fp * 0.5
+        lines.append(f"[{pb.position.name[:1]:<2}] {pb.player_name:<22} ({match_str:<10}) {pb.credits:>4.1f} Cr  {turn_str:<7} E[FP]: {pb.expected_fp:>5.2f} (0.5x -> {half_pts:>5.2f})")
+
+    lines.append("")
+    lines.append("-" * 33 + " HEAD COACH " + "-" * 34)
+    phc = contracts_map[decision.head_coach_id]
+    lines.append(f"[HC] {phc.player_name:<22} ({phc.team_code:<10}) {phc.credits:>4.1f} Cr  Turn 1  E[FP]: {phc.expected_fp:>5.2f} (1.0x)")
+
+    lines.append("")
+    lines.append("-" * 32 + " SCORE SUMMARY " + "-" * 33)
+    b = decision.breakdown
+    lines.append(f"Starters Subtotal:       {b.starter_score:>8.2f} FP")
+    lines.append(f"Captaincy Bonus:         {b.captain_bonus:>8.2f} FP")
+    lines.append(f"Sixth Man Score:         {b.sixth_man_score:>8.2f} FP")
+    lines.append(f"Bench Subtotal:          {b.bench_score:>8.2f} FP")
+    lines.append(f"Head Coach Score:        {b.head_coach_score:>8.2f} FP")
+    lines.append("-" * 80)
+    lines.append(f"Raw Expected Total:      {b.raw_expected_total:>8.2f} FP")
+    lines.append(f"Risk Adjustment:         {b.risk_adjustment:>+8.2f} FP")
+    lines.append(f"Turn Option Bonus:       {b.option_value_bonus:>+8.2f} FP")
+    lines.append("=" * 80)
+    lines.append(f"OBJECTIVE VALUE:         {b.objective_value:>8.2f} FP")
+    lines.append("=" * 80)
+
+    if decision.alternatives:
+        lines.append("")
+        lines.append("Alternative Formations:")
+        for idx, alt in enumerate(decision.alternatives, 1):
+            cap_name = contracts_map[alt.captain_id].player_name
+            lines.append(f"  {idx}. Formation {alt.formation:<5} | Obj: {alt.objective_value:>6.2f} FP | Cap: {cap_name}")
+
+    return "\n".join(lines)
+
+
+def _format_transfers_console(
+    res: Any,
+    season: str,
+    round_number: int,
+    model_name: str,
+) -> str:
+    lines = []
+    lines.append("=" * 80)
+    lines.append(f"{'V0.4 TRANSFER OPTIMIZATION RECOMMENDATIONS':^80}")
+    lines.append("=" * 80)
+    lines.append(f"Round:                {season} Round {round_number}")
+    lines.append(f"Model:                {model_name}")
+    lines.append(f"Current Squad Score:  {res.current_lineup.objective_value:.2f} FP (Formation: {res.current_lineup.formation})")
+    lines.append(f"Evaluated Packages:   {res.total_evaluated_packages} legal combinations")
+    lines.append("")
+    if not res.recommendations:
+        lines.append("No improving legal trade packages found within budget constraints.")
+        return "\n".join(lines)
+
+    for idx, rec in enumerate(res.recommendations, 1):
+        lines.append(f"Option #{idx}  (Net Transfer Value: {rec.net_transfer_value:>+5.2f} FP | Remaining Bank: {rec.remaining_bank_tenths / 10.0:.1f} Cr)")
+        lines.append("-" * 80)
+        for o, i in zip(rec.out_players, rec.in_players):
+            lines.append(f"  OUT: {o.player_name:<20} [{o.position.name[:1]}] ({o.credits:>4.1f} Cr, E[FP]: {o.expected_fp:>5.2f}) -> IN: {i.player_name:<20} [{i.position.name[:1]}] ({i.credits:>4.1f} Cr, E[FP]: {i.expected_fp:>5.2f})")
+        lines.append(f"  New Squad Lineup: Formation {rec.new_lineup.formation} | Expected Score: {rec.new_lineup.objective_value:.2f} FP (Gain: {rec.gross_score_gain:>+5.2f} FP)")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _format_multi_round_console(
+    plan: Any,
+    season: str,
+    model_name: str,
+) -> str:
+    lines = []
+    lines.append("=" * 80)
+    lines.append(f"{'V0.4 MULTI-ROUND STRATEGY ROADMAP':^80}")
+    lines.append("=" * 80)
+    lines.append(f"Season:               {season}")
+    lines.append(f"Planning Horizon:     {plan.horizon} rounds (R{plan.start_round} -> R{plan.start_round + plan.horizon - 1})")
+    lines.append(f"Model:                {model_name}")
+    lines.append(f"Total Expected FP:    {plan.total_expected_score:.2f} FP")
+    lines.append(f"Discounted Score:     {plan.discounted_expected_score:.2f} FP")
+    lines.append(f"Final Bank:           {plan.final_bank_tenths / 10.0:.1f} Cr")
+    lines.append("")
+    for step in plan.steps:
+        lines.append(f"Round {step.round_number} (Expected Score: {step.expected_round_score:.2f} FP | Bank: {step.bank_tenths_end_of_round / 10.0:.1f} Cr)")
+        lines.append("-" * 80)
+        if step.transfers is None:
+            lines.append("  Transfers: None (Hold squad)")
+        else:
+            for o, i in zip(step.transfers.out_players, step.transfers.in_players):
+                lines.append(f"  Trade: OUT {o.player_name} -> IN {i.player_name} (Gain: {step.transfers.gross_score_gain:>+5.2f} FP)")
+        lines.append(f"  Formation: {step.lineup.formation} | Captain: Player {step.lineup.captain_id} | Sixth Man: Player {step.lineup.sixth_man_id}")
+        lines.append("")
+
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 
 A deterministic, local-first **EuroLeague Fantasy Challenge (Classic Mode)** decision engine for the 2026/27 season (`E2026`), architected to share its core engine with **EuroCup Fantasy Challenge** (`U2026`).
 
-![Version](https://img.shields.io/badge/Version-0.3.0-purple) ![Python](https://img.shields.io/badge/Python-3.12-blue) ![License](https://img.shields.io/badge/License-MIT-green)
+![Version](https://img.shields.io/badge/Version-0.4.0-purple) ![Python](https://img.shields.io/badge/Python-3.12-blue) ![License](https://img.shields.io/badge/License-MIT-green)
 
 ---
 
@@ -15,11 +15,11 @@ EuroLeague Fantasy & Feeds APIs -> local SQLite snapshots -> rules + validation 
 ## Living roadmap
 
 - [`docs/architecture.md`](docs/architecture.md) defines the purpose, architectural boundaries, and responsibilities of each layer.
-- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1`, `V0.2`, `V0.2.5`, and `V0.3` completed; `V0.4` is the next milestone).
+- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1`, `V0.2`, `V0.2.5`, `V0.3`, and `V0.4` completed; `V0.45 / V0.5` is next).
 - [`docs/v02/v02.md`](docs/v02/v02.md) and [`docs/v02/items_left_for_v02.md`](docs/v02/items_left_for_v02.md) define the **V0.2** heuristic decision-support baseline specification and pre-merge checklist.
 - [`docs/v025/v025.md`](docs/v025/v025.md) and [`docs/v025/v025_cleanup.md`](docs/v025/v025_cleanup.md) define the **V0.2.5** historical evaluation foundation.
 - [`docs/v03/v03.md`](docs/v03/v03.md) and [`docs/v03/items_left_for_v03.md`](docs/v03/items_left_for_v03.md) define the **V0.3** validated predictive projection layer (`0.3.0`) and merge checklist.
-- [`docs/v04/v04.md`](docs/v04/v04.md) defines the **V0.4** decision and optimization layer.
+- [`docs/v04/v04.md`](docs/v04/v04.md) and [`docs/v04/items_left_for_v04.md`](docs/v04/items_left_for_v04.md) define the **V0.4** decision and optimization layer (`0.4.0`).
 
 Both human contributors and AI agents must read the relevant living documents before making material changes and update them whenever architecture, scope, priorities, or delivery status changes.
 
@@ -138,6 +138,44 @@ Run walk-forward evaluation across multiple seasons with out-of-sample calibrati
 ```powershell
 elf evaluate --season 2025 --rounds 1:12 --models season_mean,xpdk_v02,fp_decomposed_v03,fp_decomposed_calibrated_v03
 elf evaluate --season 2025 --rounds 1:12 --compare-models fp_decomposed_calibrated_v03,xpdk_v02
+```
+
+## V0.4 Decision & Optimization Layer (`elf optimize`)
+
+Turn V0.3 projections into optimal, deterministic fantasy decisions under real Classic Mode constraints (Starting 5 `1.0x`, Captain `2.0x`, Sixth Man `1.0x`, Bench `0.5x`, Head Coach `1.0x`, legal formations `2-2-1`, `1-2-2`, `2-1-2`, `1-3-1`, `3-1-1`, and Turn 1 $\to$ Turn 2 substitution option value):
+
+### 1. Joint Lineup Optimization
+
+Optimize Starting 5, Captaincy, Sixth Man, and Bench across all 5 legal basketball formations:
+
+```powershell
+elf optimize lineup --season 2025 --round 1
+elf optimize lineup --season 2025 --round 1 --risk-mode conservative
+elf optimize lineup --season 2025 --round 1 --json
+```
+
+### 2. Single-Round Transfer Optimization
+
+Find top legal `1..4` trade packages maximizing net expected score under budget and club constraints:
+
+```powershell
+elf optimize transfers --season 2025 --round 1 --trades 2 --top 5
+```
+
+### 3. Multi-Round Strategy Roadmap
+
+Plan sequential transfer moves over short horizons ($N = 2..4$ rounds) with discounted forward planning:
+
+```powershell
+elf optimize multi-round --season 2025 --start-round 1 --horizon 3
+```
+
+### 4. Historical Decision Backtesting & Oracle Regret
+
+Backtest decision quality against historical rounds and compare against the hindsight oracle:
+
+```powershell
+elf optimize backtest --season 2025 --rounds 1:12
 ```
 
 ## License

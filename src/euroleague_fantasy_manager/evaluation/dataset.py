@@ -449,6 +449,15 @@ class EvaluationDatasetStore:
             rows = conn.execute("SELECT DISTINCT season FROM eval_rounds ORDER BY season").fetchall()
             return [str(r["season"]) for r in rows]
 
+    def list_season_rounds(self, season: str) -> list[int]:
+        norm_season = normalize_season_code(season)
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT round FROM eval_rounds WHERE season = ? ORDER BY round",
+                (norm_season,),
+            ).fetchall()
+            return [int(r["round"]) for r in rows]
+
     def get_price_coverage_by_season(self, season: str | None = None) -> dict[str, dict[str, int]]:
         """Return counts of player-game rows by season and price_provenance category."""
         result: dict[str, dict[str, int]] = {}

@@ -2,9 +2,9 @@
 
 > **Living document.** This is the source of truth for delivery status, engineering priorities, release criteria, known risks, and long-term direction. Human contributors and AI agents must read it before material work and update it when priorities or milestone status changes.
 >
-> **Current planning baseline:** V0.1, V0.2, V0.2.5, and V0.3 (`0.3.0`) are completed (2026-09-23). **V0.4** (Lineup & Transfer Optimizer on Validated Projections) is the single next milestone.
+> **Current planning baseline:** V0.1, V0.2, V0.2.5, V0.3, and V0.4 (`0.4.0`) are completed (2026-09-23). **V0.45 / V0.5** is the next milestone.
 >
-> See [`docs/architecture.md`](architecture.md), [`docs/v02/v02.md`](v02/v02.md), [`docs/v02/items_left_for_v02.md`](v02/items_left_for_v02.md), [`docs/v025/v025.md`](v025/v025.md), [`docs/v025/v025_cleanup.md`](v025/v025_cleanup.md), [`docs/v03/v03.md`](v03/v03.md), [`docs/v03/items_left_for_v03.md`](v03/items_left_for_v03.md), and [`docs/v04/v04.md`](v04/v04.md) for architectural and implementation details.
+> See [`docs/architecture.md`](architecture.md), [`docs/v02/v02.md`](v02/v02.md), [`docs/v02/items_left_for_v02.md`](v02/items_left_for_v02.md), [`docs/v025/v025.md`](v025/v025.md), [`docs/v025/v025_cleanup.md`](v025/v025_cleanup.md), [`docs/v03/v03.md`](v03/v03.md), [`docs/v03/items_left_for_v03.md`](v03/items_left_for_v03.md), [`docs/v04/v04.md`](v04/v04.md), and [`docs/v04/items_left_for_v04.md`](v04/items_left_for_v04.md) for architectural and implementation details.
 
 
 ---
@@ -216,9 +216,9 @@ See [`docs/v03/v03.md`](v03/v03.md) for the complete V0.3 specification and veri
 
 ---
 
-## V0.4 — Fantasy Decision & Optimization Layer (Next Milestone)
+## V0.4 — Fantasy Decision & Optimization Layer
 
-**Status: planned (next milestone).**  
+**Status: completed on 2026-09-23 (`0.4.0`).**  
 **Prerequisite:** V0.3 validated predictive projection layer.  
 **Core boundary:** **V0.3 predicts. V0.4 decides.**
 
