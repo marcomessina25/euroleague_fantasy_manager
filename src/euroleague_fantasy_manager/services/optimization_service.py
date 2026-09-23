@@ -253,24 +253,28 @@ class OptimizationService:
         budget_credits: float = 100.0,
         risk_mode: str = "expected",
         pool: Sequence[PlayerProjectionContract] | None = None,
+        locked_player_ids: Sequence[int] | None = None,
     ) -> list[PlayerProjectionContract]:
-        """Greedy knapsack draft recommendation for pre-season team creation (V0.5 Bridge)."""
+        """Optimal initial squad draft recommendation from scratch or completing locked players."""
         market = list(pool or self.prediction_service.get_projections(season, 1))
         if not market:
             return []
 
-        # Sort market by expected_fp / price_tenths ratio (value density)
-        def _score(c: PlayerProjectionContract) -> float:
-            cost = max(1, c.price_tenths)
-            return (c.expected_fp * 100.0) / cost
+        # Deduplicate market by player_id
+        seen_pids = set()
+        deduped_market: list[PlayerProjectionContract] = []
+        for c in market:
+            if c.player_id not in seen_pids:
+                seen_pids.add(c.player_id)
+                deduped_market.append(c)
+        market = deduped_market
 
-        sorted_pool = sorted(market, key=_score, reverse=True)
+        locked_set = set(locked_player_ids or [])
+        locked_contracts = [c for c in market if c.player_id in locked_set]
 
-        budget_limit_tenths = int(budget_credits * 10)
-        selected: list[PlayerProjectionContract] = []
-        club_counts: dict[int, int] = {}
-        pos_counts: dict[str, int] = {"G": 0, "F": 0, "C": 0, "HC": 0}
-        needed = {"G": 4, "F": 4, "C": 2, "HC": 1}
+        # If user locked all 11 players
+        if len(locked_contracts) >= SQUAD_SIZE:
+            return locked_contracts[:SQUAD_SIZE]
 
         def _pos_code(p: Any) -> str:
             if hasattr(p, "short_code"):
@@ -279,6 +283,105 @@ class OptimizationService:
                 return Position.from_raw(p).short_code
             except Exception:
                 return str(p)
+
+        budget_limit_tenths = int(round(budget_credits * 10))
+
+        # 1. Exact Binary Integer Linear Programming (MILP) with scipy
+        try:
+            import numpy as np
+            from scipy.optimize import Bounds, LinearConstraint, milp
+
+            n = len(market)
+            obj_weights = np.zeros(n)
+            for i, c in enumerate(market):
+                if risk_mode.lower() == "conservative":
+                    val = c.expected_fp - 0.2 * getattr(c, "uncertainty", 0.0)
+                elif risk_mode.lower() == "upside":
+                    val = c.expected_fp + 0.2 * getattr(c, "uncertainty", 0.0)
+                else:
+                    val = c.expected_fp
+                obj_weights[i] = -val  # Minimize negative for maximization
+
+            A_rows = []
+            b_l = []
+            b_u = []
+
+            # Constraint: Budget
+            prices = np.array([float(c.price_tenths) for c in market], dtype=float)
+            A_rows.append(prices)
+            b_l.append(0.0)
+            b_u.append(float(budget_limit_tenths))
+
+            # Constraint: Total squad size = 11
+            A_rows.append(np.ones(n, dtype=float))
+            b_l.append(float(SQUAD_SIZE))
+            b_u.append(float(SQUAD_SIZE))
+
+            # Constraints: Position quotas (4G, 4F, 2C, 1HC)
+            needed_quotas = {"G": 4, "F": 4, "C": 2, "HC": 1}
+            for pos_code, req_quota in needed_quotas.items():
+                row = np.array([1.0 if _pos_code(c.position) == pos_code else 0.0 for c in market], dtype=float)
+                A_rows.append(row)
+                b_l.append(float(req_quota))
+                b_u.append(float(req_quota))
+
+            # Constraints: Club quota (max 6 court players per club)
+            unique_clubs = set(c.team_id or c.team_code for c in market if _pos_code(c.position) != "HC")
+            for club_id in unique_clubs:
+                row = np.array(
+                    [
+                        1.0 if (_pos_code(c.position) != "HC" and (c.team_id or c.team_code) == club_id) else 0.0
+                        for c in market
+                    ],
+                    dtype=float,
+                )
+                A_rows.append(row)
+                b_l.append(0.0)
+                b_u.append(6.0)
+
+            # Constraints: Locked players (x_i = 1)
+            for i, c in enumerate(market):
+                if c.player_id in locked_set:
+                    row = np.zeros(n, dtype=float)
+                    row[i] = 1.0
+                    A_rows.append(row)
+                    b_l.append(1.0)
+                    b_u.append(1.0)
+
+            A_mat = np.array(A_rows)
+            constraints = LinearConstraint(A_mat, b_l, b_u)
+            integrality = np.ones(n)
+            bounds = Bounds(0.0, 1.0)
+
+            res = milp(c=obj_weights, integrality=integrality, constraints=constraints, bounds=bounds)
+            if res.success:
+                selected_indices = np.where(res.x > 0.5)[0]
+                if len(selected_indices) == SQUAD_SIZE:
+                    selected = [market[idx] for idx in selected_indices]
+                    val = validate_squad_constraints(selected, budget_tenths=budget_limit_tenths)
+                    if val.is_valid:
+                        return selected
+        except Exception:
+            pass
+
+        # 2. Greedy Knapsack Heuristic Fallback
+        def _score(c: PlayerProjectionContract) -> float:
+            cost = max(1, c.price_tenths)
+            return (c.expected_fp * 100.0) / cost
+
+        sorted_pool = sorted(market, key=_score, reverse=True)
+        selected = list(locked_contracts)
+        pos_counts: dict[str, int] = {"G": 0, "F": 0, "C": 0, "HC": 0}
+        club_counts: dict[Any, int] = {}
+        for c in selected:
+            p_code = _pos_code(c.position)
+            if p_code in pos_counts:
+                pos_counts[p_code] += 1
+            cid = c.team_id or c.team_code
+            if p_code != "HC" and cid:
+                club_counts[cid] = club_counts.get(cid, 0) + 1
+
+        needed = {"G": 4, "F": 4, "C": 2, "HC": 1}
 
         # Select position requirements
         for pos, quota in needed.items():
@@ -291,24 +394,21 @@ class OptimizationService:
                 if c.player_id in [s.player_id for s in selected]:
                     continue
 
-                # Club constraint (max 6 court players per club)
-                cid = c.team_id or 0
-                if pos != "HC" and club_counts.get(cid, 0) >= 6:
+                cid = c.team_id or c.team_code
+                if pos != "HC" and cid and club_counts.get(cid, 0) >= 6:
                     continue
 
-                # Tentative budget check
                 tentative_cost = sum(s.price_tenths for s in selected) + c.price_tenths
-                # Leave at least 5.0 cr for remaining empty slots
                 remaining_slots = SQUAD_SIZE - (len(selected) + 1)
-                if tentative_cost + (remaining_slots * 50) > budget_limit_tenths:
+                if tentative_cost + (remaining_slots * 40) > budget_limit_tenths:
                     continue
 
                 selected.append(c)
                 pos_counts[pos] += 1
-                if pos != "HC":
+                if pos != "HC" and cid:
                     club_counts[cid] = club_counts.get(cid, 0) + 1
 
-        # If not enough picked due to budget, fill with cheapest available per position
+        # Fill with cheapest per position if needed
         for pos, quota in needed.items():
             while pos_counts[pos] < quota:
                 cheapest = sorted(
@@ -322,6 +422,58 @@ class OptimizationService:
                 pos_counts[pos] += 1
 
         return selected
+
+    def suggest_initial_team(
+        self,
+        season: str = "2026/27",
+        budget_credits: float = 100.0,
+        risk_mode: str = "expected",
+        locked_player_ids: Sequence[int] | None = None,
+        pool: Sequence[PlayerProjectionContract] | None = None,
+    ) -> dict[str, Any]:
+        """Suggest optimal 11-player squad with breakdown and validation for GUI."""
+        locked_set = set(locked_player_ids or [])
+        contracts = self.recommend_initial_team(
+            season=season,
+            budget_credits=budget_credits,
+            risk_mode=risk_mode,
+            pool=pool,
+            locked_player_ids=locked_player_ids,
+        )
+
+        budget_limit_tenths = int(round(budget_credits * 10))
+        val = validate_squad_constraints(contracts, budget_tenths=budget_limit_tenths)
+
+        player_views = []
+        for c in contracts:
+            pos_str = c.position.name if hasattr(c.position, "name") else str(c.position)
+            player_views.append({
+                "player_id": c.player_id,
+                "name": c.player_name,
+                "position": pos_str,
+                "team_code": c.team_code,
+                "price_tenths": c.price_tenths,
+                "credits": round(c.price_tenths / 10.0, 1),
+                "expected_fp": round(c.expected_fp, 2),
+                "probability_play": round(c.probability_play, 2),
+                "is_locked": c.player_id in locked_set,
+                "turn_number": c.turn_number,
+                "opponent_code": c.opponent_code,
+                "is_home": c.is_home,
+            })
+
+        total_cost_tenths = sum(c.price_tenths for c in contracts)
+        total_exp_fp = sum(c.expected_fp for c in contracts)
+
+        return {
+            "suggested_player_ids": [c.player_id for c in contracts],
+            "players": player_views,
+            "total_credits": round(total_cost_tenths / 10.0, 1),
+            "remaining_credits": round((budget_limit_tenths - total_cost_tenths) / 10.0, 1),
+            "expected_total_fp": round(total_exp_fp, 2),
+            "is_valid": val.is_valid,
+            "validation_errors": list(val.errors),
+        }
 
     def _resolve_squad_contracts(
         self,

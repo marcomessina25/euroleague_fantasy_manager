@@ -77,6 +77,20 @@ async function loadTeams() {
       btn.onclick = () => switchTeam(t.team_id);
       container.appendChild(btn);
     });
+
+    // Add Team Button (enforces 3 teams max limit)
+    const addBtn = document.createElement("button");
+    addBtn.className = "btn-add-team";
+    if (state.teams.length >= 3) {
+      addBtn.disabled = true;
+      addBtn.textContent = "+ Add Team (Max 3)";
+      addBtn.title = "Maximum capacity of 3 teams reached";
+    } else {
+      addBtn.textContent = "+ Add Team";
+      addBtn.title = "Create a new fantasy team with initial squad builder";
+      addBtn.onclick = () => openTeamBuilderModal();
+    }
+    container.appendChild(addBtn);
   } catch (err) {
     console.error("Failed to load teams:", err);
   }
@@ -448,3 +462,330 @@ async function triggerScenario() {
     `;
   }
 }
+
+// =========================================================================
+// Initial Team Builder (V0.5)
+// =========================================================================
+let teamBuilderState = {
+  selectedPlayers: [],
+  allPlayers: [],
+  recommendedPlayerIds: [],
+};
+
+async function openTeamBuilderModal() {
+  document.getElementById("team-builder-modal").style.display = "flex";
+  document.getElementById("tb-team-name").value = "";
+  teamBuilderState.selectedPlayers = [];
+  teamBuilderState.recommendedPlayerIds = [];
+
+  // Fetch full player pool for instant search / dropdown if not yet cached
+  if (teamBuilderState.allPlayers.length === 0) {
+    try {
+      const res = await fetch(`/api/workstation/players?season=${state.season}&round_number=1&limit=300`);
+      if (res.ok) {
+        teamBuilderState.allPlayers = await res.json();
+      }
+    } catch (err) {
+      console.error("Failed to fetch market pool:", err);
+    }
+  }
+
+  updateTeamBuilderUI();
+}
+
+function closeTeamBuilderModal() {
+  document.getElementById("team-builder-modal").style.display = "none";
+  hideTeamBuilderDropdown();
+}
+
+function onTeamBuilderSearchInput() {
+  const query = document.getElementById("tb-player-search").value.trim().toLowerCase();
+  const posFilter = document.getElementById("tb-search-pos").value;
+  const dropdown = document.getElementById("tb-search-dropdown");
+
+  if (!query && !posFilter) {
+    dropdown.style.display = "none";
+    dropdown.innerHTML = "";
+    return;
+  }
+
+  const selectedIds = new Set(teamBuilderState.selectedPlayers.map((p) => p.player_id));
+  const filtered = teamBuilderState.allPlayers.filter((p) => {
+    if (selectedIds.has(p.player_id)) return false;
+    if (posFilter && p.position !== posFilter) return false;
+    if (query && !p.name.toLowerCase().includes(query) && !p.team_code.toLowerCase().includes(query)) return false;
+    return true;
+  });
+
+  if (filtered.length === 0) {
+    dropdown.style.display = "block";
+    dropdown.innerHTML = `<div style="padding:0.75rem; color:var(--text-muted); font-size:0.8rem;">No matching players found.</div>`;
+    return;
+  }
+
+  dropdown.style.display = "block";
+  dropdown.innerHTML = "";
+  filtered.slice(0, 15).forEach((p) => {
+    const item = document.createElement("div");
+    item.className = "dropdown-item";
+    item.innerHTML = `
+      <div>
+        <span class="player-pos-badge" style="font-size:0.7rem; margin-right:0.3rem;">${p.position}</span>
+        <strong>${p.name}</strong>
+        <span style="color:var(--text-muted); font-size:0.75rem; margin-left:0.3rem;">(${p.team_code})</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:0.6rem;">
+        <span style="font-size:0.75rem; color:var(--text-muted);">${p.credits} cr</span>
+        <span style="font-size:0.75rem; color:var(--accent-orange); font-weight:700;">${p.expected_fp} FP</span>
+        <button class="btn btn-primary" style="padding:0.2rem 0.5rem; font-size:0.75rem;">+ Add</button>
+      </div>
+    `;
+    item.onclick = (e) => {
+      e.stopPropagation();
+      addPlayerToTeamBuilder(p);
+    };
+    dropdown.appendChild(item);
+  });
+}
+
+function hideTeamBuilderDropdown() {
+  const dropdown = document.getElementById("tb-search-dropdown");
+  if (dropdown) dropdown.style.display = "none";
+}
+
+document.addEventListener("click", (e) => {
+  const searchBox = document.getElementById("tb-player-search");
+  const dropdown = document.getElementById("tb-search-dropdown");
+  if (dropdown && searchBox && !searchBox.contains(e.target) && !dropdown.contains(e.target)) {
+    dropdown.style.display = "none";
+  }
+});
+
+function addPlayerToTeamBuilder(player) {
+  if (teamBuilderState.selectedPlayers.some((p) => p.player_id === player.player_id)) {
+    return;
+  }
+
+  const posCounts = { G: 0, F: 0, C: 0, HC: 0 };
+  teamBuilderState.selectedPlayers.forEach((p) => {
+    posCounts[p.position] = (posCounts[p.position] || 0) + 1;
+  });
+  const maxQuota = { G: 4, F: 4, C: 2, HC: 1 };
+  if ((posCounts[player.position] || 0) >= (maxQuota[player.position] || 0)) {
+    alert(`Position quota for ${player.position} (${maxQuota[player.position]}) already reached.`);
+    return;
+  }
+
+  if (teamBuilderState.selectedPlayers.length >= 11) {
+    alert("Squad is already full (11 players max). Remove a player first.");
+    return;
+  }
+
+  teamBuilderState.selectedPlayers.push({
+    player_id: player.player_id,
+    name: player.name,
+    position: player.position,
+    team_code: player.team_code,
+    credits: player.credits,
+    price_tenths: player.price_tenths,
+    expected_fp: player.expected_fp,
+    is_locked: true,
+  });
+
+  document.getElementById("tb-player-search").value = "";
+  hideTeamBuilderDropdown();
+  updateTeamBuilderUI();
+}
+
+function removePlayerFromTeamBuilder(playerId) {
+  teamBuilderState.selectedPlayers = teamBuilderState.selectedPlayers.filter((p) => p.player_id !== playerId);
+  updateTeamBuilderUI();
+}
+
+function clearTeamBuilderRoster() {
+  teamBuilderState.selectedPlayers = [];
+  teamBuilderState.recommendedPlayerIds = [];
+  updateTeamBuilderUI();
+}
+
+async function suggestOptimalInitialTeam() {
+  const btn = document.getElementById("tb-btn-suggest");
+  btn.disabled = true;
+  btn.textContent = "⏳ Optimizing...";
+
+  const lockedIds = teamBuilderState.selectedPlayers.map((p) => p.player_id);
+  const risk = document.getElementById("tb-opt-risk").value;
+
+  try {
+    const res = await fetch("/api/workstation/initial-team/suggest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        season: state.season,
+        budget_credits: 100.0,
+        risk_mode: risk,
+        locked_player_ids: lockedIds,
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      teamBuilderState.selectedPlayers = data.players;
+      teamBuilderState.recommendedPlayerIds = data.suggested_player_ids;
+      updateTeamBuilderUI();
+    } else {
+      const err = await res.json();
+      alert(`Optimization failed: ${err.detail || "Unable to solve squad"}`);
+    }
+  } catch (err) {
+    console.error("Failed to suggest initial team:", err);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "⚡ Suggest Optimal Squad";
+  }
+}
+
+function updateTeamBuilderUI() {
+  const players = teamBuilderState.selectedPlayers;
+  const name = document.getElementById("tb-team-name").value.trim();
+
+  // Calculate totals
+  const totalCostCredits = players.reduce((sum, p) => sum + (p.credits || 0), 0);
+  const remainingCredits = Math.round((100.0 - totalCostCredits) * 10) / 10;
+  const totalFp = players.reduce((sum, p) => sum + (p.expected_fp || 0), 0);
+
+  // Update Stats Bar
+  document.getElementById("tb-stat-spent").textContent = `${totalCostCredits.toFixed(1)} cr`;
+  const remEl = document.getElementById("tb-stat-remaining");
+  remEl.textContent = `${remainingCredits.toFixed(1)} cr`;
+  remEl.style.color = remainingCredits >= 0 ? "var(--accent-green)" : "var(--accent-red)";
+  document.getElementById("tb-stat-fp").textContent = `${totalFp.toFixed(1)} FP`;
+
+  // Count positions
+  const posCounts = { G: 0, F: 0, C: 0, HC: 0 };
+  const clubCounts = {};
+  players.forEach((p) => {
+    posCounts[p.position] = (posCounts[p.position] || 0) + 1;
+    if (p.position !== "HC" && p.team_code) {
+      clubCounts[p.team_code] = (clubCounts[p.team_code] || 0) + 1;
+    }
+  });
+
+  // Update Quota Badges
+  const formatBadge = (elId, label, count, target) => {
+    const el = document.getElementById(elId);
+    el.textContent = `${label}: ${count}/${target}`;
+    if (count === target) {
+      el.className = "badge badge-green";
+    } else if (count > target) {
+      el.className = "badge badge-red";
+    } else {
+      el.className = "badge";
+    }
+  };
+
+  formatBadge("quota-g", "Guards", posCounts.G, 4);
+  formatBadge("quota-f", "Forwards", posCounts.F, 4);
+  formatBadge("quota-c", "Centers", posCounts.C, 2);
+  formatBadge("quota-hc", "Coach", posCounts.HC, 1);
+
+  const totalEl = document.getElementById("quota-total");
+  totalEl.textContent = `Total: ${players.length}/11`;
+  totalEl.className = players.length === 11 ? "badge badge-green" : "badge badge-gold";
+  document.getElementById("tb-roster-count").textContent = players.length;
+
+  // Validation
+  const errors = [];
+  if (!name) errors.push("Enter team name");
+  if (players.length !== 11) errors.push(`${11 - players.length} player(s) needed`);
+  if (remainingCredits < 0) errors.push(`Exceeds budget by ${Math.abs(remainingCredits).toFixed(1)} cr`);
+  if (posCounts.G !== 4) errors.push(`Needs 4 Guards (current: ${posCounts.G})`);
+  if (posCounts.F !== 4) errors.push(`Needs 4 Forwards (current: ${posCounts.F})`);
+  if (posCounts.C !== 2) errors.push(`Needs 2 Centers (current: ${posCounts.C})`);
+  if (posCounts.HC !== 1) errors.push(`Needs 1 Head Coach (current: ${posCounts.HC})`);
+
+  for (const [club, count] of Object.entries(clubCounts)) {
+    if (count > 6) errors.push(`Max 6 court players per club (${club}: ${count})`);
+  }
+
+  const msgEl = document.getElementById("tb-validation-msg");
+  const createBtn = document.getElementById("tb-btn-create");
+  if (errors.length > 0) {
+    msgEl.textContent = errors.join(" • ");
+    msgEl.style.color = "var(--accent-red)";
+    createBtn.disabled = true;
+  } else {
+    msgEl.textContent = "✓ Squad is complete and legal!";
+    msgEl.style.color = "var(--accent-green)";
+    createBtn.disabled = false;
+  }
+
+  // Render Table
+  const tbody = document.getElementById("tb-roster-tbody");
+  tbody.innerHTML = "";
+  if (players.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--text-muted); padding:1.5rem;">No players added yet. Use search above or click "Suggest Optimal Squad".</td></tr>`;
+    return;
+  }
+
+  const posOrder = { G: 1, F: 2, C: 3, HC: 4 };
+  const sorted = [...players].sort((a, b) => (posOrder[a.position] || 9) - (posOrder[b.position] || 9));
+
+  sorted.forEach((p) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><strong>${p.name}</strong> <span style="color:var(--text-muted);font-size:0.75rem;">(${p.team_code || "UNK"})</span></td>
+      <td><span class="player-pos-badge">${p.position}</span></td>
+      <td>${p.credits} cr</td>
+      <td style="color:var(--accent-orange); font-weight:700;">${p.expected_fp} FP</td>
+      <td><span class="badge ${p.is_locked ? "badge-blue" : "badge-green"}">${p.is_locked ? "🔒 Locked" : "⚡ Suggested"}</span></td>
+      <td>
+        <button class="btn btn-secondary" style="padding:0.2rem 0.5rem; font-size:0.75rem; color:var(--accent-red);" onclick="removePlayerFromTeamBuilder(${p.player_id})">✕ Remove</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+async function submitCreateTeam() {
+  const name = document.getElementById("tb-team-name").value.trim();
+  if (!name) return;
+
+  const playerIds = teamBuilderState.selectedPlayers.map((p) => p.player_id);
+  const recIds = teamBuilderState.recommendedPlayerIds.length > 0 ? teamBuilderState.recommendedPlayerIds : playerIds;
+
+  const btn = document.getElementById("tb-btn-create");
+  btn.disabled = true;
+  btn.textContent = "⏳ Creating Team...";
+
+  try {
+    const res = await fetch("/api/teams", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: name,
+        season: state.season,
+        player_ids: playerIds,
+        recommended_player_ids: recIds,
+      }),
+    });
+
+    if (res.ok) {
+      const createdTeam = await res.json();
+      state.activeTeamId = createdTeam.team_id;
+      closeTeamBuilderModal();
+      await loadTeams();
+      await loadDashboard();
+    } else {
+      const err = await res.json();
+      alert(`Team creation failed: ${err.detail || "Server error"}`);
+      btn.disabled = false;
+      btn.textContent = "✓ Create Team & Enter Workstation";
+    }
+  } catch (err) {
+    console.error("Failed to create team:", err);
+    btn.disabled = false;
+    btn.textContent = "✓ Create Team & Enter Workstation";
+  }
+}
+

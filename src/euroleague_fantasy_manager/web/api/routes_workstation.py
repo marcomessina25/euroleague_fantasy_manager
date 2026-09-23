@@ -95,6 +95,13 @@ class LogDecisionRequest(BaseModel):
     override: bool = False
 
 
+class SuggestInitialTeamRequest(BaseModel):
+    season: str = "2026/27"
+    budget_credits: float = 100.0
+    risk_mode: str = "expected"
+    locked_player_ids: list[int] = Field(default_factory=list)
+
+
 # Endpoints
 @router.get("/dashboard")
 def get_dashboard(
@@ -412,3 +419,21 @@ def list_players_endpoint(
 
     filtered.sort(key=lambda x: -x["expected_fp"])
     return filtered[:limit]
+
+
+@router.post("/initial-team/suggest")
+def suggest_initial_team_endpoint(
+    req: SuggestInitialTeamRequest,
+    optimization_service: OptimizationService = Depends(get_optimization_service),
+) -> dict[str, Any]:
+    """Suggest an optimal initial 11-player squad (from scratch or completing locked players)."""
+    try:
+        return optimization_service.suggest_initial_team(
+            season=req.season,
+            budget_credits=req.budget_credits,
+            risk_mode=req.risk_mode,
+            locked_player_ids=req.locked_player_ids,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+

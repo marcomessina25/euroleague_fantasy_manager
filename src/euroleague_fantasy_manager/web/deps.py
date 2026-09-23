@@ -34,10 +34,14 @@ def get_prediction_service() -> PredictionService:
     return PredictionService(database_path=_db_path)
 
 
-def get_optimization_service() -> OptimizationService:
-    ts = get_team_service()
-    ps = get_prediction_service()
-    return OptimizationService(team_service=ts, prediction_service=ps)
+from fastapi import Depends
+
+
+def get_optimization_service(
+    team_service: TeamService = Depends(get_team_service),
+    prediction_service: PredictionService = Depends(get_prediction_service),
+) -> OptimizationService:
+    return OptimizationService(team_service=team_service, prediction_service=prediction_service)
 
 
 def get_decision_service() -> DecisionService:
@@ -45,11 +49,12 @@ def get_decision_service() -> DecisionService:
     return DecisionService(store=ds)
 
 
-def get_scenario_service() -> ScenarioService:
-    ts = get_team_service()
-    ps = get_prediction_service()
-    opt = get_optimization_service()
-    return ScenarioService(team_service=ts, prediction_service=ps, optimization_service=opt)
+def get_scenario_service(
+    team_service: TeamService = Depends(get_team_service),
+    prediction_service: PredictionService = Depends(get_prediction_service),
+    optimization_service: OptimizationService = Depends(get_optimization_service),
+) -> ScenarioService:
+    return ScenarioService(team_service=team_service, prediction_service=prediction_service, optimization_service=optimization_service)
 
 
 def get_evaluation_service() -> EvaluationService:

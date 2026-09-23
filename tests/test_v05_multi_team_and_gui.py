@@ -457,3 +457,107 @@ def test_fastapi_workstation_endpoints(tmp_path: Path):
     resp_eval = client.get("/api/workstation/evaluation?team_id=web_team&season=2026/27")
     assert resp_eval.status_code == 200
     assert "summary" in resp_eval.json()
+
+
+def test_initial_team_builder_optimization_and_api(tmp_path: Path):
+    """Test initial team suggestion (scratch & partial locked) and team creation via Web API."""
+    db_file = tmp_path / "initial_builder_test.sqlite3"
+    set_db_path(db_file)
+    app = create_app(db_path=db_file)
+    client = TestClient(app)
+
+    ts = TeamService(db_path=db_file)
+    ps = PredictionService(database_path=db_file)
+    opt = OptimizationService(team_service=ts, prediction_service=ps)
+
+    # 1. Direct Optimization Service: Suggest from scratch
+    contracts = _build_test_squad_contracts()
+    cheap_contracts = [
+        PlayerProjectionContract(
+            player_id=500 + i,
+            player_name=f"Cheap Player {i}",
+            position=c.position,
+            team_id=c.team_id,
+            team_code=c.team_code,
+            price_tenths=45 + (i * 2),
+            expected_fp=8.0 + (i * 0.8),
+            probability_play=1.0,
+            expected_minutes=18.0,
+            turn_number=c.turn_number,
+        )
+        for i, c in enumerate(contracts, start=1)
+    ]
+    market_pool = contracts + cheap_contracts
+
+    scratch_recs = opt.recommend_initial_team(pool=market_pool, budget_credits=100.0)
+    assert len(scratch_recs) == 11
+    g_count = sum(1 for c in scratch_recs if c.position == Position.GUARD)
+    f_count = sum(1 for c in scratch_recs if c.position == Position.FORWARD)
+    c_count = sum(1 for c in scratch_recs if c.position == Position.CENTER)
+    hc_count = sum(1 for c in scratch_recs if c.position == Position.HEAD_COACH)
+    assert g_count == 4
+    assert f_count == 4
+    assert c_count == 2
+    assert hc_count == 1
+    assert sum(c.price_tenths for c in scratch_recs) <= 1000
+
+    # 2. Direct Optimization Service: Suggest with locked players
+    locked_pid = contracts[0].player_id  # A specific Guard
+    locked_hc = cheap_contracts[10].player_id  # A Head Coach
+    locked_recs = opt.recommend_initial_team(
+        pool=market_pool,
+        budget_credits=100.0,
+        locked_player_ids=[locked_pid, locked_hc],
+    )
+    assert len(locked_recs) == 11
+    recs_ids = {c.player_id for c in locked_recs}
+    assert locked_pid in recs_ids
+    assert locked_hc in recs_ids
+    assert sum(c.price_tenths for c in locked_recs) <= 1000
+
+    # 3. Web Workstation Endpoint: /api/workstation/initial-team/suggest
+    from euroleague_fantasy_manager.web.deps import get_prediction_service
+    app.dependency_overrides[get_prediction_service] = lambda: ps
+    ps.get_projections = lambda s, r: market_pool
+    ps.get_projections_dict = lambda s, r: {c.player_id: c for c in market_pool}
+
+    resp_sug = client.post("/api/workstation/initial-team/suggest", json={
+        "season": "2026/27",
+        "budget_credits": 100.0,
+        "risk_mode": "expected",
+        "locked_player_ids": [contracts[2].player_id],
+    })
+    assert resp_sug.status_code == 200
+    sug_data = resp_sug.json()
+    assert sug_data["is_valid"] is True
+    assert len(sug_data["players"]) == 11
+    assert contracts[2].player_id in sug_data["suggested_player_ids"]
+    assert sug_data["remaining_credits"] >= 0
+
+    # 4. Web Teams Endpoint: Create Team with Selected Squad & Provenance
+    squad_pids = sug_data["suggested_player_ids"]
+    resp_create = client.post("/api/teams", json={
+        "name": "Panathinaikos Champions",
+        "season": "2026/27",
+        "player_ids": squad_pids,
+        "recommended_player_ids": sug_data["suggested_player_ids"],
+    })
+    assert resp_create.status_code == 200
+    created = resp_create.json()
+    assert created["name"] == "Panathinaikos Champions"
+    assert len(created["squad"]) == 11
+
+    # Verify team is active
+    active = ts.get_active_team()
+    assert active is not None
+    assert active.name == "Panathinaikos Champions"
+
+    # Verify INITIAL_TEAM decision was logged in DecisionStore
+    dec_store = DecisionStore(database_path=db_file)
+    decisions = dec_store.list_decisions(team_id=created["team_id"])
+    assert len(decisions) >= 1
+    init_dec = next((d for d in decisions if d.decision_type == DecisionType.INITIAL_TEAM), None)
+    assert init_dec is not None
+    assert set(init_dec.actual_squad_ids) == set(squad_pids)
+    assert init_dec.recommended_squad_ids is not None
+

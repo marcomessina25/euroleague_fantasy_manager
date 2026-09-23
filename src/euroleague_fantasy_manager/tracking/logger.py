@@ -309,6 +309,7 @@ class DecisionLogger:
         player_metadata: Mapping[int, Any] | None = None,
         provenance: DecisionProvenance | None = None,
         notes: str | None = None,
+        snapshot: StateSnapshot | None = None,
     ) -> DecisionRecord:
         """Record initial season team selection/builder decision."""
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -318,10 +319,14 @@ class DecisionLogger:
         act_squad = tuple(int(x) for x in actual_squad_ids) if actual_squad_ids else rec_squad
 
         snapshot_id: str | None = None
-        squad_to_snap = act_squad or rec_squad
-        if squad_to_snap:
-            snapshot_id = f"snap_init_{season}_{team_id}_{uuid.uuid4().hex[:8]}"
-            player_meta: dict[int, dict[str, Any]] = {}
+        if snapshot:
+            snapshot_id = snapshot.snapshot_id
+            self.store.save_snapshot(snapshot)
+        else:
+            squad_to_snap = act_squad or rec_squad
+            if squad_to_snap:
+                snapshot_id = f"snap_init_{season}_{team_id}_{uuid.uuid4().hex[:8]}"
+                player_meta: dict[int, dict[str, Any]] = {}
             if squad_contracts:
                 for p in squad_contracts:
                     player_meta[p.player_id] = {
