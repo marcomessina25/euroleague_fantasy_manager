@@ -15,12 +15,12 @@ EuroLeague Fantasy & Feeds APIs -> local SQLite snapshots -> rules + validation 
 ## Living roadmap
 
 - [`docs/architecture.md`](docs/architecture.md) defines the purpose, architectural boundaries, and responsibilities of each layer.
-- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1`, `V0.2`, `V0.2.5`, `V0.3`, `V0.4`, and `V0.45` completed; `V0.5` is next).
+- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1`, `V0.2`, `V0.2.5`, `V0.3`, `V0.4`, and `0.4.5` completed; `V0.5` is next).
 - [`docs/specs/v02.md`](docs/specs/v02.md) and [`docs/specs/items_left_for_v02.md`](docs/specs/items_left_for_v02.md) define the **V0.2** heuristic decision-support baseline specification and pre-merge checklist.
 - [`docs/specs/v025.md`](docs/specs/v025.md) and [`docs/specs/v025_cleanup.md`](docs/specs/v025_cleanup.md) define the **V0.2.5** historical evaluation foundation.
 - [`docs/specs/v03.md`](docs/specs/v03.md) and [`docs/specs/items_left_for_v03.md`](docs/specs/items_left_for_v03.md) define the **V0.3** validated predictive projection layer (`0.3.0`) and merge checklist.
 - [`docs/specs/v04.md`](docs/specs/v04.md), [`docs/specs/v04_items_left.md`](docs/specs/v04_items_left.md), and [`docs/specs/items_left_for_v04.md`](docs/specs/items_left_for_v04.md) define the **V0.4** decision and optimization layer (`0.4.0`).
-- [`docs/specs/v045.md`](docs/specs/v045.md) defines the **V0.45** closed-loop evaluation and live decision state (`0.4.5`).
+- [`docs/specs/v045.md`](docs/specs/v045.md) defines **0.4.5** closed-loop evaluation and live decision state (`0.4.5`).
 
 Both human contributors and AI agents must read the relevant living documents before making material changes and update them whenever architecture, scope, priorities, or delivery status changes.
 
@@ -186,7 +186,7 @@ elf optimize backtest --season 2025 --rounds 1:12
 elf backtest --season 2025 --rounds 1:12
 ```
 
-## V0.45 Closed-Loop Evaluation & Decision State (`elf log-decision`, `elf decisions`, `elf update-scores`, `elf evaluate-decisions`)
+## 0.4.5 Closed-Loop Evaluation & Decision State (`elf log-decision`, `elf decisions`, `elf update-scores`, `elf evaluate-decisions`)
 
 Connect the quantitative optimization engine with real managerial actions and realized game outcomes, creating the complete feedback loop (`prediction -> decision -> reality -> regret & evaluation -> improvement`):
 

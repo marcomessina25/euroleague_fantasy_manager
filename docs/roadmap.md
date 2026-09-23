@@ -2,7 +2,7 @@
 
 > **Living document.** This is the source of truth for delivery status, engineering priorities, release criteria, known risks, and long-term direction. Human contributors and AI agents must read it before material work and update it when priorities or milestone status changes.
 >
-> **Current planning baseline:** V0.1, V0.2, V0.2.5, V0.3, V0.4 (`0.4.0`), and **V0.45** (`0.4.5`, Closed-Loop Evaluation & Live Decision State) are completed (2026-09-23). **V0.5** (Multi-Team Management, Local Web GUI, and Initial Team Builder) is the next milestone.
+> **Current planning baseline:** V0.1, V0.2, V0.2.5, V0.3, V0.4 (`0.4.0`), and **0.4.5** (Closed-Loop Evaluation & Live Decision State) are completed (2026-09-23). **V0.5** (Multi-Team Management, Local Web GUI, and Initial Team Builder) is the next milestone.
 >
 > See [`docs/architecture.md`](architecture.md), [`docs/specs/v02.md`](specs/v02.md), [`docs/specs/items_left_for_v02.md`](specs/items_left_for_v02.md), [`docs/specs/v025.md`](specs/v025.md), [`docs/specs/v025_cleanup.md`](specs/v025_cleanup.md), [`docs/specs/v03.md`](specs/v03.md), [`docs/specs/items_left_for_v03.md`](specs/items_left_for_v03.md), [`docs/specs/v04.md`](specs/v04.md), [`docs/specs/v04_items_left.md`](specs/v04_items_left.md), [`docs/specs/items_left_for_v04.md`](specs/items_left_for_v04.md), and [`docs/specs/v045.md`](specs/v045.md) for architectural and implementation details.
 
@@ -273,7 +273,7 @@ See [`docs/specs/v04.md`](specs/v04.md) and [`docs/specs/v04_items_left.md`](spe
 
 ---
 
-## V0.45 — Closed-Loop Evaluation & Live Decision State
+## 0.4.5 — Closed-Loop Evaluation & Live Decision State
 
 **Status: completed on 2026-09-23 (`0.4.5`).**
 
@@ -290,7 +290,7 @@ Connect the quantitative engine to real management decisions and actual outcomes
    - Distinctly logs `recommended_decision` vs `actual_decision` with automated override detection.
 2. **Generic `INITIAL_TEAM` Decision Support (Bridge for V0.5 Initial Team Builder)**:
    - Persists recommended vs actual 11-player squad lists (`recommended_squad_ids`, `actual_squad_ids`) along with pre-season bank and player pricing snapshots.
-   - V0.5 Initial Team Builder will directly consume this interface to log draft recommendations and user overrides without coupling V0.45 to GUI or drafting optimization algorithms.
+   - V0.5 Initial Team Builder will directly consume this interface to log draft recommendations and user overrides without coupling 0.4.5 to GUI or drafting optimization algorithms.
 3. **Deterministic Fantasy Outcome Scoring & Retrospective Regret**:
    - `OutcomeUpdater` ingests realized actual player scores using official EuroLeague Fantasy scoring rules.
    - Calculates regret metrics: `human_regret` (Oracle - Human), `model_regret` (Oracle - Model), `human_vs_model` (Human - Model), `captain_regret`, `sixth_man_regret`, `bench_regret`, `formation_regret`, `turn_sub_regret`, and `transfer_regret`.
@@ -473,7 +473,7 @@ Never allow level 4 to override levels 1–3 silently.
         ↓
 4. V0.4 Lineup & Transfer Optimizer on Validated Projections (`0.4.0`) [Completed]
         ↓
-5. V0.45 Closed-loop Evaluation & Live Decision State (`0.4.5`) [Completed]
+5. 0.4.5 Closed-loop Evaluation & Live Decision State [Completed]
         ↓
 6. V0.5 Multi-team management, local Web GUI & Initial Team Builder [Next Milestone]
         ↓
