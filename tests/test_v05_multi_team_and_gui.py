@@ -165,6 +165,51 @@ def test_multi_team_strict_isolation(tmp_path: Path):
     assert surviving_b.team_id == "team_b"
 
 
+def test_multi_team_coexistence_with_official_teams_table(tmp_path: Path):
+    """Verify TeamStore coexists safely with EuroLeague official club `teams` table without collision."""
+    import sqlite3
+
+    db_file = tmp_path / "euroleague_coexist.sqlite3"
+    with sqlite3.connect(db_file) as conn:
+        conn.execute(
+            """
+            CREATE TABLE teams (
+                snapshot_id INTEGER NOT NULL,
+                id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                short_name TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO teams (snapshot_id, id, name, short_name) VALUES (1, 10, 'Real Madrid', 'RMB');"
+        )
+
+    # Initialize TeamStore on database with existing official clubs table
+    store = TeamStore(db_path=db_file)
+    assert store.list_teams() == []
+
+    # Create managed team and verify it doesn't collide
+    team = store.create_team(Team(team_id="my_team", name="My Fantasy Team", bank_tenths=100))
+    assert team.team_id == "my_team"
+    teams = store.list_teams()
+    assert len(teams) == 1
+    assert teams[0].name == "My Fantasy Team"
+
+    # Verify official clubs table is intact
+    with sqlite3.connect(db_file) as conn:
+        club_rows = conn.execute("SELECT * FROM teams;").fetchall()
+        assert len(club_rows) == 1
+        assert club_rows[0][2] == "Real Madrid"
+
+    # Also verify web app initial team ensure logic works without OperationalError
+    app = create_app(db_path=db_file)
+    client = TestClient(app)
+    resp = client.get("/api/teams")
+    assert resp.status_code == 200
+    assert len(resp.json()) >= 1
+
+
 # 2. Application Services Tests
 def test_team_service_operations_and_config_import(tmp_path: Path):
     db_file = tmp_path / "ts_test.sqlite3"

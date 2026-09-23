@@ -36,7 +36,7 @@ class TeamStore:
         with self._get_connection() as conn:
             conn.executescript(
                 """
-                CREATE TABLE IF NOT EXISTS teams (
+                CREATE TABLE IF NOT EXISTS managed_teams (
                     team_id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
                     mode TEXT NOT NULL DEFAULT 'classic',
@@ -51,7 +51,7 @@ class TeamStore:
                     updated_at TEXT NOT NULL
                 );
 
-                CREATE TABLE IF NOT EXISTS team_squads (
+                CREATE TABLE IF NOT EXISTS managed_team_squads (
                     team_id TEXT NOT NULL,
                     round_number INTEGER NOT NULL,
                     player_id INTEGER NOT NULL,
@@ -67,18 +67,18 @@ class TeamStore:
                     is_coach INTEGER NOT NULL DEFAULT 0,
                     turn_number INTEGER NOT NULL DEFAULT 1,
                     PRIMARY KEY (team_id, round_number, player_id),
-                    FOREIGN KEY (team_id) REFERENCES teams(team_id) ON DELETE CASCADE
+                    FOREIGN KEY (team_id) REFERENCES managed_teams(team_id) ON DELETE CASCADE
                 );
 
-                CREATE INDEX IF NOT EXISTS idx_team_squads_lookup 
-                ON team_squads(team_id, round_number);
+                CREATE INDEX IF NOT EXISTS idx_managed_team_squads_lookup 
+                ON managed_team_squads(team_id, round_number);
                 """
             )
 
     def create_team(self, team: Team) -> Team:
         """Create a new team, enforcing the strict max 3 teams limit."""
         with self._get_connection() as conn:
-            count = conn.execute("SELECT COUNT(*) FROM teams;").fetchone()[0]
+            count = conn.execute("SELECT COUNT(*) FROM managed_teams;").fetchone()[0]
             if count >= MAX_TEAMS:
                 raise ValueError(
                     f"Maximum limit of {MAX_TEAMS} teams reached. Cannot create '{team.team_id}'."
@@ -92,7 +92,7 @@ class TeamStore:
 
             conn.execute(
                 """
-                INSERT INTO teams (
+                INSERT INTO managed_teams (
                     team_id, name, mode, season, round_number, turn_number,
                     bank_tenths, transfers_remaining, settings_json, is_active,
                     created_at, updated_at
@@ -126,7 +126,7 @@ class TeamStore:
         """Retrieve team by ID with current round squad."""
         with self._get_connection() as conn:
             row = conn.execute(
-                "SELECT * FROM teams WHERE team_id = ?;", (team_id,)
+                "SELECT * FROM managed_teams WHERE team_id = ?;", (team_id,)
             ).fetchone()
             if not row:
                 return None
@@ -153,7 +153,7 @@ class TeamStore:
         """List all managed teams (up to 3)."""
         with self._get_connection() as conn:
             rows = conn.execute(
-                "SELECT * FROM teams ORDER BY created_at ASC;"
+                "SELECT * FROM managed_teams ORDER BY created_at ASC;"
             ).fetchall()
             teams = []
             for row in rows:
@@ -187,7 +187,7 @@ class TeamStore:
         with self._get_connection() as conn:
             res = conn.execute(
                 """
-                UPDATE teams SET
+                UPDATE managed_teams SET
                     name = ?,
                     mode = ?,
                     season = ?,
@@ -226,20 +226,20 @@ class TeamStore:
         """Delete a team and its associated squad units."""
         with self._get_connection() as conn:
             res = conn.execute(
-                "DELETE FROM teams WHERE team_id = ?;", (team_id,)
+                "DELETE FROM managed_teams WHERE team_id = ?;", (team_id,)
             )
             if res.rowcount > 0:
                 # If deleted team was active, promote another team to active if available
                 active = conn.execute(
-                    "SELECT team_id FROM teams WHERE is_active = 1;"
+                    "SELECT team_id FROM managed_teams WHERE is_active = 1;"
                 ).fetchone()
                 if not active:
                     first = conn.execute(
-                        "SELECT team_id FROM teams ORDER BY created_at ASC LIMIT 1;"
+                        "SELECT team_id FROM managed_teams ORDER BY created_at ASC LIMIT 1;"
                     ).fetchone()
                     if first:
                         conn.execute(
-                            "UPDATE teams SET is_active = 1 WHERE team_id = ?;",
+                            "UPDATE managed_teams SET is_active = 1 WHERE team_id = ?;",
                             (first["team_id"],),
                         )
                 return True
@@ -249,17 +249,17 @@ class TeamStore:
         """Retrieve the currently selected active team."""
         with self._get_connection() as conn:
             row = conn.execute(
-                "SELECT team_id FROM teams WHERE is_active = 1 LIMIT 1;"
+                "SELECT team_id FROM managed_teams WHERE is_active = 1 LIMIT 1;"
             ).fetchone()
             if not row:
                 first = conn.execute(
-                    "SELECT team_id FROM teams ORDER BY created_at ASC LIMIT 1;"
+                    "SELECT team_id FROM managed_teams ORDER BY created_at ASC LIMIT 1;"
                 ).fetchone()
                 if not first:
                     return None
                 team_id = first["team_id"]
                 conn.execute(
-                    "UPDATE teams SET is_active = 1 WHERE team_id = ?;",
+                    "UPDATE managed_teams SET is_active = 1 WHERE team_id = ?;",
                     (team_id,),
                 )
             else:
@@ -270,13 +270,13 @@ class TeamStore:
         """Set the active team context."""
         with self._get_connection() as conn:
             team_exists = conn.execute(
-                "SELECT 1 FROM teams WHERE team_id = ?;", (team_id,)
+                "SELECT 1 FROM managed_teams WHERE team_id = ?;", (team_id,)
             ).fetchone()
             if not team_exists:
                 raise KeyError(f"Team '{team_id}' does not exist.")
-            conn.execute("UPDATE teams SET is_active = 0;")
+            conn.execute("UPDATE managed_teams SET is_active = 0;")
             conn.execute(
-                "UPDATE teams SET is_active = 1 WHERE team_id = ?;", (team_id,)
+                "UPDATE managed_teams SET is_active = 1 WHERE team_id = ?;", (team_id,)
             )
 
     def save_squad(
@@ -302,13 +302,13 @@ class TeamStore:
         squad: Sequence[TeamRosterUnit],
     ) -> None:
         conn.execute(
-            "DELETE FROM team_squads WHERE team_id = ? AND round_number = ?;",
+            "DELETE FROM managed_team_squads WHERE team_id = ? AND round_number = ?;",
             (team_id, round_number),
         )
         for unit in squad:
             conn.execute(
                 """
-                INSERT INTO team_squads (
+                INSERT INTO managed_team_squads (
                     team_id, round_number, player_id, position, name, team_code,
                     purchase_price_tenths, current_price_tenths,
                     is_starter, is_captain, is_sixth_man, is_bench, is_coach,
@@ -341,7 +341,7 @@ class TeamStore:
     ) -> list[TeamRosterUnit]:
         rows = conn.execute(
             """
-            SELECT * FROM team_squads 
+            SELECT * FROM managed_team_squads 
             WHERE team_id = ? AND round_number = ?
             ORDER BY 
                 CASE position WHEN 'HC' THEN 4 WHEN 'C' THEN 3 WHEN 'F' THEN 2 ELSE 1 END,
