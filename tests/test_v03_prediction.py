@@ -2,6 +2,7 @@
 
 from dataclasses import asdict
 import json
+import math
 from pathlib import Path
 import pytest
 
@@ -499,4 +500,186 @@ def test_v03_leakage_safety(tmp_path: Path) -> None:
     p_before_xpdk = next(r.prediction for r in preds_before["xpdk_calibrated_v03"] if r.player_id == 1001)
     p_after_xpdk = next(r.prediction for r in preds_after["xpdk_calibrated_v03"] if r.player_id == 1001)
     assert p_before_xpdk == p_after_xpdk
+
+
+def test_mathematical_invariants_and_finite_bounds() -> None:
+    """Verify Section 6: Invariants 0 <= P(play) <= 1, E(min)>=0, E(FP) = P*min*rate, finite bounds, HC separation."""
+    for pos in ("G", "F", "C"):
+        feat = _sample_feature_row(position=pos, season_avg_min=24.0, season_avg_fpts=15.0)
+        proj = predict_player_fantasy_points(feat)
+        # 1. Invariants
+        assert 0.0 <= proj.play_probability <= 1.0
+        assert proj.expected_minutes_if_play >= 0.0
+        assert math.isfinite(proj.expected_fp_per_min_if_play)
+        assert math.isfinite(proj.expected_conditional_fp)
+        assert math.isfinite(proj.expected_fantasy_points)
+        assert proj.lower_bound >= 0.0
+        assert proj.lower_bound <= proj.expected_fantasy_points <= proj.upper_bound
+        # E(FP) = P(play) * E(min|play) * E(FP/min|play)
+        cond_calc = round(proj.expected_minutes_if_play * proj.expected_fp_per_min_if_play, 2)
+        assert abs(proj.expected_conditional_fp - cond_calc) <= 0.05
+        uncond_calc = round(proj.play_probability * proj.expected_conditional_fp, 2)
+        assert abs(proj.expected_fantasy_points - uncond_calc) <= 0.05
+
+    # 2. HC projections remain separate (does not use minutes * rate)
+    feat_hc = _sample_feature_row(position="HC", season_avg_fpts=12.0)
+    proj_hc = predict_player_fantasy_points(feat_hc)
+    assert proj_hc.position == "HC"
+    assert proj_hc.play_probability == 1.0
+    assert proj_hc.expected_minutes_if_play == 40.0
+    assert -20.0 <= proj_hc.expected_fantasy_points <= 25.0
+    assert -20.0 <= proj_hc.lower_bound <= proj_hc.upper_bound <= 30.0
+
+    # 3. Unavailable / DNP cases are deterministic
+    feat_out = _sample_feature_row(status="out")
+    proj_out1 = predict_player_fantasy_points(feat_out)
+    proj_out2 = predict_player_fantasy_points(feat_out)
+    assert asdict(proj_out1) == asdict(proj_out2)
+    assert proj_out1.play_probability <= 0.05
+    assert proj_out1.lower_bound == 0.0
+    assert proj_out1.expected_fantasy_points <= 1.5
+
+    # 4. Extreme or zero inputs cannot produce NaN or inf
+    feat_zero = _sample_feature_row(
+        gp=0,
+        season_avg_min=0.0,
+        last5_min=0.0,
+        ewma_min=0.0,
+        season_fp_rate=0.0,
+        ewma_fp_rate=0.0,
+        season_avg_fpts=0.0,
+        ewma_fpts=0.0,
+    )
+    proj_zero = predict_player_fantasy_points(feat_zero)
+    assert math.isfinite(proj_zero.expected_fantasy_points)
+    assert math.isfinite(proj_zero.expected_conditional_fp)
+    assert math.isfinite(proj_zero.sigma)
+    assert not math.isnan(proj_zero.expected_fantasy_points)
+
+
+def test_future_availability_roster_and_blowout_game_leakage(tmp_path: Path) -> None:
+    """Verify Section 3: Future availability, roster, and completed blowout game scores cannot leak into predictions."""
+    db_path = tmp_path / "leakage_advanced.sqlite3"
+    build_historical_dataset(database_path=db_path, seasons=["2024", "2025"], rounds_per_season=6)
+    store = EvaluationDatasetStore(db_path)
+
+    cutoff_r4 = store.get_round_decision_cutoff("E2025", 4)
+    ft_before = build_round_feature_table("E2025", 4, database_path=db_path, decision_cutoff=cutoff_r4)
+    preds_before = predict_round_baselines(
+        ft_before,
+        actual_points_by_player={pid: 0.0 for pid in ft_before},
+        models=("fp_decomposed_v03", "xpdk_calibrated_v03"),
+    )
+
+    # 1. Future availability/status mutation: set Round 5 status to 'injured'
+    # 2. Future roster mutation: change player's team in Round 5
+    # 3. Future blowout: mutate Round 4 game itself to a 130 - 50 blowout margin in eval_games
+    with store._connect() as conn:
+        conn.execute(
+            """
+            UPDATE eval_player_games
+            SET pre_round_status = 'injured', team_id = 99
+            WHERE season = 'E2025' AND round >= 5 AND player_id = 1001
+            """
+        )
+        conn.execute(
+            """
+            UPDATE eval_games
+            SET home_score = 130, away_score = 50
+            WHERE season = 'E2025' AND round = 4
+            """
+        )
+
+    # Re-evaluate Round 4 features and predictions at cutoff_r4
+    ft_after = build_round_feature_table("E2025", 4, database_path=db_path, decision_cutoff=cutoff_r4)
+    preds_after = predict_round_baselines(
+        ft_after,
+        actual_points_by_player={pid: 0.0 for pid in ft_after},
+        models=("fp_decomposed_v03", "xpdk_calibrated_v03"),
+    )
+
+    # Verify that future roster changes, status changes, and future game blowout cannot alter Round 4 prediction
+    p_before = next(r.prediction for r in preds_before["fp_decomposed_v03"] if r.player_id == 1001)
+    p_after = next(r.prediction for r in preds_after["fp_decomposed_v03"] if r.player_id == 1001)
+    assert p_before == p_after
+
+
+def test_expanding_window_calibration_invariants() -> None:
+    """Verify Section 4: Calibration is strictly expanding-window, deterministic, and safe with early/empty samples."""
+    # 1. Round 1 has no prior history -> calibrator has 0 samples and defaults to identity slope=1.0, intercept=0.0
+    empty_cal = fit_out_of_sample_calibrator([], [], method="linear")
+    assert empty_cal.sample_count == 0
+    assert empty_cal.intercept == 0.0
+    assert empty_cal.slope == 1.0
+    assert empty_cal.apply(18.0) == 18.0
+
+    # 2. Expanding window: round 2 uses round 1 data; round 3 uses round 1+2 data
+    preds_r1 = [10.0, 15.0, 20.0, 25.0]
+    acts_r1 = [12.0, 18.0, 22.0, 28.0]
+    cal_r2 = fit_out_of_sample_calibrator(preds_r1, acts_r1, method="linear")
+    assert cal_r2.sample_count == 4
+
+    preds_r2 = [11.0, 16.0, 19.0, 24.0]
+    acts_r2 = [13.0, 17.0, 21.0, 26.0]
+    cal_r3 = fit_out_of_sample_calibrator(preds_r1 + preds_r2, acts_r1 + acts_r2, method="linear")
+    assert cal_r3.sample_count == 8
+
+    # 3. Determinism: fitting identical history yields identical parameters
+    cal_r3_repeat = fit_out_of_sample_calibrator(preds_r1 + preds_r2, acts_r1 + acts_r2, method="linear")
+    assert cal_r3.intercept == cal_r3_repeat.intercept
+    assert cal_r3.slope == cal_r3_repeat.slope
+
+    # 4. Out-of-sample safety: future round 3 observations cannot alter cal_r2
+    assert cal_r2.apply(15.0) == fit_out_of_sample_calibrator(preds_r1, acts_r1, method="linear").apply(15.0)
+
+
+def test_uncertainty_empirical_coverage_and_width(tmp_path: Path) -> None:
+    """Verify Section 5: Measure empirical coverage of prediction intervals and check active vs all players and positions."""
+    db_path = tmp_path / "unc_coverage.sqlite3"
+    build_historical_dataset(database_path=db_path, seasons=["2025"], rounds_per_season=4)
+    store = EvaluationDatasetStore(db_path)
+
+    # Collect predictions with uncertainty intervals across rounds 2..4
+    covered_all: list[bool] = []
+    covered_active: list[bool] = []
+    spreads_by_pos: dict[str, list[float]] = {"G": [], "F": [], "C": []}
+
+    with store._connect() as conn:
+        for rnd in (2, 3, 4):
+            cutoff = store.get_round_decision_cutoff("E2025", rnd)
+            ft = build_round_feature_table("E2025", rnd, database_path=db_path, decision_cutoff=cutoff)
+            actuals = conn.execute(
+                "SELECT player_id, fantasy_points, minutes FROM eval_player_games WHERE season = 'E2025' AND round = ?",
+                (rnd,),
+            ).fetchall()
+            act_map = {int(r["player_id"]): (float(r["fantasy_points"]), float(r["minutes"])) for r in actuals}
+
+            for pid, feat in ft.items():
+                if feat.position == "HC" or pid not in act_map:
+                    continue
+                act_fp, act_min = act_map[pid]
+                proj = predict_player_fantasy_points(feat)
+                is_cov = (proj.lower_bound <= act_fp <= proj.upper_bound)
+                covered_all.append(is_cov)
+                if act_min > 0:
+                    covered_active.append(is_cov)
+                if feat.position in spreads_by_pos:
+                    spreads_by_pos[feat.position].append(proj.prediction_spread)
+
+    # Verify coverage is positive and sensible on unseen rounds
+    assert len(covered_all) > 0
+    cov_all_rate = sum(covered_all) / len(covered_all)
+    cov_act_rate = sum(covered_active) / len(covered_active)
+
+    # The empirical prediction interval targets ~80% coverage; out-of-sample coverage should be within reasonable bounds
+    assert 0.65 <= cov_all_rate <= 1.0
+    assert 0.65 <= cov_act_rate <= 1.0
+
+    # Verify interval spreads are positive and finite for all court positions
+    for pos, spreads in spreads_by_pos.items():
+        assert len(spreads) > 0
+        assert all(s > 0 for s in spreads)
+        avg_spread = sum(spreads) / len(spreads)
+        assert 5.0 <= avg_spread <= 35.0
+
 

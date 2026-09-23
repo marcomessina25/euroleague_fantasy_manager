@@ -4,7 +4,7 @@
 >
 > **Current planning baseline:** V0.1, V0.2, V0.2.5, and V0.3 (`0.3.0`) are completed (2026-09-23). **V0.4** (Lineup & Transfer Optimizer on Validated Projections) is the single next milestone.
 >
-> See [`docs/architecture.md`](architecture.md), [`docs/v02/v02.md`](v02/v02.md), [`docs/v02/items_left_for_v02.md`](v02/items_left_for_v02.md), [`docs/v025/v025.md`](v025/v025.md), [`docs/v025/v025_cleanup.md`](v025/v025_cleanup.md), and [`docs/v03/v03.md`](v03/v03.md) for architectural and implementation details.
+> See [`docs/architecture.md`](architecture.md), [`docs/v02/v02.md`](v02/v02.md), [`docs/v02/items_left_for_v02.md`](v02/items_left_for_v02.md), [`docs/v025/v025.md`](v025/v025.md), [`docs/v025/v025_cleanup.md`](v025/v025_cleanup.md), [`docs/v03/v03.md`](v03/v03.md), [`docs/v03/items_left_for_v03.md`](v03/items_left_for_v03.md), and [`docs/v04/v04.md`](v04/v04.md) for architectural and implementation details.
 
 
 ---
@@ -216,59 +216,55 @@ See [`docs/v03/v03.md`](v03/v03.md) for the complete V0.3 specification and veri
 
 ---
 
-## V0.35 / V0.4 — Optimization on validated projections
+## V0.4 — Fantasy Decision & Optimization Layer (Next Milestone)
 
-**Status: planned.**
+**Status: planned (next milestone).**  
+**Prerequisite:** V0.3 validated predictive projection layer.  
+**Core boundary:** **V0.3 predicts. V0.4 decides.**
 
 ### Objective
 
-Use the validated projection layer to improve fantasy decisions.
+Turn V0.3 projections into optimal fantasy decisions under the actual EuroLeague Fantasy rules and constraints.
 
-### Scope
-
-- Exact/more efficient trade optimization.
-- Multi-player trade bundles.
-- Unlimited Trade Window solver.
-- Multi-round rolling planner.
-- Future fixture horizon.
-- Capital-gain-aware planning.
-- Risk-aware objectives.
-- Portfolio-style roster evaluation.
-
-### Important design rule
-
-Do not introduce Branch-and-Bound simply because the roadmap says so.
-
-First measure the actual search space.
-
-The current single-round 10-player lineup problem is small enough for exhaustive enumeration. More advanced solvers should be introduced where multi-round or multi-trade combinatorics justify them.
-
----
-
-## V0.4 — Exact Intra-Turn Decision Engine
-
-**Status: planned.**
-
-### Scope
-
-- Exact Turn 1 -> Turn 2 substitution optimizer.
-- Legal formation transitions.
-- Captain switches.
-- Sixth-Man transitions.
-- Bench ordering.
-- Realized T1 score handling.
-- T2/T3 unplayed player handling.
-- Decision logging.
-- Post-round outcome logging.
-- Turn-sub regret.
-
-### Target interface
-
-```bash
-elf turn-subs
+```text
+V0.3 projections
+  ├─ expected FP
+  ├─ uncertainty
+  ├─ P(play)
+  ├─ expected minutes
+  └─ value
+        ↓
+Decision engine (V0.4)
+  ├─ legal lineup
+  ├─ formation
+  ├─ captain
+  ├─ sixth man
+  ├─ bench
+  ├─ transfers
+  └─ future-round planning
+        ↓
+Historical decision backtest
+        ↓
+Oracle regret
 ```
 
-The engine should enumerate legal decisions rather than relying on a greedy pairwise heuristic.
+### Scope
+
+1. **Prediction Contract & Separation**:
+   - The optimizer consumes a clean projection contract (`PlayerProjection`: `player_id`, `expected_fp`, `probability_play`, `expected_minutes`, `fp_per_minute`, `uncertainty`, `price`, `position`, `team_id`) without coupling to internal modeling details.
+2. **Deterministic Constraint Layer**:
+   - Exact enforcement of squad (11 units: 4G, 4F, 2C, 1HC), budget, club limits (max 3 players from same club), legal court formations (`2-2-1`, `1-2-2`, `2-1-2`, `1-3-1`, `3-1-1`), and transfer limits (`1..4` trades or unlimited windows).
+3. **Joint Lineup Optimizer**:
+   - Starting 5 (`1.0x`), Captain (`2.0x`), Sixth Man (`1.0x`), and 4 Bench units (`0.5x`) optimized under official scoring rules rather than raw expectation sums.
+4. **Intra-Round Decisions & Substitutions**:
+   - Exact Turn 1 $\to$ Turn 2 substitution optimizer (`elf turn-subs`), formation transitions, captain switches, and unplayed T2/T3 player handling.
+5. **Transfer Optimization**:
+   - Optimal legal `1..4` trade alternatives with capital-gain-aware selling prices (`0%` sell-on tax).
+6. **Historical Decision Backtesting & Oracle Regret**:
+   - Multi-round decision logging, realization tracking, and hindsight oracle regret evaluation.
+
+See [`docs/v04/v04.md`](v04/v04.md) for the complete V0.4 specification.
+
 
 ---
 

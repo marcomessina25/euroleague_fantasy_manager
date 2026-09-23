@@ -18,7 +18,8 @@ EuroLeague Fantasy & Feeds APIs -> local SQLite snapshots -> rules + validation 
 - [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1`, `V0.2`, `V0.2.5`, and `V0.3` completed; `V0.4` is the next milestone).
 - [`docs/v02/v02.md`](docs/v02/v02.md) and [`docs/v02/items_left_for_v02.md`](docs/v02/items_left_for_v02.md) define the **V0.2** heuristic decision-support baseline specification and pre-merge checklist.
 - [`docs/v025/v025.md`](docs/v025/v025.md) and [`docs/v025/v025_cleanup.md`](docs/v025/v025_cleanup.md) define the **V0.2.5** historical evaluation foundation.
-- [`docs/v03/v03.md`](docs/v03/v03.md) defines the **V0.3** validated predictive projection layer (`0.3.0`).
+- [`docs/v03/v03.md`](docs/v03/v03.md) and [`docs/v03/items_left_for_v03.md`](docs/v03/items_left_for_v03.md) define the **V0.3** validated predictive projection layer (`0.3.0`) and merge checklist.
+- [`docs/v04/v04.md`](docs/v04/v04.md) defines the **V0.4** decision and optimization layer.
 
 Both human contributors and AI agents must read the relevant living documents before making material changes and update them whenever architecture, scope, priorities, or delivery status changes.
 
