@@ -2,7 +2,7 @@
 
 A deterministic, local-first **EuroLeague Fantasy Challenge (Classic Mode)** decision engine for the 2026/27 season (`E2026`), architected to share its core engine with **EuroCup Fantasy Challenge** (`U2026`).
 
-![Version](https://img.shields.io/badge/Version-0.4.5-purple) ![Python](https://img.shields.io/badge/Python-3.12-blue) ![License](https://img.shields.io/badge/License-MIT-green)
+![Version](https://img.shields.io/badge/Version-0.5.0-purple) ![Python](https://img.shields.io/badge/Python-3.12-blue) ![License](https://img.shields.io/badge/License-MIT-green)
 
 ---
 
@@ -15,7 +15,7 @@ EuroLeague Fantasy & Feeds APIs -> local SQLite snapshots -> rules + validation 
 ## Living roadmap
 
 - [`docs/architecture.md`](docs/architecture.md) defines the purpose, architectural boundaries, and responsibilities of each layer.
-- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1`, `V0.2`, `V0.2.5`, `V0.3`, `V0.4`, and `0.4.5` completed; `V0.5` is next).
+- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1`, `V0.2`, `V0.2.5`, `V0.3`, `V0.4`, `0.4.5`, and `V0.5` completed; `V0.6` is next).
 - [`docs/specs/v02.md`](docs/specs/v02.md) and [`docs/specs/items_left_for_v02.md`](docs/specs/items_left_for_v02.md) define the **V0.2** heuristic decision-support baseline specification and pre-merge checklist.
 - [`docs/specs/v025.md`](docs/specs/v025.md) and [`docs/specs/v025_cleanup.md`](docs/specs/v025_cleanup.md) define the **V0.2.5** historical evaluation foundation.
 - [`docs/specs/v03.md`](docs/specs/v03.md) and [`docs/specs/items_left_for_v03.md`](docs/specs/items_left_for_v03.md) define the **V0.3** validated predictive projection layer (`0.3.0`) and merge checklist.
@@ -228,7 +228,49 @@ Evaluate human decisions against model recommendations and hindsight oracles, re
 elf evaluate-decisions --team my_team --csv reports/decisions/summary.csv
 ```
 
+## V0.5 Multi-Team Management & Local Web GUI Workstation (`elf gui`, `elf team`)
+
+Manage up to 3 isolated EuroLeague Fantasy Classic teams and operate with a unified, local-first interactive browser workstation built on FastAPI:
+
+### 1. Multi-Team CLI Management
+
+Create, list, inspect, select active profiles, and import squads for up to 3 isolated teams:
+
+```powershell
+# List existing teams
+elf team list
+
+# Create a new team profile
+elf team create --id team_alpha --name "Alpha Contender" --season 2026/27 --bank 15.0
+
+# Set active context
+elf team select team_alpha
+
+# Show full team profile and roster
+elf team show --id team_alpha
+```
+
+### 2. Launch Local Web GUI Workstation
+
+Start the local workstation and automatically open the interactive court dashboard in your default browser:
+
+```powershell
+elf gui --open-browser
+# Custom host/port:
+elf gui --host 127.0.0.1 --port 8080 --open-browser
+```
+
+### 3. Workstation Core Features
+
+- **Interactive Half-Court Lineup View**: Visual court displaying Starters, Captain ($2.0\times$), Sixth Man ($1.0\times$), Bench ($0.5\times$), and Head Coach ($1.0\times$) with real-time projections, turns, opponent difficulty, and court formations (`2-2-1`, `1-2-2`, `2-1-2`, `1-3-1`, `3-1-1`).
+- **T1 $\to$ T2 Turn Substitution Simulator**: Input realized Turn 1 scores to immediately calculate and visualize optimal bench promotions and captain switches with expected net gain ($\Delta \text{FP}$).
+- **Trade Studio & Unlimited Trade Window Planner**: Explore 1..4 legal trade combinations and overhaul plans with real-time budget, quota, and squad legality validation.
+- **Multi-Round Strategic Beam Search**: Inspect multi-round planning roadmaps over horizons $N=2..4$ rounds with customizable discount factor ($\gamma$).
+- **Evaluation Hub & Regret Analysis**: Retrospective performance reporting human vs model vs hindsight oracle, component regrets (captain, sixth man, bench, formation), and rolling prediction accuracy.
+- **Disposable What-If Scenario Sandbox**: Ephemeral simulation sandbox to rule out injured players or test aggressive risk modes without altering persistent team state.
+
 ## License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details. You are free to use, modify, and reproduce this software with attribution to Marco Messina.
+
 

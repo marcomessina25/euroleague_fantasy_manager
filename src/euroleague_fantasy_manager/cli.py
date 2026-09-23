@@ -512,6 +512,32 @@ def build_parser() -> argparse.ArgumentParser:
     eval_dec_parser.add_argument("--csv", type=Path, default=None, help="Export round-by-round metrics to CSV path.")
     eval_dec_parser.add_argument("--json", action="store_true", help="Output JSON evaluation summary.")
 
+    # V0.5 Workstation GUI and Multi-Team Commands
+    gui_parser = subparsers.add_parser("gui", help="Launch the local EuroLeague Fantasy Web Workstation.")
+    gui_parser.add_argument("--host", type=str, default="127.0.0.1", help="Host address (default: 127.0.0.1).")
+    gui_parser.add_argument("--port", type=int, default=8000, help="Port (default: 8000).")
+    gui_parser.add_argument("--open-browser", action="store_true", help="Open workstation in browser on launch.")
+
+    team_parser = subparsers.add_parser("team", help="Manage multi-team profiles (up to 3 teams).")
+    team_sub = team_parser.add_subparsers(dest="team_command", required=True)
+
+    team_sub.add_parser("list", help="List all managed teams.")
+
+    t_create = team_sub.add_parser("create", help="Create a new team.")
+    t_create.add_argument("--id", required=True, type=str, help="Team ID (e.g. team_1).")
+    t_create.add_argument("--name", required=True, type=str, help="Team name.")
+    t_create.add_argument("--season", type=str, default="2026/27", help="Season.")
+    t_create.add_argument("--bank", type=int, default=0, help="Bank in tenths.")
+
+    t_show = team_sub.add_parser("show", help="Show team details and squad.")
+    t_show.add_argument("--id", type=str, default=None, help="Team ID (default: active team).")
+
+    t_select = team_sub.add_parser("select", help="Set active team.")
+    t_select.add_argument("--id", required=True, type=str, help="Team ID to activate.")
+
+    t_del = team_sub.add_parser("delete", help="Delete a team.")
+    t_del.add_argument("--id", required=True, type=str, help="Team ID to delete.")
+
     return parser
 
 
@@ -1000,6 +1026,98 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             print(summary.to_markdown())
         return 0
+
+    if args.command == "gui":
+        from .web.app import run_server
+
+        run_server(
+            host=args.host,
+            port=args.port,
+            open_browser=args.open_browser,
+            db_path=args.db,
+        )
+        return 0
+
+    if args.command == "team":
+        from .multi_team.store import TeamStore
+        from .services.team_service import TeamService
+
+        store = TeamStore(db_path=args.db)
+        ts = TeamService(store=store)
+
+        if args.team_command == "list":
+            teams = ts.list_teams()
+            if not teams:
+                print("No teams found in database.")
+                return 0
+            active = ts.get_active_team()
+            active_id = active.team_id if active else None
+            print(f"{'ID':<12} {'Name':<25} {'Season':<10} {'Round':<6} {'Bank':<8} {'Active':<6}")
+            print("-" * 70)
+            for t in teams:
+                is_act = "✓" if t.team_id == active_id else ""
+                bank_cr = f"{t.bank_tenths / 10.0:.1f} cr"
+                print(f"{t.team_id:<12} {t.name:<25} {t.season:<10} {t.round_number:<6} {bank_cr:<8} {is_act:<6}")
+            return 0
+
+        if args.team_command == "create":
+            try:
+                team = ts.create_team(
+                    team_id=args.id,
+                    name=args.name,
+                    season=args.season,
+                    bank_tenths=args.bank,
+                )
+                print(f"Created team '{team.team_id}' ({team.name})")
+                return 0
+            except ValueError as e:
+                print(f"Error: {e}")
+                return 1
+
+        if args.team_command == "show":
+            target_id = args.id
+            if not target_id:
+                act = ts.get_active_team()
+                if not act:
+                    print("No active team found.")
+                    return 1
+                target_id = act.team_id
+            try:
+                team = ts.get_team(target_id)
+            except KeyError:
+                print(f"Team '{target_id}' not found.")
+                return 1
+            print(f"Team: {team.name} [{team.team_id}]")
+            print(f"Season: {team.season} | Round: {team.round_number} | Turn: {team.turn_number}")
+            print(f"Bank: {team.bank_tenths / 10.0:.1f} cr | Squad Value: {team.total_squad_value_tenths / 10.0:.1f} cr")
+            print(f"Roster ({len(team.squad)} units):")
+            for u in team.squad:
+                roles = []
+                if u.is_starter: roles.append("Starter")
+                if u.is_captain: roles.append("CAP 2x")
+                if u.is_sixth_man: roles.append("6TH 1x")
+                if u.is_bench: roles.append("BNCH 0.5x")
+                if u.is_coach: roles.append("HC 1x")
+                role_str = f"[{', '.join(roles)}]" if roles else ""
+                print(f"  {u.position:<3} {u.player_id:<6} {u.name:<22} {u.current_price_tenths / 10.0:>5.1f} cr {role_str}")
+            return 0
+
+        if args.team_command == "select":
+            try:
+                ts.set_active_team(args.id)
+                print(f"Active team set to '{args.id}'")
+                return 0
+            except KeyError:
+                print(f"Team '{args.id}' not found.")
+                return 1
+
+        if args.team_command == "delete":
+            deleted = ts.delete_team(args.id)
+            if deleted:
+                print(f"Deleted team '{args.id}'")
+            else:
+                print(f"Team '{args.id}' not found.")
+            return 0
 
     return 0
 

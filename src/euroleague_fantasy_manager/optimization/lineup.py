@@ -354,7 +354,7 @@ def brute_force_exhaustive_lineup(
     best_key: tuple[float, float, int, int, int, tuple[int, ...]] | None = None
 
     for num_g, num_f, num_c in sorted(LEGAL_COURT_FORMATIONS):
-        formation_str = f"({num_g},{num_f},{num_c})"
+        formation_str = f"{num_g}-{num_f}-{num_c}"
         for g_combo in combinations(guards, num_g):
             for f_combo in combinations(forwards, num_f):
                 for c_combo in combinations(centers, num_c):

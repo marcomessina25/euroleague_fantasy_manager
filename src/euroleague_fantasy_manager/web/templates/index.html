@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EuroLeague Fantasy Workstation</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+  <!-- Top Header -->
+  <header>
+    <div class="brand">
+      <span style="font-size:1.5rem;">🏀</span>
+      <h1>EuroLeague Fantasy Workstation</h1>
+      <span class="badge-version">v0.5.0</span>
+    </div>
+
+    <div class="header-controls">
+      <!-- Team Profile Tabs (up to 3) -->
+      <div class="team-tabs" id="team-tabs-container">
+        <!-- Rendered via JS -->
+      </div>
+
+      <!-- Live KPI Stats Bar -->
+      <div class="stats-bar">
+        <div class="stat-item">
+          <span class="stat-label">Round</span>
+          <span class="stat-val" id="round-badge">R1</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Bank</span>
+          <span class="stat-val" id="stat-bank">-- cr</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Squad Value</span>
+          <span class="stat-val" id="stat-value">-- cr</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Projected Total</span>
+          <span class="stat-val" id="stat-score" style="color:var(--accent-orange);">-- FP</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Formation</span>
+          <span class="stat-val" id="stat-formation">--</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Navigation Bar -->
+  <nav class="main-nav">
+    <button class="nav-btn active" data-target="dashboard">🏀 Court & Lineup</button>
+    <button class="nav-btn" data-target="turn-sub">🔄 T1 → T2 Simulator</button>
+    <button class="nav-btn" data-target="trade-studio">💼 Trade Studio & Unlimited</button>
+    <button class="nav-btn" data-target="multi-round">🗺️ Multi-Round Planner</button>
+    <button class="nav-btn" data-target="evaluation">📊 Evaluation Hub</button>
+    <button class="nav-btn" data-target="scenarios">🧪 What-If Sandbox</button>
+  </nav>
+
+  <main>
+    <!-- 1. Court & Lineup Dashboard View -->
+    <section id="dashboard" class="view-section active">
+      <div class="dashboard-grid">
+        <!-- Left: Half Court Visualizer -->
+        <div class="card">
+          <div class="card-header">
+            <h2>🏀 Starting Five (Court Layout)</h2>
+            <div id="provenance-badges"></div>
+          </div>
+
+          <div class="court-container">
+            <div class="court-lines">
+              <div class="court-paint"></div>
+              <div class="court-circle"></div>
+              <div class="court-arc"></div>
+              <div class="court-hoop"></div>
+              <div class="court-backboard"></div>
+            </div>
+
+            <div class="court-players" id="court-starters">
+              <!-- Starters rendered via JS -->
+            </div>
+          </div>
+
+          <div class="card-header" style="margin-top:0.5rem;">
+            <h2>Sixth Man (1.0x), Bench (0.5x) & Head Coach (1.0x)</h2>
+          </div>
+          <div class="bench-section" id="bench-units">
+            <!-- Bench units rendered via JS -->
+          </div>
+        </div>
+
+        <!-- Right: Optimization & Alternatives Panel -->
+        <div style="display:flex; flex-direction:column; gap:1.5rem;">
+          <div class="card">
+            <div class="card-header">
+              <h2>⚙️ Lineup Optimizer</h2>
+            </div>
+            <div class="form-group">
+              <label for="opt-risk-mode">Risk Strategy Mode</label>
+              <select id="opt-risk-mode">
+                <option value="expected" selected>Expected (Maximize E[FP])</option>
+                <option value="conservative">Conservative (Penalize Uncertainty)</option>
+                <option value="upside">Upside (Seek Prediction Ceiling)</option>
+              </select>
+            </div>
+            <button class="btn btn-primary" onclick="triggerOptimizeLineup()">🚀 Run Optimizer</button>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h2>📋 Alternative Lineups</h2>
+            </div>
+            <div id="alternatives-list">
+              <!-- Alternatives rendered via JS -->
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. T1 -> T2 Turn Simulator -->
+    <section id="turn-sub" class="view-section">
+      <div class="card">
+        <div class="card-header">
+          <h2>🔄 Intra-Round Turn 1 → Turn 2 Substitution Simulator</h2>
+        </div>
+        <p style="font-size:0.85rem; color:var(--text-muted);">
+          Enter realized Turn 1 fantasy points for completed games. The simulator conditions on observed outcomes and identifies the optimal substitutions and captain switch with incremental net gains.
+        </p>
+
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:1rem; margin-top:1rem;" id="t1-inputs-container">
+          <div class="form-group">
+            <label>Observed Turn 1 Player ID</label>
+            <input type="number" placeholder="Player ID (e.g. 3765)" id="sim-pid-1">
+            <label style="margin-top:0.3rem;">Realized Score</label>
+            <input type="number" step="0.1" placeholder="Score (e.g. 14.2)" class="t1-score-input" data-pid="3765">
+          </div>
+          <div class="form-group">
+            <label>Observed Turn 1 Player ID</label>
+            <input type="number" placeholder="Player ID (e.g. 3795)" id="sim-pid-2">
+            <label style="margin-top:0.3rem;">Realized Score</label>
+            <input type="number" step="0.1" placeholder="Score (e.g. 8.5)" class="t1-score-input" data-pid="3795">
+          </div>
+        </div>
+
+        <button class="btn btn-primary" style="margin-top:1rem;" onclick="runTurnSubSimulator()">⚡ Recalculate Optimal Actions</button>
+        <div id="turn-sub-results" class="card" style="display:none; margin-top:1rem; border-color:var(--accent-orange);"></div>
+      </div>
+    </section>
+
+    <!-- 3. Trade Studio & Unlimited Wildcard -->
+    <section id="trade-studio" class="view-section">
+      <div class="card">
+        <div class="card-header">
+          <h2>💼 Trade Studio & Market Browser</h2>
+        </div>
+
+        <div style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap;">
+          <div class="form-group">
+            <label>Position Filter</label>
+            <select id="market-filter-pos" onchange="loadPlayerPool()">
+              <option value="">All Positions</option>
+              <option value="G">Guard (G)</option>
+              <option value="F">Forward (F)</option>
+              <option value="C">Center (C)</option>
+              <option value="HC">Head Coach (HC)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Player or Team Search</label>
+            <input type="text" id="market-filter-search" placeholder="Search name/club..." oninput="loadPlayerPool()">
+          </div>
+          <div style="margin-left:auto;">
+            <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.85rem; font-weight:600;">
+              <input type="checkbox" id="unlimited-window-toggle"> 🌟 Unlimited Trade Window (Overhaul)
+            </label>
+          </div>
+        </div>
+
+        <div style="margin-top:1rem; display:flex; gap:0.5rem; align-items:center;" id="selected-trades-container">
+          <span style="font-size:0.85rem; color:var(--text-muted);">Transfers In:</span>
+          <div id="selected-trades-in"></div>
+        </div>
+
+        <div style="overflow-x:auto; margin-top:1rem;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Player / Club</th>
+                <th>Position</th>
+                <th>Price</th>
+                <th>Exp FP</th>
+                <th>FP / Credit</th>
+                <th>Turn</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="player-pool-tbody">
+              <!-- Rendered via JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. Multi-Round Planner -->
+    <section id="multi-round" class="view-section">
+      <div class="card">
+        <div class="card-header">
+          <h2>🗺️ Multi-Round Transfer Planner (Beam Search)</h2>
+        </div>
+        <p style="font-size:0.85rem; color:var(--text-muted);">
+          Evaluate trade pathways over a rolling horizon (2..4 rounds) with strategic discounting.
+        </p>
+        <div style="display:flex; gap:1rem; margin-top:1rem; align-items:flex-end;">
+          <div class="form-group">
+            <label>Horizon (Rounds)</label>
+            <select id="mr-horizon">
+              <option value="2">2 Rounds</option>
+              <option value="3" selected>3 Rounds</option>
+              <option value="4">4 Rounds</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Discount Factor (γ)</label>
+            <input type="number" step="0.05" min="0.5" max="1.0" value="0.95" id="mr-gamma">
+          </div>
+          <button class="btn btn-primary" onclick="triggerMultiRound()">🚀 Run Multi-Round Planner</button>
+        </div>
+
+        <div id="multi-round-steps" style="margin-top:1.5rem;">
+          <!-- Multi-round steps rendered via JS -->
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. Evaluation Hub -->
+    <section id="evaluation" class="view-section">
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:1rem;">
+        <div class="card" style="text-align:center;">
+          <span class="stat-label">Model Win Rate vs Manager</span>
+          <span class="stat-val" id="eval-win-rate" style="font-size:1.5rem; color:var(--accent-green);">--%</span>
+        </div>
+        <div class="card" style="text-align:center;">
+          <span class="stat-label">Avg Human Regret</span>
+          <span class="stat-val" id="eval-human-regret" style="font-size:1.5rem; color:var(--accent-red);">-- FP</span>
+        </div>
+        <div class="card" style="text-align:center;">
+          <span class="stat-label">Avg Model Regret</span>
+          <span class="stat-val" id="eval-model-regret" style="font-size:1.5rem; color:var(--accent-gold);">-- FP</span>
+        </div>
+        <div class="card" style="text-align:center;">
+          <span class="stat-label">Overall Prediction MAE</span>
+          <span class="stat-val" id="eval-mae" style="font-size:1.5rem; color:var(--accent-blue);">--</span>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:1.5rem;">
+        <div class="card-header">
+          <h2>📊 Decision History & Regret Breakdown</h2>
+        </div>
+        <div style="overflow-x:auto;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Round/Turn</th>
+                <th>Status</th>
+                <th>Rec Score</th>
+                <th>Actual Score</th>
+                <th>Oracle Score</th>
+                <th>Human Regret</th>
+                <th>Captain Regret</th>
+              </tr>
+            </thead>
+            <tbody id="eval-history-tbody">
+              <!-- Rendered via JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 6. What-If Sandbox -->
+    <section id="scenarios" class="view-section">
+      <div class="card">
+        <div class="card-header">
+          <h2>🧪 What-If Ephemeral Scenario Sandbox</h2>
+        </div>
+        <p style="font-size:0.85rem; color:var(--text-muted);">
+          Simulate hypothetical situations (injuries, rule-outs, risk strategy shifts). Changes are computed in ephemeral memory and <strong>never mutate persistent team state</strong> until explicitly saved.
+        </p>
+
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1rem; margin-top:1rem;">
+          <div class="form-group">
+            <label>Rule Out Player IDs (Comma-separated)</label>
+            <input type="text" id="scen-rule-out" placeholder="e.g. 3765, 3770">
+          </div>
+          <div class="form-group">
+            <label>Risk Mode Override</label>
+            <select id="scen-risk">
+              <option value="">(Keep Baseline)</option>
+              <option value="conservative">Conservative</option>
+              <option value="upside">Upside</option>
+            </select>
+          </div>
+        </div>
+
+        <button class="btn btn-primary" style="margin-top:1rem;" onclick="triggerScenario()">🔬 Run What-If Simulation</button>
+        <div id="scenario-results" class="card" style="display:none; margin-top:1rem; border-color:var(--accent-purple);"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
