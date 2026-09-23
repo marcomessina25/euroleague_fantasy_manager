@@ -42,6 +42,20 @@ from .squad_report import generate_squad_report
 from .squad_state import load_current_squad
 from .storage import SnapshotStore
 from .suggest_transfers import suggest_trades
+from .tracking import (
+    ClosedLoopEvaluator,
+    DecisionLogger,
+    DecisionOutcome,
+    DecisionProvenance,
+    DecisionRecord,
+    DecisionStore,
+    DecisionType,
+    OutcomeStatus,
+    OutcomeUpdater,
+    export_closed_loop_csv,
+    format_decision_detail,
+    format_decisions_table,
+)
 from .transfers import parse_trade_specs, validate_trades
 
 
@@ -440,6 +454,64 @@ def build_parser() -> argparse.ArgumentParser:
     _add_backtest_args(opt_sub.add_parser("backtest", help="Backtest decision optimizer against historical rounds and oracle regret."))
     _add_backtest_args(subparsers.add_parser("backtest", help="Backtest decision optimizer against historical rounds and oracle regret."))
 
+    # V0.45 Closed-Loop Tracking & Evaluation Commands
+    log_dec_parser = subparsers.add_parser(
+        "log-decision",
+        help="Record a fantasy management decision (lineup, transfers, or turn substitution) with provenance.",
+    )
+    log_dec_parser.add_argument("--team", type=str, default="default_team", help="Fantasy team ID (default: default_team).")
+    log_dec_parser.add_argument("--season", type=str, default="2026", help="Season code (default: 2026).")
+    log_dec_parser.add_argument("--round", "-r", type=int, required=True, help="Round number.")
+    log_dec_parser.add_argument("--turn", "-t", type=int, default=1, help="Turn number (default: 1).")
+    log_dec_parser.add_argument("--squad", type=Path, default=DEFAULT_SQUAD_PATH, help="Path to current_squad.json.")
+    log_dec_parser.add_argument("--recommend", action="store_true", help="Auto-optimize with V0.4 and record recommendation as chosen decision.")
+    log_dec_parser.add_argument("--starters", type=str, default=None, help="Comma-separated starter player IDs.")
+    log_dec_parser.add_argument("--captain", type=int, default=None, help="Captain player ID.")
+    log_dec_parser.add_argument("--vice-captain", type=int, default=None, help="Vice captain player ID.")
+    log_dec_parser.add_argument("--sixth-man", type=int, default=None, help="Sixth man player ID.")
+    log_dec_parser.add_argument("--bench", type=str, default=None, help="Comma-separated bench player IDs.")
+    log_dec_parser.add_argument("--coach", type=int, default=None, help="Head Coach player ID.")
+    log_dec_parser.add_argument("--formation", type=str, default=None, help="Formation (e.g., 2-2-1).")
+    log_dec_parser.add_argument("--transfers-out", type=str, default=None, help="Comma-separated player IDs transferred out.")
+    log_dec_parser.add_argument("--transfers-in", type=str, default=None, help="Comma-separated player IDs transferred in.")
+    log_dec_parser.add_argument("--notes", type=str, default=None, help="Lightweight decision notes or rationale.")
+    log_dec_parser.add_argument("--model", "-m", type=str, default="fp_decomposed_v03", help="Predictive model (default: fp_decomposed_v03).")
+    log_dec_parser.add_argument("--risk-mode", type=str, default="expected", choices=["expected", "conservative", "aggressive"], help="Risk mode.")
+    log_dec_parser.add_argument("--risk-lambda", type=float, default=0.15, help="Risk lambda.")
+    log_dec_parser.add_argument("--alpha", type=float, default=0.25, help="EWMA alpha.")
+    log_dec_parser.add_argument("--json", action="store_true", help="Output JSON payload.")
+
+    dec_parser = subparsers.add_parser(
+        "decisions",
+        help="List and inspect logged fantasy decisions and historical outcomes.",
+    )
+    dec_parser.add_argument("--team", type=str, default=None, help="Filter by team ID.")
+    dec_parser.add_argument("--season", type=str, default=None, help="Filter by season.")
+    dec_parser.add_argument("--round", "-r", type=int, default=None, help="Filter by round number.")
+    dec_parser.add_argument("--id", type=str, default=None, help="Inspect specific decision ID.")
+    dec_parser.add_argument("--json", action="store_true", help="Output JSON payload.")
+
+    update_scores_parser = subparsers.add_parser(
+        "update-scores",
+        help="Attach realized game outcomes to logged decisions and compute decision regret.",
+    )
+    update_scores_parser.add_argument("--season", type=str, default="2026", help="Season code (default: 2026).")
+    update_scores_parser.add_argument("--round", "-r", type=int, required=True, help="Round number.")
+    update_scores_parser.add_argument("--team", type=str, default=None, help="Target specific team ID.")
+    update_scores_parser.add_argument("--decision-id", type=str, default=None, help="Target specific decision ID.")
+    update_scores_parser.add_argument("--actuals", type=str, default=None, help="JSON string or file path containing {player_id: actual_points}.")
+    update_scores_parser.add_argument("--json", action="store_true", help="Output JSON outcome payload.")
+
+    eval_dec_parser = subparsers.add_parser(
+        "evaluate-decisions",
+        help="Closed-loop evaluation: human vs model regret, decision attribution, and rolling drift.",
+    )
+    eval_dec_parser.add_argument("--team", type=str, default=None, help="Filter by team ID.")
+    eval_dec_parser.add_argument("--season", type=str, default=None, help="Filter by season.")
+    eval_dec_parser.add_argument("--window", type=int, default=5, help="Rolling window size in rounds (default: 5).")
+    eval_dec_parser.add_argument("--csv", type=Path, default=None, help="Export round-by-round metrics to CSV path.")
+    eval_dec_parser.add_argument("--json", action="store_true", help="Output JSON evaluation summary.")
+
     return parser
 
 
@@ -756,6 +828,178 @@ def main(argv: Sequence[str] | None = None) -> int:
             else:
                 print(summary.to_markdown())
             return 0
+
+    if args.command == "log-decision":
+        logger = DecisionLogger(database_path=args.db)
+        norm_season = normalize_season_code(args.season)
+        canon_model = canonical_model_name(args.model)
+        risk_enum = RiskMode.from_str(getattr(args, "risk_mode", "expected"))
+
+        contracts, _ = _build_round_projection_contracts(
+            season=norm_season,
+            round_number=args.round,
+            model_name=canon_model,
+            database_path=args.db,
+            ewma_alpha=args.alpha,
+        )
+        squad_contracts, bank_tenths = _resolve_squad(args.squad, contracts)
+
+        opt = FixedSquadLineupOptimizer(
+            risk_mode=risk_enum,
+            risk_lambda=args.risk_lambda,
+            include_option_value=True,
+        )
+        rec_decision = opt.optimize(squad_contracts, round_number=args.round, top_alternatives=1)
+
+        starters = [int(x.strip()) for x in args.starters.split(",")] if args.starters else None
+        bench = [int(x.strip()) for x in args.bench.split(",")] if args.bench else None
+
+        prov = DecisionProvenance(
+            model_id=canon_model,
+            model_version="0.3.0",
+            optimizer_version="0.4.5",
+            risk_mode=risk_enum.value,
+            risk_lambda=args.risk_lambda,
+            option_value_mode=True,
+        )
+
+        record = logger.log_lineup_decision(
+            round_number=args.round,
+            season=norm_season,
+            team_id=args.team,
+            turn_number=args.turn,
+            recommended_decision=rec_decision,
+            actual_starters=starters,
+            actual_captain=args.captain,
+            actual_vice_captain=args.vice_captain,
+            actual_sixth_man=args.sixth_man,
+            actual_bench=bench,
+            actual_coach=args.coach,
+            actual_formation=args.formation,
+            squad_contracts=squad_contracts,
+            bank_tenths=bank_tenths,
+            provenance=prov,
+            notes=args.notes,
+        )
+
+        if args.json:
+            print(json.dumps(record.to_dict(), indent=2))
+        else:
+            print(f"Logged decision: {record.decision_id} (Override: {'YES' if record.is_override else 'NO'})")
+            print(f"Team: {record.team_id} | Season: {record.season} | Round: R{record.round_number:02d} (T{record.turn_number})")
+            if record.actual_lineup:
+                print(f"Lineup: Formation {record.actual_lineup.formation} | Captain: Player {record.actual_lineup.captain_id} | Sixth Man: Player {record.actual_lineup.sixth_man_id}")
+        return 0
+
+    if args.command == "decisions":
+        store_dec = DecisionStore(database_path=args.db)
+        if args.id:
+            dec = store_dec.get_decision(args.id)
+            if dec is None:
+                print(f"Error: Decision {args.id!r} not found.", file=sys.stderr)
+                return 1
+            out = store_dec.get_outcome(args.id)
+            if args.json:
+                res = dec.to_dict()
+                if out:
+                    res["outcome"] = out.to_dict()
+                print(json.dumps(res, indent=2))
+            else:
+                print(format_decision_detail(dec, out))
+            return 0
+
+        norm_season = normalize_season_code(args.season) if args.season else None
+        decs = store_dec.list_decisions(team_id=args.team, season=norm_season, round_number=args.round)
+        if args.json:
+            print(json.dumps([d.to_dict() for d in decs], indent=2))
+        else:
+            print(format_decisions_table(decs))
+        return 0
+
+    if args.command == "update-scores":
+        norm_season = normalize_season_code(args.season)
+        store_dec = DecisionStore(database_path=args.db)
+        updater = OutcomeUpdater(store=store_dec)
+
+        actual_scores: dict[int, float] = {}
+        if args.actuals:
+            try:
+                p = Path(args.actuals)
+                if p.is_file():
+                    actual_scores = {int(k): float(v) for k, v in json.loads(p.read_text(encoding="utf-8")).items()}
+                else:
+                    actual_scores = {int(k): float(v) for k, v in json.loads(args.actuals).items()}
+            except Exception as e:
+                print(f"Error parsing actuals: {e}", file=sys.stderr)
+                return 1
+        else:
+            store_eval = EvaluationDatasetStore(args.db)
+            if norm_season in store_eval.list_seasons():
+                p_targets = store_eval.get_player_target_outcomes(norm_season, args.round)
+                actual_scores.update({p.player_id: p.actual_fantasy_points for p in p_targets})
+                c_targets = store_eval.get_coach_target_outcomes(norm_season, args.round)
+                actual_scores.update({c.coach_id: c.actual_coach_fantasy_points for c in c_targets})
+
+        if args.decision_id:
+            dec = store_dec.get_decision(args.decision_id)
+            decisions = [dec] if dec is not None else []
+        else:
+            decisions = store_dec.list_decisions(team_id=args.team, season=norm_season, round_number=args.round)
+
+        if not decisions:
+            print(f"No decisions found for {norm_season} Round {args.round}.", file=sys.stderr)
+            return 1
+
+        updated_outcomes: list[DecisionOutcome] = []
+        for d in decisions:
+            out = updater.update_decision_outcomes(d.decision_id, actual_scores)
+            updated_outcomes.append(out)
+
+        if args.json:
+            print(json.dumps([o.to_dict() for o in updated_outcomes], indent=2))
+        else:
+            for out in updated_outcomes:
+                print(f"Updated outcomes for {out.decision_id}:")
+                print(f"  Human Score: {out.human_actual_score:.2f} FP | Rec Score: {out.recommended_actual_score:.2f} FP | Oracle: {out.oracle_actual_score:.2f} FP")
+                print(f"  Human Regret: {out.human_regret:.2f} FP | Model Regret: {out.model_regret:.2f} FP | Diff: {out.human_vs_model:+.2f} FP")
+        return 0
+
+    if args.command == "evaluate-decisions":
+        norm_season = normalize_season_code(args.season) if args.season else None
+        evaluator = ClosedLoopEvaluator(database_path=args.db)
+        summary = evaluator.evaluate_decisions(team_id=args.team, season=norm_season, rolling_window=args.window)
+
+        if args.csv:
+            export_closed_loop_csv(summary, args.csv)
+            print(f"Exported closed-loop CSV report to {args.csv}")
+
+        if args.json:
+            res_dict = {
+                "season": summary.season,
+                "team_id": summary.team_id,
+                "decisions_count": summary.decisions_count,
+                "outcomes_evaluated": summary.outcomes_evaluated,
+                "avg_human_score": summary.avg_human_score,
+                "avg_recommended_score": summary.avg_recommended_score,
+                "avg_oracle_score": summary.avg_oracle_score,
+                "avg_human_regret": summary.avg_human_regret,
+                "avg_model_regret": summary.avg_model_regret,
+                "avg_human_vs_model": summary.avg_human_vs_model,
+                "human_win_rate": summary.human_win_rate,
+                "human_loss_rate": summary.human_loss_rate,
+                "avg_captain_regret": summary.avg_captain_regret,
+                "avg_sixth_man_regret": summary.avg_sixth_man_regret,
+                "avg_bench_regret": summary.avg_bench_regret,
+                "avg_formation_regret": summary.avg_formation_regret,
+                "overall_prediction_mae": summary.overall_prediction_mae,
+                "rolling_mae_windows": summary.rolling_mae_windows,
+                "segment_mae": summary.segment_mae,
+                "round_details": summary.round_details,
+            }
+            print(json.dumps(res_dict, indent=2))
+        else:
+            print(summary.to_markdown())
+        return 0
 
     return 0
 
