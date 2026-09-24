@@ -89,6 +89,20 @@ async function loadTeams() {
           openRenameModal(t.team_id, t.name);
         };
         tabWrap.appendChild(renBtn);
+
+        if (state.teams.length > 1) {
+          const delBtn = document.createElement("button");
+          delBtn.className = "btn-delete-team";
+          delBtn.innerHTML = "🗑️";
+          delBtn.title = `Delete team "${t.name}"`;
+          delBtn.onclick = async (e) => {
+            e.stopPropagation();
+            if (confirm(`Are you sure you want to permanently delete team "${t.name}"?`)) {
+              await deleteTeam(t.team_id);
+            }
+          };
+          tabWrap.appendChild(delBtn);
+        }
       }
       container.appendChild(tabWrap);
     });
@@ -108,6 +122,22 @@ async function loadTeams() {
     container.appendChild(addBtn);
   } catch (err) {
     console.error("Failed to load teams:", err);
+  }
+}
+
+async function deleteTeam(teamId) {
+  try {
+    const res = await fetch(`/api/teams/${teamId}`, { method: "DELETE" });
+    if (res.ok) {
+      state.activeTeamId = null;
+      await loadTeams();
+      await loadDashboard();
+    } else {
+      const err = await res.json();
+      alert("Failed to delete team: " + (err.detail || "Server error"));
+    }
+  } catch (err) {
+    console.error("Delete team error:", err);
   }
 }
 
@@ -174,17 +204,19 @@ async function loadDashboard() {
     state.dashboard = data;
     state.roundNumber = data.round_number;
 
+    const activeLineup = data.current_lineup || data.optimal_lineup;
+
     // Update Stats Bar
     document.getElementById("stat-bank").textContent = `${data.bank_credits.toFixed(1)} cr`;
     document.getElementById("stat-value").textContent = `${data.squad_value_credits.toFixed(1)} cr`;
-    document.getElementById("stat-score").textContent = `${data.optimal_lineup.expected_total_fp.toFixed(1)} FP`;
-    document.getElementById("stat-formation").textContent = data.optimal_lineup.formation;
+    document.getElementById("stat-score").textContent = `${activeLineup.expected_total_fp.toFixed(1)} FP`;
+    document.getElementById("stat-formation").textContent = activeLineup.formation;
     document.getElementById("round-badge").textContent = `R${data.round_number}`;
 
-    renderCourt(data.optimal_lineup);
-    renderBench(data.optimal_lineup);
-    renderAlternatives(data.optimal_lineup.alternatives);
-    renderProvenance(data.provenance, data.optimal_lineup.unpruned_oracle_match);
+    renderCourt(activeLineup);
+    renderBench(activeLineup);
+    renderAlternatives(activeLineup.alternatives);
+    renderProvenance(data.provenance, activeLineup.unpruned_oracle_match);
   } catch (err) {
     console.error("Dashboard fetch error:", err);
   }
@@ -223,9 +255,25 @@ function createPlayerCard(player, lineup, roleType = "starter") {
   const posCode = normalizePos(player.position);
   const isCoach = (posCode === "HC" || roleType === "coach");
 
-  card.className = `player-card ${isCap ? "captain" : ""} ${is6th ? "sixth-man" : ""}`;
+  const isSubSource = subModeSourceId === player.player_id;
+  const isSubTargetCandidate = subModeSourceId !== null && !isSubSource && !isCoach;
+
+  card.className = `player-card ${isCap ? "captain" : ""} ${is6th ? "sixth-man" : ""} ${isSubSource ? "sub-source-active" : ""} ${isSubTargetCandidate ? "sub-target-candidate" : ""}`;
+  card.dataset.playerId = player.player_id;
   card.style.cursor = "pointer";
-  card.onclick = () => openPlayerModal(player.player_id);
+
+  card.onclick = (e) => {
+    if (subModeSourceId !== null) {
+      if (isCoach) return;
+      if (subModeSourceId === player.player_id) {
+        cancelSubstitution();
+      } else {
+        executeDirectSwap(subModeSourceId, player.player_id);
+      }
+    } else {
+      openPlayerModal(player.player_id);
+    }
+  };
 
   let roleHtml = "";
   if (isCap) roleHtml = `<span class="role-badge captain">CAP 2x</span>`;
@@ -238,10 +286,10 @@ function createPlayerCard(player, lineup, roleType = "starter") {
   if (!isCoach) {
     actionHtml = `
       <div class="card-action-bar">
-        <button class="card-action-btn ${isCap ? "active-cap" : ""}" title="Name Captain" onclick="event.stopPropagation(); setCaptain(${player.player_id})">
+        <button class="card-action-btn ${isCap ? "active-cap" : ""}" title="${isCap ? "Current Captain" : "Make Captain"}" onclick="event.stopPropagation(); setCaptain(${player.player_id})">
           👑 ${isCap ? "Cap" : "Cap"}
         </button>
-        <button class="card-action-btn" title="Substitute Player" onclick="event.stopPropagation(); openSubModal(${player.player_id})">
+        <button class="card-action-btn ${isSubSource ? "active-cap" : ""}" title="Substitute Player" onclick="event.stopPropagation(); toggleSubMode(${player.player_id})">
           ⇄ Sub
         </button>
       </div>
@@ -318,11 +366,71 @@ function renderProvenance(prov, oracleMatch) {
   `;
 }
 
+// Lineup Roles: Direct Substitution Mode
+let subModeSourceId = null;
+
+function toggleSubMode(playerId) {
+  if (subModeSourceId === playerId) {
+    cancelSubstitution();
+    return;
+  }
+  subModeSourceId = playerId;
+  updateSubModeUI();
+}
+
+function cancelSubstitution() {
+  subModeSourceId = null;
+  updateSubModeUI();
+}
+
+function updateSubModeUI() {
+  const banner = document.getElementById("sub-mode-banner");
+  const nameSpan = document.getElementById("sub-source-name");
+  
+  const l = state.dashboard ? (state.dashboard.current_lineup || state.dashboard.optimal_lineup) : null;
+  
+  if (subModeSourceId !== null && l) {
+    const allPlayers = [
+      ...l.starters,
+      ...(l.sixth_man ? [l.sixth_man] : []),
+      ...l.bench,
+    ];
+    const source = allPlayers.find((p) => p.player_id === subModeSourceId);
+    if (banner && nameSpan && source) {
+      nameSpan.textContent = `${source.name} (${normalizePos(source.position)})`;
+      banner.style.display = "flex";
+    }
+  } else {
+    if (banner) banner.style.display = "none";
+  }
+
+  const cards = document.querySelectorAll(".player-card[data-player-id]");
+  cards.forEach((c) => {
+    const pid = parseInt(c.dataset.playerId, 10);
+    c.classList.remove("sub-source-active", "sub-target-candidate");
+    if (subModeSourceId !== null) {
+      if (pid === subModeSourceId) {
+        c.classList.add("sub-source-active");
+      } else {
+        if (!c.querySelector(".role-badge.coach")) {
+          c.classList.add("sub-target-candidate");
+        }
+      }
+    }
+  });
+}
+
 // Lineup Roles: Set Captain
 async function setCaptain(playerId) {
   if (!state.dashboard || !state.activeTeamId) return;
-  const l = state.dashboard.optimal_lineup;
+  const l = state.dashboard.current_lineup || state.dashboard.optimal_lineup;
   const starterIds = l.starters.map((p) => p.player_id);
+
+  if (!starterIds.includes(playerId)) {
+    alert("Captain must be one of the 5 starting players on the court.");
+    return;
+  }
+
   const benchIds = l.bench.map((p) => p.player_id);
   const sixthManId = l.sixth_man ? l.sixth_man.player_id : (l.sixth_man_id || 0);
   const coachId = l.coach ? l.coach.player_id : (l.coach_id || 0);
@@ -350,76 +458,91 @@ async function setCaptain(playerId) {
   }
 }
 
-// Lineup Roles: Substitution Modal
-let currentSubTargetId = null;
+async function executeDirectSwap(sourceId, targetId) {
+  if (!state.dashboard || !state.activeTeamId) return;
+  if (sourceId === targetId) {
+    cancelSubstitution();
+    return;
+  }
 
-function openSubModal(playerId) {
-  if (!state.dashboard) return;
-  currentSubTargetId = playerId;
-  const l = state.dashboard.optimal_lineup;
+  const l = state.dashboard.current_lineup || state.dashboard.optimal_lineup;
+  let starters = [...l.starters];
+  let bench = [...l.bench];
+  let sixthMan = l.sixth_man ? { ...l.sixth_man } : null;
+  const coachId = l.coach ? l.coach.player_id : (l.coach_id || 0);
+  let captainId = l.captain_id;
 
-  const allUnits = [
-    ...l.starters.map((p) => ({ ...p, role: "starter" })),
-    ...(l.sixth_man ? [{ ...l.sixth_man, role: "sixth_man" }] : []),
-    ...l.bench.map((p) => ({ ...p, role: "bench" })),
+  const allPlayers = [
+    ...starters.map((p) => ({ ...p, role: "starter" })),
+    ...(sixthMan ? [{ ...sixthMan, role: "sixth_man" }] : []),
+    ...bench.map((p) => ({ ...p, role: "bench" })),
   ];
 
-  const targetPlayer = allUnits.find((p) => p.player_id === playerId);
-  if (!targetPlayer) return;
+  const pA = allPlayers.find((p) => p.player_id === sourceId);
+  const pB = allPlayers.find((p) => p.player_id === targetId);
 
-  const modal = document.getElementById("sub-modal");
-  const targetLabel = document.getElementById("sub-target-name");
-  targetLabel.textContent = `${targetPlayer.name} (${normalizePos(targetPlayer.position)}, ${targetPlayer.role.toUpperCase()})`;
+  if (!pA || !pB) {
+    cancelSubstitution();
+    return;
+  }
 
-  const listContainer = document.getElementById("sub-options-list");
-  listContainer.innerHTML = "";
+  let newStarters = [...starters];
+  let newBench = [...bench];
+  let newSixthMan = sixthMan;
 
-  // If target is starter, swap candidates are bench & 6th man. If target is bench/6th man, swap candidates are starters.
-  const isStarter = targetPlayer.role === "starter";
-  const candidates = allUnits.filter((p) => (isStarter ? p.role !== "starter" : p.role === "starter"));
+  const isStarterA = starters.some((p) => p.player_id === sourceId);
+  const isStarterB = starters.some((p) => p.player_id === targetId);
+  const isSixthA = sixthMan && sixthMan.player_id === sourceId;
+  const isSixthB = sixthMan && sixthMan.player_id === targetId;
+  const isBenchA = bench.some((p) => p.player_id === sourceId);
+  const isBenchB = bench.some((p) => p.player_id === targetId);
 
-  candidates.forEach((cand) => {
-    const item = document.createElement("div");
-    item.style = "display:flex; justify-content:space-between; align-items:center; background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; padding:0.6rem 0.8rem;";
-    item.innerHTML = `
-      <div>
-        <strong>${cand.name}</strong> <span class="player-pos-badge">${normalizePos(cand.position)}</span>
-        <span style="font-size:0.75rem; color:var(--text-muted); margin-left:0.4rem;">${cand.credits} cr | ${cand.expected_fp} FP (${cand.role.toUpperCase()})</span>
-      </div>
-      <button class="btn btn-primary" style="padding:0.25rem 0.6rem; font-size:0.8rem;" onclick="executeSwap(${targetPlayer.player_id}, ${cand.player_id})">
-        ⇄ Swap
-      </button>
-    `;
-    listContainer.appendChild(item);
-  });
+  if (isStarterA && (isSixthB || isBenchB)) {
+    newStarters = starters.map((p) => (p.player_id === sourceId ? pB : p));
+    if (isSixthB) {
+      newSixthMan = pA;
+    } else {
+      newBench = bench.map((p) => (p.player_id === targetId ? pA : p));
+    }
+    if (captainId === sourceId) {
+      captainId = targetId;
+    }
+  } else if (isStarterB && (isSixthA || isBenchA)) {
+    newStarters = starters.map((p) => (p.player_id === targetId ? pA : p));
+    if (isSixthA) {
+      newSixthMan = pB;
+    } else {
+      newBench = bench.map((p) => (p.player_id === sourceId ? pB : p));
+    }
+    if (captainId === targetId) {
+      captainId = sourceId;
+    }
+  } else if (isSixthA && isBenchB) {
+    newSixthMan = pB;
+    newBench = bench.map((p) => (p.player_id === targetId ? pA : p));
+  } else if (isSixthB && isBenchA) {
+    newSixthMan = pA;
+    newBench = bench.map((p) => (p.player_id === sourceId ? pB : p));
+  } else if (isStarterA && isStarterB) {
+    cancelSubstitution();
+    return;
+  } else if (isBenchA && isBenchB) {
+    cancelSubstitution();
+    return;
+  }
 
-  modal.style.display = "flex";
-}
+  // Validate legal EuroLeague fantasy formation
+  const gCount = newStarters.filter((p) => normalizePos(p.position) === "G").length;
+  const fCount = newStarters.filter((p) => normalizePos(p.position) === "F").length;
+  const cCount = newStarters.filter((p) => normalizePos(p.position) === "C").length;
 
-function closeSubModal() {
-  const modal = document.getElementById("sub-modal");
-  if (modal) modal.style.display = "none";
-}
-
-async function executeSwap(pidA, pidB) {
-  if (!state.dashboard || !state.activeTeamId) return;
-  const l = state.dashboard.optimal_lineup;
-
-  let starters = l.starters.map((p) => p.player_id);
-  let bench = l.bench.map((p) => p.player_id);
-  let sixthMan = l.sixth_man ? l.sixth_man.player_id : (l.sixth_man_id || 0);
-  const coach = l.coach ? l.coach.player_id : (l.coach_id || 0);
-  let captain = l.captain_id;
-
-  // Perform swap between starter and bench/sixthMan
-  if (starters.includes(pidA)) {
-    starters = starters.map((id) => (id === pidA ? pidB : id));
-    if (sixthMan === pidB) sixthMan = pidA;
-    else bench = bench.map((id) => (id === pidB ? pidA : id));
-  } else if (starters.includes(pidB)) {
-    starters = starters.map((id) => (id === pidB ? pidA : id));
-    if (sixthMan === pidA) sixthMan = pidB;
-    else bench = bench.map((id) => (id === pidA ? pidB : id));
+  if (newStarters.length !== 5 || gCount < 1 || gCount > 3 || fCount < 1 || fCount > 3 || cCount < 1 || cCount > 2) {
+    alert(
+      `Illegal formation: Starting 5 would have ${gCount} Guard(s), ${fCount} Forward(s), and ${cCount} Center(s).\n` +
+      `EuroLeague Fantasy requires 1-3 Guards, 1-3 Forwards, and 1-2 Centers.`
+    );
+    cancelSubstitution();
+    return;
   }
 
   try {
@@ -427,24 +550,31 @@ async function executeSwap(pidA, pidB) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        starter_ids: starters,
-        captain_id: captain,
-        sixth_man_id: sixthMan,
-        bench_ids: bench,
-        coach_id: coach,
+        starter_ids: newStarters.map((p) => p.player_id),
+        captain_id: captainId,
+        sixth_man_id: newSixthMan ? newSixthMan.player_id : 0,
+        bench_ids: newBench.map((p) => p.player_id),
+        coach_id: coachId,
       }),
     });
 
     if (res.ok) {
-      closeSubModal();
+      cancelSubstitution();
       await loadDashboard();
     } else {
       const err = await res.json();
-      alert("Substitution failed: " + (err.detail || "Illegal lineup formation"));
+      alert("Substitution failed: " + (err.detail || "Server validation error"));
+      cancelSubstitution();
     }
   } catch (err) {
     console.error("Execute swap error:", err);
+    cancelSubstitution();
   }
+}
+
+function closeSubModal() {
+  const modal = document.getElementById("sub-modal");
+  if (modal) modal.style.display = "none";
 }
 
 // Player Statistics Details Modal
@@ -484,10 +614,11 @@ async function openPlayerModal(playerId) {
 
     // Check if player is in current team squad
     const squadActions = document.getElementById("pm-squad-actions");
-    const isSquadPlayer = state.dashboard && state.dashboard.optimal_lineup && [
-      ...state.dashboard.optimal_lineup.starters,
-      ...(state.dashboard.optimal_lineup.sixth_man ? [state.dashboard.optimal_lineup.sixth_man] : []),
-      ...state.dashboard.optimal_lineup.bench,
+    const l = state.dashboard ? (state.dashboard.current_lineup || state.dashboard.optimal_lineup) : null;
+    const isSquadPlayer = l && [
+      ...l.starters,
+      ...(l.sixth_man ? [l.sixth_man] : []),
+      ...l.bench,
     ].some((x) => x.player_id === playerId);
 
     if (isSquadPlayer && normalizePos(p.position) !== "HC") {
@@ -518,7 +649,7 @@ function onModalSubstitute() {
   if (currentModalPlayerId) {
     const pid = currentModalPlayerId;
     closePlayerModal();
-    openSubModal(pid);
+    toggleSubMode(pid);
   }
 }
 
@@ -537,11 +668,19 @@ async function triggerOptimizeLineup() {
   });
   if (res.ok) {
     const lineup = await res.json();
-    renderCourt(lineup);
-    renderBench(lineup);
-    renderAlternatives(lineup.alternatives);
-    document.getElementById("stat-score").textContent = `${lineup.expected_total_fp.toFixed(1)} FP`;
-    document.getElementById("stat-formation").textContent = lineup.formation;
+    // Persist optimized lineup to team
+    await fetch(`/api/teams/${state.activeTeamId}/lineup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        starter_ids: lineup.starters.map((p) => p.player_id),
+        captain_id: lineup.captain_id,
+        sixth_man_id: lineup.sixth_man ? lineup.sixth_man.player_id : (lineup.sixth_man_id || 0),
+        bench_ids: lineup.bench.map((p) => p.player_id),
+        coach_id: lineup.coach ? lineup.coach.player_id : (lineup.coach_id || 0),
+      }),
+    });
+    await loadDashboard();
   }
 }
 

@@ -732,3 +732,93 @@ table.data-table tr:hover td {
   color: var(--accent-orange);
 }
 
+.btn-delete-team {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0.2rem;
+  border-radius: 3px;
+  transition: color 0.15s;
+}
+
+.btn-delete-team:hover {
+  color: var(--accent-red);
+}
+
+/* Card Action Bar: Cap & Sub buttons */
+.card-action-bar {
+  display: flex;
+  gap: 0.3rem;
+  margin-top: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.card-action-btn {
+  flex: 1;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0.2rem 0.3rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+}
+
+.card-action-btn:hover {
+  background: var(--bg-primary);
+  border-color: var(--accent-orange);
+  color: #fff;
+}
+
+.card-action-btn.active-cap {
+  background: var(--accent-gold);
+  color: #000;
+  border-color: var(--accent-gold);
+  font-weight: 800;
+}
+
+/* Direct-Click Substitution Mode Styles */
+.player-card.sub-source-active {
+  outline: 3px solid var(--accent-blue) !important;
+  box-shadow: 0 0 15px rgba(56, 189, 248, 0.7) !important;
+  transform: scale(1.04) !important;
+  animation: pulse-sub-glow 1.4s infinite alternate;
+}
+
+@keyframes pulse-sub-glow {
+  0% { box-shadow: 0 0 8px rgba(56, 189, 248, 0.4); }
+  100% { box-shadow: 0 0 20px rgba(56, 189, 248, 0.9); }
+}
+
+.player-card.sub-target-candidate {
+  cursor: pointer !important;
+  position: relative;
+}
+
+.player-card.sub-target-candidate:hover {
+  outline: 2px dashed var(--accent-orange) !important;
+  transform: translateY(-4px) scale(1.02) !important;
+  box-shadow: 0 6px 16px rgba(245, 158, 11, 0.45) !important;
+}
+
+.sub-banner {
+  display: flex;
+  background: rgba(15, 23, 42, 0.96);
+  border: 1px solid var(--accent-blue);
+  border-radius: 8px;
+  padding: 0.65rem 1rem;
+  margin-bottom: 0.85rem;
+  align-items: center;
+  justify-content: space-between;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+}
+

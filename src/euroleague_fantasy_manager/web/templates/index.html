@@ -76,6 +76,18 @@
             <div id="provenance-badges"></div>
           </div>
 
+          <!-- Direct-Click Substitution Banner -->
+          <div id="sub-mode-banner" class="sub-banner" style="display:none;">
+            <div style="display:flex; align-items:center; gap:0.6rem; font-size:0.9rem;">
+              <span style="font-size:1.2rem;">⇄</span>
+              <span>
+                <strong>Substitution Mode:</strong> Click any teammate on the court or bench to swap with
+                <span id="sub-source-name" style="color:var(--accent-blue); font-weight:700;"></span>.
+              </span>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="cancelSubstitution()" style="padding:0.25rem 0.6rem; font-size:0.8rem;">✕ Cancel</button>
+          </div>
+
           <div class="court-container">
             <div class="court-lines">
               <div class="court-paint"></div>

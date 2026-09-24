@@ -152,12 +152,108 @@ def get_dashboard(
             "is_home": c.is_home if c else True,
         })
 
+    # Build active current_lineup representing team's actual saved squad roles
+    squad_units = team.squad
+    starters_units = [u for u in squad_units if u.is_starter]
+    bench_units = [u for u in squad_units if u.is_bench]
+    sixth_man_unit = next((u for u in squad_units if u.is_sixth_man), None)
+    coach_unit = next((u for u in squad_units if u.is_coach or u.position == "HC"), None)
+
+    # If team roles have not been assigned yet (e.g. freshly imported or draft without role flags),
+    # sync with opt_lineup so the team gets its starting five, captain, 6th man, bench
+    if len(starters_units) != 5 or not sixth_man_unit or not coach_unit:
+        team = team_service.update_lineup(
+            team_id=team_id,
+            starter_ids=[p["player_id"] for p in opt_lineup.starters],
+            captain_id=opt_lineup.captain_id,
+            sixth_man_id=opt_lineup.sixth_man_id,
+            bench_ids=[p["player_id"] for p in opt_lineup.bench],
+            coach_id=opt_lineup.coach_id,
+        )
+        squad_units = team.squad
+        starters_units = [u for u in squad_units if u.is_starter]
+        bench_units = [u for u in squad_units if u.is_bench]
+        sixth_man_unit = next((u for u in squad_units if u.is_sixth_man), None)
+        coach_unit = next((u for u in squad_units if u.is_coach or u.position == "HC"), None)
+
+    def _fmt_lineup_unit(u: Any) -> dict[str, Any]:
+        c = proj_dict.get(u.player_id)
+        pos = u.position
+        if hasattr(c, "position") and c:
+            pos = c.position.short_code if hasattr(c.position, "short_code") else str(c.position)
+        elif u.is_coach or pos == "HEAD_COACH":
+            pos = "HC"
+        return {
+            "player_id": u.player_id,
+            "name": u.name or (c.player_name if c else f"Player {u.player_id}"),
+            "position": pos,
+            "team_code": u.team_code or (c.team_code if c else ""),
+            "credits": round(u.current_price_tenths / 10.0, 1),
+            "expected_fp": round(c.expected_fp, 2) if c else 0.0,
+            "turn_number": u.turn_number or (c.turn_number if c else 1),
+            "opponent_code": c.opponent_code if c else "",
+            "is_home": c.is_home if c else True,
+            "is_starter": u.is_starter,
+            "is_captain": u.is_captain,
+            "is_sixth_man": u.is_sixth_man,
+            "is_bench": u.is_bench,
+            "is_coach": u.is_coach,
+        }
+
+    starters_formatted = [_fmt_lineup_unit(u) for u in starters_units]
+    bench_formatted = [_fmt_lineup_unit(u) for u in bench_units]
+    sixth_man_formatted = _fmt_lineup_unit(sixth_man_unit) if sixth_man_unit else None
+    coach_formatted = _fmt_lineup_unit(coach_unit) if coach_unit else None
+
+    def _p_char(p_str: str) -> str:
+        s = p_str.upper()
+        if "G" in s: return "G"
+        if "F" in s: return "F"
+        if "C" in s: return "C"
+        return s
+
+    g_count = sum(1 for p in starters_formatted if _p_char(p["position"]) == "G")
+    f_count = sum(1 for p in starters_formatted if _p_char(p["position"]) == "F")
+    c_count = sum(1 for p in starters_formatted if _p_char(p["position"]) == "C")
+    formation_str = f"{g_count}-{f_count}-{c_count}"
+
+    captain_id = team.captain_id or (starters_formatted[0]["player_id"] if starters_formatted else 0)
+    sixth_man_id = team.sixth_man_id or (sixth_man_formatted["player_id"] if sixth_man_formatted else 0)
+    coach_id = team.coach_id or (coach_formatted["player_id"] if coach_formatted else 0)
+
+    # Compute total expected FP reflecting actual captain (2.0x), starters (1.0x), 6th man (1.0x), bench (0.5x), coach (1.0x)
+    tot_fp = 0.0
+    for p in starters_formatted:
+        mult = 2.0 if p["player_id"] == captain_id else 1.0
+        tot_fp += p["expected_fp"] * mult
+    if sixth_man_formatted:
+        tot_fp += sixth_man_formatted["expected_fp"] * 1.0
+    for p in bench_formatted:
+        tot_fp += p["expected_fp"] * 0.5
+    if coach_formatted:
+        tot_fp += coach_formatted["expected_fp"] * 1.0
+
+    current_lineup = {
+        "starters": starters_formatted,
+        "bench": bench_formatted,
+        "sixth_man": sixth_man_formatted,
+        "coach": coach_formatted,
+        "captain_id": captain_id,
+        "sixth_man_id": sixth_man_id,
+        "coach_id": coach_id,
+        "formation": formation_str,
+        "expected_total_fp": round(tot_fp, 2),
+        "alternatives": opt_lineup.alternatives,
+        "unpruned_oracle_match": opt_lineup.unpruned_oracle_match,
+    }
+
     return {
         "team": team.to_dict(),
         "round_number": rnd,
         "bank_credits": round(team.bank_tenths / 10.0, 1),
         "squad_value_credits": round(team.total_squad_value_tenths / 10.0, 1),
         "squad": squad_details,
+        "current_lineup": current_lineup,
         "optimal_lineup": opt_lineup.to_dict(),
         "provenance": {
             "prediction_model": "production_ridge_v03",
