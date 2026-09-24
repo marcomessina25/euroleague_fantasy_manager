@@ -561,3 +561,150 @@ def test_initial_team_builder_optimization_and_api(tmp_path: Path):
     assert set(init_dec.actual_squad_ids) == set(squad_pids)
     assert init_dec.recommended_squad_ids is not None
 
+
+def test_snapshot_store_fallback_and_update_endpoint(tmp_path: Path):
+    """Test that PredictionService falls back to SnapshotStore for current seasons and update-data endpoint works."""
+    import sqlite3
+    from unittest.mock import patch
+    from euroleague_fantasy_manager.storage import SnapshotStore, SnapshotSummary
+
+    db_file = tmp_path / "fallback_test.sqlite3"
+    store = SnapshotStore(db_file)
+
+    # Initialize a mock snapshot with players in the SQLite database
+    with sqlite3.connect(db_file) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                league_id INTEGER NOT NULL,
+                competition_code TEXT NOT NULL,
+                season_code TEXT NOT NULL,
+                matchday_id INTEGER,
+                round_number INTEGER NOT NULL,
+                num_turns INTEGER NOT NULL,
+                raw_archive_path TEXT
+            );
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS players (
+                snapshot_id INTEGER NOT NULL,
+                id INTEGER NOT NULL,
+                first_name TEXT,
+                last_name TEXT,
+                name TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                position_code TEXT NOT NULL,
+                team_id INTEGER NOT NULL,
+                team_code TEXT NOT NULL,
+                team_name TEXT NOT NULL,
+                price_tenths INTEGER NOT NULL,
+                status TEXT,
+                probability_of_playing REAL,
+                turn_number INTEGER,
+                last_match_pts REAL,
+                avg_fantasy_pts REAL,
+                total_plus_tenths INTEGER,
+                popularity REAL,
+                is_injured INTEGER,
+                is_on_fire INTEGER
+            );
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fixtures (
+                snapshot_id INTEGER NOT NULL,
+                id INTEGER NOT NULL,
+                round_number INTEGER NOT NULL,
+                turn_number INTEGER NOT NULL,
+                started_at TEXT,
+                status TEXT,
+                home_team_id INTEGER,
+                home_team_code TEXT,
+                away_team_id INTEGER,
+                away_team_code TEXT,
+                home_score INTEGER,
+                away_score INTEGER
+            );
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS teams (
+                snapshot_id INTEGER NOT NULL,
+                id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                short_name TEXT NOT NULL
+            );
+            """
+        )
+
+        conn.execute(
+            "INSERT INTO snapshots (id, created_at, league_id, competition_code, season_code, matchday_id, round_number, num_turns, raw_archive_path) "
+            "VALUES (1, '2026-09-24T10:00:00Z', 10, 'E', 'E2026', 1, 1, 2, 'raw.json')"
+        )
+        # Add a test Guard (Justin Robinson) and Head Coach
+        conn.execute(
+            "INSERT INTO players (snapshot_id, id, first_name, last_name, name, position, position_code, team_id, team_code, team_name, price_tenths, status, probability_of_playing, turn_number, avg_fantasy_pts, last_match_pts, total_plus_tenths, popularity, is_injured, is_on_fire) "
+            "VALUES (1, 7202, 'Justin', 'Robinson', 'Justin Robinson', 1, 'G', 140, 'BAR', 'FC Barcelona', 122, 'starter', 1.0, 1, 0.0, 0.0, 0, 0.0, 0, 0)"
+        )
+        conn.execute(
+            "INSERT INTO players (snapshot_id, id, first_name, last_name, name, position, position_code, team_id, team_code, team_name, price_tenths, status, probability_of_playing, turn_number, avg_fantasy_pts, last_match_pts, total_plus_tenths, popularity, is_injured, is_on_fire) "
+            "VALUES (1, 9999, 'Pablo', 'Laso', 'Pablo Laso', 4, 'HC', 140, 'BAR', 'FC Barcelona', 75, 'starter', 1.0, 1, 0.0, 0.0, 0, 0.0, 0, 0)"
+        )
+        conn.execute(
+            "INSERT INTO fixtures (snapshot_id, id, round_number, turn_number, started_at, status, home_team_id, home_team_code, away_team_id, away_team_code, home_score, away_score) "
+            "VALUES (1, 100, 1, 1, '2026-09-24T18:00:00Z', 'scheduled', 140, 'BAR', 141, 'RMB', NULL, NULL)"
+        )
+
+    # 1. PredictionService fallback
+    ps = PredictionService(database_path=db_file)
+    projs = ps.get_projections("2026/27", 1)
+    assert len(projs) == 2
+    rob = next((p for p in projs if p.player_id == 7202), None)
+    assert rob is not None
+    assert rob.player_name == "Justin Robinson"
+    assert rob.position == Position.GUARD
+    assert rob.credits == 12.2
+    assert rob.expected_fp == 12.2  # Price-derived prior when avg_fp is 0
+    assert rob.opponent_code == "RMB"
+    assert rob.is_home is True
+
+    # 2. Workstation player listing endpoint
+    app = create_app(db_path=db_file)
+    client = TestClient(app)
+
+    res_players = client.get("/api/workstation/players?season=2026/27&round_number=1&position=G&search=rob")
+    assert res_players.status_code == 200
+    p_data = res_players.json()
+    assert len(p_data) == 1
+    assert p_data[0]["name"] == "Justin Robinson"
+    assert p_data[0]["position"] == "G"
+
+    # 3. Workstation update-data endpoint with mock API fetch
+    mock_summary = SnapshotSummary(
+        snapshot_id=2,
+        created_at="2026-09-24T11:00:00Z",
+        league_id=10,
+        season_code="E2026",
+        round_number=1,
+        num_turns=2,
+        team_count=20,
+        player_count=330,
+        coach_count=20,
+        fixture_count=60,
+    )
+    with patch("euroleague_fantasy_manager.api.fetch_current_data", return_value={"mock": "data"}), \
+         patch.object(SnapshotStore, "save_snapshot", return_value=mock_summary):
+        res_update = client.post("/api/workstation/update-data?league=euroleague")
+        assert res_update.status_code == 200
+        up_data = res_update.json()
+        assert up_data["success"] is True
+        assert up_data["summary"]["snapshot_id"] == 2
+        assert up_data["summary"]["player_count"] == 330
+
+

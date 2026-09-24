@@ -387,10 +387,19 @@ def list_players_endpoint(
     contracts = prediction_service.get_projections(season, round_number)
     valuations = prediction_service.get_player_valuations(season, round_number)
 
+    target_pos_code = None
+    if position:
+        try:
+            target_pos_code = Position.from_raw(position).short_code
+        except Exception:
+            target_pos_code = position.upper()
+
     filtered = []
     for c in contracts:
-        pos_str = c.position.name if hasattr(c.position, "name") else str(c.position)
-        if position and pos_str.upper() != position.upper():
+        pos_code = c.position.short_code if hasattr(c.position, "short_code") else (
+            Position.from_raw(c.position).short_code if hasattr(Position, "from_raw") else str(c.position)
+        )
+        if target_pos_code and pos_code != target_pos_code:
             continue
         if search and search.lower() not in c.player_name.lower() and search.lower() not in c.team_code.lower():
             continue
@@ -403,7 +412,8 @@ def list_players_endpoint(
         filtered.append({
             "player_id": c.player_id,
             "name": c.player_name,
-            "position": pos_str,
+            "position": pos_code,
+            "position_name": c.position.name if hasattr(c.position, "name") else str(c.position),
             "team_code": c.team_code,
             "price_tenths": c.price_tenths,
             "credits": c.credits,
@@ -436,4 +446,39 @@ def suggest_initial_team_endpoint(
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/update-data")
+def update_data_endpoint(
+    league: str = Query("euroleague", description="Competition league ('euroleague' or 'eurocup')"),
+    prediction_service: PredictionService = Depends(get_prediction_service),
+) -> dict[str, Any]:
+    """Fetch live data from official EuroLeague Fantasy API and update SQLite snapshot store."""
+    try:
+        from euroleague_fantasy_manager.api import fetch_current_data
+        from euroleague_fantasy_manager.cli import RAW_ARCHIVE_DIRECTORY, _resolve_league
+        from euroleague_fantasy_manager.storage import SnapshotStore
+
+        league_id, comp_code, season_code = _resolve_league(league)
+        payload = fetch_current_data(league_id=league_id, competition_code=comp_code, season_code=season_code)
+        store = SnapshotStore(prediction_service.database_path)
+        summary = store.save_snapshot(payload, raw_directory=RAW_ARCHIVE_DIRECTORY)
+        prediction_service.clear_cache()
+        return {
+            "success": True,
+            "message": f"Successfully updated snapshot #{summary.snapshot_id} for {summary.season_code} round {summary.round_number}.",
+            "summary": {
+                "snapshot_id": summary.snapshot_id,
+                "season_code": summary.season_code,
+                "round_number": summary.round_number,
+                "player_count": summary.player_count,
+                "coach_count": summary.coach_count,
+                "team_count": summary.team_count,
+                "fixture_count": summary.fixture_count,
+                "created_at": summary.created_at,
+            },
+        }
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch live data from EuroLeague API: {e}")
+
 

@@ -463,6 +463,16 @@ async function triggerScenario() {
   }
 }
 
+function normalizePos(pos) {
+  if (!pos) return "";
+  const p = String(pos).trim().toUpperCase();
+  if (p === "GUARD" || p === "G" || p === "1") return "G";
+  if (p === "FORWARD" || p === "F" || p === "2") return "F";
+  if (p === "CENTER" || p === "C" || p === "3") return "C";
+  if (p === "HEAD_COACH" || p === "COACH" || p === "HC" || p === "4") return "HC";
+  return p;
+}
+
 // =========================================================================
 // Initial Team Builder (V0.5)
 // =========================================================================
@@ -478,16 +488,27 @@ async function openTeamBuilderModal() {
   teamBuilderState.selectedPlayers = [];
   teamBuilderState.recommendedPlayerIds = [];
 
+  const poolIndicator = document.getElementById("tb-pool-count");
+  if (poolIndicator) poolIndicator.textContent = "Loading player pool...";
+
   // Fetch full player pool for instant search / dropdown if not yet cached
   if (teamBuilderState.allPlayers.length === 0) {
     try {
-      const res = await fetch(`/api/workstation/players?season=${state.season}&round_number=1&limit=300`);
+      const res = await fetch(`/api/workstation/players?season=${state.season}&round_number=1&limit=500`);
       if (res.ok) {
-        teamBuilderState.allPlayers = await res.json();
+        const rawPlayers = await res.json();
+        teamBuilderState.allPlayers = rawPlayers.map((p) => ({
+          ...p,
+          position: normalizePos(p.position),
+        }));
       }
     } catch (err) {
       console.error("Failed to fetch market pool:", err);
     }
+  }
+
+  if (poolIndicator) {
+    poolIndicator.textContent = `${teamBuilderState.allPlayers.length} players available`;
   }
 
   updateTeamBuilderUI();
@@ -500,37 +521,33 @@ function closeTeamBuilderModal() {
 
 function onTeamBuilderSearchInput() {
   const query = document.getElementById("tb-player-search").value.trim().toLowerCase();
-  const posFilter = document.getElementById("tb-search-pos").value;
+  const posFilter = normalizePos(document.getElementById("tb-search-pos").value);
   const dropdown = document.getElementById("tb-search-dropdown");
-
-  if (!query && !posFilter) {
-    dropdown.style.display = "none";
-    dropdown.innerHTML = "";
-    return;
-  }
 
   const selectedIds = new Set(teamBuilderState.selectedPlayers.map((p) => p.player_id));
   const filtered = teamBuilderState.allPlayers.filter((p) => {
     if (selectedIds.has(p.player_id)) return false;
-    if (posFilter && p.position !== posFilter) return false;
+    const pPos = normalizePos(p.position);
+    if (posFilter && pPos !== posFilter) return false;
     if (query && !p.name.toLowerCase().includes(query) && !p.team_code.toLowerCase().includes(query)) return false;
     return true;
   });
 
   if (filtered.length === 0) {
     dropdown.style.display = "block";
-    dropdown.innerHTML = `<div style="padding:0.75rem; color:var(--text-muted); font-size:0.8rem;">No matching players found.</div>`;
+    dropdown.innerHTML = `<div style="padding:0.75rem; color:var(--text-muted); font-size:0.8rem;">No matching players found${query ? ` for "${query}"` : ""}.</div>`;
     return;
   }
 
   dropdown.style.display = "block";
   dropdown.innerHTML = "";
-  filtered.slice(0, 15).forEach((p) => {
+  filtered.slice(0, 20).forEach((p) => {
     const item = document.createElement("div");
     item.className = "dropdown-item";
+    const pos = normalizePos(p.position);
     item.innerHTML = `
       <div>
-        <span class="player-pos-badge" style="font-size:0.7rem; margin-right:0.3rem;">${p.position}</span>
+        <span class="player-pos-badge" style="font-size:0.7rem; margin-right:0.3rem;">${pos}</span>
         <strong>${p.name}</strong>
         <span style="color:var(--text-muted); font-size:0.75rem; margin-left:0.3rem;">(${p.team_code})</span>
       </div>
@@ -566,13 +583,15 @@ function addPlayerToTeamBuilder(player) {
     return;
   }
 
+  const normPos = normalizePos(player.position);
   const posCounts = { G: 0, F: 0, C: 0, HC: 0 };
   teamBuilderState.selectedPlayers.forEach((p) => {
-    posCounts[p.position] = (posCounts[p.position] || 0) + 1;
+    const pPos = normalizePos(p.position);
+    posCounts[pPos] = (posCounts[pPos] || 0) + 1;
   });
   const maxQuota = { G: 4, F: 4, C: 2, HC: 1 };
-  if ((posCounts[player.position] || 0) >= (maxQuota[player.position] || 0)) {
-    alert(`Position quota for ${player.position} (${maxQuota[player.position]}) already reached.`);
+  if ((posCounts[normPos] || 0) >= (maxQuota[normPos] || 0)) {
+    alert(`Position quota for ${normPos} (${maxQuota[normPos]}) already reached.`);
     return;
   }
 
@@ -584,7 +603,7 @@ function addPlayerToTeamBuilder(player) {
   teamBuilderState.selectedPlayers.push({
     player_id: player.player_id,
     name: player.name,
-    position: player.position,
+    position: normPos,
     team_code: player.team_code,
     credits: player.credits,
     price_tenths: player.price_tenths,
@@ -630,7 +649,10 @@ async function suggestOptimalInitialTeam() {
 
     if (res.ok) {
       const data = await res.json();
-      teamBuilderState.selectedPlayers = data.players;
+      teamBuilderState.selectedPlayers = data.players.map((p) => ({
+        ...p,
+        position: normalizePos(p.position),
+      }));
       teamBuilderState.recommendedPlayerIds = data.suggested_player_ids;
       updateTeamBuilderUI();
     } else {
@@ -665,8 +687,9 @@ function updateTeamBuilderUI() {
   const posCounts = { G: 0, F: 0, C: 0, HC: 0 };
   const clubCounts = {};
   players.forEach((p) => {
-    posCounts[p.position] = (posCounts[p.position] || 0) + 1;
-    if (p.position !== "HC" && p.team_code) {
+    const pos = normalizePos(p.position);
+    posCounts[pos] = (posCounts[pos] || 0) + 1;
+    if (pos !== "HC" && p.team_code) {
       clubCounts[p.team_code] = (clubCounts[p.team_code] || 0) + 1;
     }
   });
@@ -733,9 +756,10 @@ function updateTeamBuilderUI() {
 
   sorted.forEach((p) => {
     const tr = document.createElement("tr");
+    const pos = normalizePos(p.position);
     tr.innerHTML = `
       <td><strong>${p.name}</strong> <span style="color:var(--text-muted);font-size:0.75rem;">(${p.team_code || "UNK"})</span></td>
-      <td><span class="player-pos-badge">${p.position}</span></td>
+      <td><span class="player-pos-badge">${pos}</span></td>
       <td>${p.credits} cr</td>
       <td style="color:var(--accent-orange); font-weight:700;">${p.expected_fp} FP</td>
       <td><span class="badge ${p.is_locked ? "badge-blue" : "badge-green"}">${p.is_locked ? "🔒 Locked" : "⚡ Suggested"}</span></td>
@@ -789,3 +813,45 @@ async function submitCreateTeam() {
   }
 }
 
+
+// =========================================================================
+// Live Data Update (Official EuroLeague Fantasy API)
+// =========================================================================
+async function triggerUpdateData() {
+  const btn = document.getElementById('btn-update-data');
+  const spinner = document.getElementById('update-spinner');
+  const icon = document.getElementById('update-icon');
+  const text = document.getElementById('update-text');
+
+  if (btn) btn.disabled = true;
+  if (spinner) spinner.style.display = 'inline';
+  if (icon) icon.style.display = 'none';
+  if (text) text.textContent = 'Updating...';
+
+  try {
+    const res = await fetch('/api/workstation/update-data', {
+      method: 'POST',
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      teamBuilderState.allPlayers = []; // Invalidate cached player pool
+      alert(data.message || 'EuroLeague Fantasy snapshot updated successfully!');
+      await loadDashboard();
+      if (state.activeTab === 'trade-studio') {
+        await loadPlayerPool();
+      }
+    } else {
+      const err = await res.json();
+      alert('Update failed: ' + (err.detail || 'Unable to reach EuroLeague API'));
+    }
+  } catch (err) {
+    console.error('Failed to update data:', err);
+    alert('Update request failed: ' + err.message);
+  } finally {
+    if (btn) btn.disabled = false;
+    if (spinner) spinner.style.display = 'none';
+    if (icon) icon.style.display = 'inline';
+    if (text) text.textContent = 'Update Data';
+  }
+}

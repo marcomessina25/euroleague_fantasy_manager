@@ -446,11 +446,14 @@ class OptimizationService:
 
         player_views = []
         for c in contracts:
-            pos_str = c.position.name if hasattr(c.position, "name") else str(c.position)
+            pos_code = c.position.short_code if hasattr(c.position, "short_code") else (
+                Position.from_raw(c.position).short_code if hasattr(Position, "from_raw") else str(c.position)
+            )
             player_views.append({
                 "player_id": c.player_id,
                 "name": c.player_name,
-                "position": pos_str,
+                "position": pos_code,
+                "position_name": c.position.name if hasattr(c.position, "name") else str(c.position),
                 "team_code": c.team_code,
                 "price_tenths": c.price_tenths,
                 "credits": round(c.price_tenths / 10.0, 1),

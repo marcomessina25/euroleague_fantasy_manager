@@ -45,6 +45,13 @@
           <span class="stat-val" id="stat-formation">--</span>
         </div>
       </div>
+
+      <!-- Live API Update Button -->
+      <button class="btn btn-secondary" id="btn-update-data" onclick="triggerUpdateData()" title="Query EuroLeague Fantasy API to update live snapshot and player values" style="padding:0.4rem 0.8rem; font-size:0.8rem; white-space:nowrap; display:flex; align-items:center; gap:0.4rem;">
+        <span id="update-spinner" style="display:none;">⏳</span>
+        <span id="update-icon">🔄</span>
+        <span id="update-text">Update Data</span>
+      </button>
     </div>
   </header>
 
@@ -372,8 +379,9 @@
 
         <!-- Player Search & Manual Addition -->
         <div style="margin-top:1.25rem;">
-          <div class="card-header">
+          <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
             <h3 style="font-size:0.95rem;">Select & Add Players Manually</h3>
+            <span id="tb-pool-count" style="font-size:0.75rem; color:var(--text-muted);"></span>
           </div>
           <div style="display:flex; gap:0.75rem; margin-top:0.5rem; position:relative;">
             <select id="tb-search-pos" style="width:130px;" onchange="onTeamBuilderSearchInput()">
@@ -384,7 +392,7 @@
               <option value="HC">Coach (HC)</option>
             </select>
             <div style="flex:1; position:relative;">
-              <input type="text" id="tb-player-search" placeholder="Type player or coach name to filter..." oninput="onTeamBuilderSearchInput()" autocomplete="off">
+              <input type="text" id="tb-player-search" placeholder="Type player or coach name to filter..." oninput="onTeamBuilderSearchInput()" onfocus="onTeamBuilderSearchInput()" autocomplete="off">
               <div id="tb-search-dropdown" class="search-dropdown-menu" style="display:none;"></div>
             </div>
           </div>
