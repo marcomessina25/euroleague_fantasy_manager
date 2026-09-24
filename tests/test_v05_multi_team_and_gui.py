@@ -708,3 +708,110 @@ def test_snapshot_store_fallback_and_update_endpoint(tmp_path: Path):
         assert up_data["summary"]["player_count"] == 330
 
 
+def test_workstation_player_details_rename_transfers_and_multiround(tmp_path: Path):
+    """Test player details modal, rename team, trade execution, transfer suggestion, and multi-round planner."""
+    db_file = tmp_path / "trade_studio_test.sqlite3"
+    ts = TeamService(db_path=db_file)
+    ps = PredictionService(database_path=db_file)
+    opt = OptimizationService(ts, ps)
+
+    contracts = _build_test_squad_contracts()
+    cheap_contracts = [
+        PlayerProjectionContract(
+            player_id=500 + i,
+            player_name=f"Cheap Player {i}",
+            position=c.position,
+            team_id=c.team_id,
+            team_code=c.team_code,
+            price_tenths=45 + (i * 2),
+            expected_fp=8.0 + (i * 0.8),
+            probability_play=1.0,
+            expected_minutes=18.0,
+            turn_number=c.turn_number,
+        )
+        for i, c in enumerate(contracts, start=1)
+    ]
+    market = contracts + cheap_contracts
+
+    # Create team with contracts squad
+    units = _build_team_roster_units(contracts)
+    team = ts.create_team(team_id="team_test", name="Original Name", squad=units, bank_tenths=150)
+    assert team.name == "Original Name"
+
+    app = create_app(db_path=db_file)
+    from euroleague_fantasy_manager.web.deps import get_prediction_service
+    app.dependency_overrides[get_prediction_service] = lambda: ps
+    ps.get_projections = lambda s, r: market
+    ps.get_projections_dict = lambda s, r: {c.player_id: c for c in market}
+    ps.get_player_projection = lambda s, r, pid: next((c for c in market if c.player_id == pid), None)
+    ps.get_player_valuations = lambda s, r: {
+        c.player_id: {"fp_per_credit": round(c.expected_fp / c.credits, 2), "points_above_replacement": 2.5}
+        for c in market
+    }
+
+    client = TestClient(app)
+
+    # 1. Test Player Details Endpoint
+    target_pid = contracts[0].player_id
+    res_p = client.get(f"/api/workstation/players/{target_pid}?season=2026/27&round_number=1")
+    assert res_p.status_code == 200
+    p_info = res_p.json()
+    assert p_info["player_id"] == target_pid
+    assert p_info["name"] == contracts[0].player_name
+    assert p_info["position"] == "G"
+    assert p_info["credits"] == contracts[0].credits
+    assert p_info["expected_fp"] == contracts[0].expected_fp
+    assert p_info["fp_per_credit"] > 0
+
+    # 2. Test Rename Team Endpoint (PATCH /api/teams/{team_id})
+    res_ren = client.patch(f"/api/teams/{team.team_id}", json={"name": "Renamed Fantasy Squad"})
+    assert res_ren.status_code == 200
+    assert res_ren.json()["name"] == "Renamed Fantasy Squad"
+    updated_team = ts.get_team(team.team_id)
+    assert updated_team.name == "Renamed Fantasy Squad"
+
+    # 3. Test Suggest Transfers (POST /api/workstation/optimize/transfers)
+    res_sug = client.post("/api/workstation/optimize/transfers", json={
+        "team_id": team.team_id,
+        "season": "2026/27",
+        "round_number": 1,
+        "max_trades": 1,
+        "unlimited": False,
+    })
+    assert res_sug.status_code == 200
+    sug_data = res_sug.json()
+    assert sug_data["team_id"] == team.team_id
+    assert "recommendations" in sug_data
+
+    # 4. Test Execute Transfers (POST /api/teams/{team_id}/transfers)
+    # Trade out one guard (contracts[0]), trade in cheap guard (cheap_contracts[0])
+    out_id = contracts[0].player_id
+    in_id = cheap_contracts[0].player_id
+    res_exec = client.post(f"/api/teams/{team.team_id}/transfers", json={
+        "transfers_out_ids": [out_id],
+        "transfers_in_ids": [in_id],
+        "unlimited": False,
+        "season": "2026/27",
+    })
+    assert res_exec.status_code == 200
+    post_team = res_exec.json()
+    post_pids = {u["player_id"] for u in post_team["squad"]}
+    assert out_id not in post_pids
+    assert in_id in post_pids
+    assert post_team["transfers_remaining"] == 3
+
+    # 5. Test Multi-Round Beam Search Planner (POST /api/workstation/optimize/multi-round)
+    res_mr = client.post("/api/workstation/optimize/multi-round", json={
+        "team_id": team.team_id,
+        "season": "2026/27",
+        "horizon": 2,
+        "gamma": 0.95,
+    })
+    assert res_mr.status_code == 200
+    mr_data = res_mr.json()
+    assert mr_data["horizon"] == 2
+    assert mr_data["total_expected_score"] > 0
+    assert len(mr_data["steps"]) == 2
+    assert mr_data["steps"][0]["formation"] is not None
+
+

@@ -133,10 +133,14 @@ class OptimizationService:
             c = contract_map.get(pid)
             if not c:
                 return {"player_id": pid, "name": f"Player {pid}", "position": "G", "expected_fp": 0.0}
+            pos_code = c.position.short_code if hasattr(c.position, "short_code") else (
+                Position.from_raw(c.position).short_code if hasattr(Position, "from_raw") else str(c.position)
+            )
             return {
                 "player_id": c.player_id,
                 "name": c.player_name,
-                "position": c.position.name if hasattr(c.position, "name") else str(c.position),
+                "position": pos_code,
+                "position_name": c.position.name if hasattr(c.position, "name") else str(c.position),
                 "team_code": c.team_code,
                 "price_tenths": c.price_tenths,
                 "credits": c.credits,
@@ -225,7 +229,7 @@ class OptimizationService:
         start_round: int | None = None,
         horizon: int = 3,
         gamma: float = 0.95,
-        beam_width: int = 5,
+        beam_width: int = 4,
     ) -> MultiRoundPlan:
         """Run beam search multi-round transfer planner across N rounds."""
         team = self.team_service.get_team(team_id)
@@ -237,14 +241,15 @@ class OptimizationService:
 
         squad_contracts = self._resolve_squad_contracts(team.squad, season, s_rnd)
 
+        self.multi_round_optimizer.discount_factor = gamma
+        self.multi_round_optimizer.branching_factor = beam_width
+
         return self.multi_round_optimizer.optimize_multi_round(
-            initial_squad=squad_contracts,
-            pool_by_round=pool_by_round,
             start_round=s_rnd,
             horizon=horizon,
+            initial_squad=squad_contracts,
+            projections_by_round=pool_by_round,
             initial_bank_tenths=team.bank_tenths,
-            discount_gamma=gamma,
-            beam_width=beam_width,
         )
 
     def recommend_initial_team(

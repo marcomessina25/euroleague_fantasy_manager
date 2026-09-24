@@ -206,23 +206,41 @@ def optimize_transfers_endpoint(
         recs = []
         for r in res.recommendations:
             recs.append({
-                "transfers_out": list(r.transfers_out),
-                "transfers_in": list(r.transfers_in),
-                "net_score_gain": round(r.net_score_gain, 2),
-                "budget_delta_tenths": r.budget_delta_tenths,
-                "budget_delta_credits": round(r.budget_delta_tenths / 10.0, 1),
+                "transfers_out": [p.player_id for p in r.out_players],
+                "transfers_out_details": [
+                    {
+                        "player_id": p.player_id,
+                        "name": p.player_name,
+                        "position": p.position.short_code if hasattr(p.position, "short_code") else str(p.position),
+                        "credits": p.credits,
+                        "expected_fp": round(p.expected_fp, 2),
+                    }
+                    for p in r.out_players
+                ],
+                "transfers_in": [p.player_id for p in r.in_players],
+                "transfers_in_details": [
+                    {
+                        "player_id": p.player_id,
+                        "name": p.player_name,
+                        "position": p.position.short_code if hasattr(p.position, "short_code") else str(p.position),
+                        "credits": p.credits,
+                        "expected_fp": round(p.expected_fp, 2),
+                    }
+                    for p in r.in_players
+                ],
+                "net_score_gain": round(r.net_transfer_value, 2),
+                "gross_score_gain": round(r.gross_score_gain, 2),
                 "remaining_bank_tenths": r.remaining_bank_tenths,
                 "remaining_bank_credits": round(r.remaining_bank_tenths / 10.0, 1),
-                "post_transfer_expected_score": round(r.post_transfer_expected_score, 2),
-                "is_legal": r.is_legal,
+                "post_transfer_expected_score": round(r.new_lineup.expected_score, 2),
+                "is_legal": True,
             })
 
         return {
             "team_id": req.team_id,
             "best_recommendation": recs[0] if recs else None,
             "recommendations": recs,
-            "evaluated_combinations": res.evaluated_combinations,
-            "elapsed_seconds": round(res.elapsed_seconds, 3),
+            "evaluated_combinations": res.total_evaluated_packages,
         }
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -305,22 +323,25 @@ def optimize_multi_round_endpoint(
         )
         steps = []
         for s in plan.steps:
+            out_players = list(s.transfers.out_players) if s.transfers else []
+            in_players = list(s.transfers.in_players) if s.transfers else []
             steps.append({
                 "round_number": s.round_number,
-                "transfers_out": list(s.transfers_out),
-                "transfers_in": list(s.transfers_in),
-                "expected_score": round(s.expected_score, 2),
-                "discounted_score": round(s.discounted_score, 2),
-                "formation": s.formation,
-                "bank_tenths": s.remaining_bank_tenths,
-                "bank_credits": round(s.remaining_bank_tenths / 10.0, 1),
+                "transfers_out": [p.player_name for p in out_players],
+                "transfers_out_ids": [p.player_id for p in out_players],
+                "transfers_in": [p.player_name for p in in_players],
+                "transfers_in_ids": [p.player_id for p in in_players],
+                "expected_score": round(s.expected_round_score, 2),
+                "formation": s.lineup.formation,
+                "bank_tenths": s.bank_tenths_end_of_round,
+                "bank_credits": round(s.bank_tenths_end_of_round / 10.0, 1),
             })
         return {
             "team_id": req.team_id,
             "horizon": plan.horizon,
-            "discount_gamma": plan.discount_gamma,
+            "discount_gamma": req.gamma,
             "total_expected_score": round(plan.total_expected_score, 2),
-            "total_discounted_score": round(plan.total_discounted_score, 2),
+            "total_discounted_score": round(plan.discounted_expected_score, 2),
             "steps": steps,
         }
     except KeyError as e:
@@ -429,6 +450,86 @@ def list_players_endpoint(
 
     filtered.sort(key=lambda x: -x["expected_fp"])
     return filtered[:limit]
+
+
+@router.get("/players/{player_id}")
+def get_player_details_endpoint(
+    player_id: int,
+    season: str = "2026/27",
+    round_number: int = 1,
+    prediction_service: PredictionService = Depends(get_prediction_service),
+) -> dict[str, Any]:
+    """Retrieve complete player statistics, projections, and metadata for player window modal."""
+    import sqlite3
+
+    db_path = prediction_service.database_path
+
+    # Projection contract & valuation
+    contract = prediction_service.get_player_projection(season, round_number, player_id)
+    valuations = prediction_service.get_player_valuations(season, round_number)
+    val = valuations.get(player_id, {})
+
+    # Detailed snapshot database row
+    player_row: dict[str, Any] = {}
+    if db_path.exists():
+        try:
+            with sqlite3.connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    "SELECT * FROM players WHERE id = ? ORDER BY snapshot_id DESC LIMIT 1",
+                    (player_id,),
+                ).fetchone()
+                if row:
+                    player_row = dict(row)
+        except sqlite3.OperationalError:
+            pass
+
+    if not player_row and not contract:
+        raise HTTPException(status_code=404, detail=f"Player '{player_id}' not found.")
+
+    pos_code = "G"
+    pos_name = "Guard"
+    if contract:
+        pos_code = contract.position.short_code if hasattr(contract.position, "short_code") else str(contract.position)
+        pos_name = contract.position.name if hasattr(contract.position, "name") else str(contract.position)
+    elif player_row.get("position_code"):
+        pos_code = str(player_row["position_code"])
+        pos_name = str(player_row.get("position", pos_code))
+
+    price_tenths = player_row.get("price_tenths") or (contract.price_tenths if contract else 0)
+    credits_val = round(price_tenths / 10.0, 1)
+
+    return {
+        "player_id": player_id,
+        "name": player_row.get("name") or (contract.player_name if contract else f"Player {player_id}"),
+        "first_name": player_row.get("first_name", ""),
+        "last_name": player_row.get("last_name", ""),
+        "position": pos_code,
+        "position_name": pos_name,
+        "team_id": player_row.get("team_id"),
+        "team_code": player_row.get("team_code") or (contract.team_code if contract else ""),
+        "team_name": player_row.get("team_name", ""),
+        "price_tenths": price_tenths,
+        "credits": credits_val,
+        "status": player_row.get("status", "starter"),
+        "probability_of_playing": player_row.get("probability_of_playing", contract.probability_play if contract else 1.0),
+        "turn_number": player_row.get("turn_number", contract.turn_number if contract else 1),
+        "avg_fantasy_pts": player_row.get("avg_fantasy_pts", 0.0),
+        "last_match_pts": player_row.get("last_match_pts", 0.0),
+        "total_plus_tenths": player_row.get("total_plus_tenths", 0),
+        "total_plus_credits": round((player_row.get("total_plus_tenths", 0)) / 10.0, 1),
+        "popularity": player_row.get("popularity", 0.0),
+        "is_injured": bool(player_row.get("is_injured", False)),
+        "is_on_fire": bool(player_row.get("is_on_fire", False)),
+        "expected_fp": round(contract.expected_fp, 2) if contract else round(player_row.get("avg_fantasy_pts", 0.0), 2),
+        "uncertainty": round(contract.uncertainty, 2) if contract else 0.0,
+        "expected_minutes": round(contract.expected_minutes, 1) if contract else 20.0,
+        "fp_per_credit": val.get("fp_per_credit", 0.0),
+        "points_above_replacement": val.get("points_above_replacement", 0.0),
+        "risk_adjusted_fp": val.get("risk_adjusted_fp", contract.expected_fp if contract else 0.0),
+        "opponent_code": contract.opponent_code if contract else "",
+        "is_home": contract.is_home if contract else True,
+    }
 
 
 @router.post("/initial-team/suggest")

@@ -29,7 +29,7 @@ function initNav() {
       state.activeTab = targetId;
 
       if (targetId === "trade-studio") {
-        loadPlayerPool();
+        loadTradeStudio();
       } else if (targetId === "evaluation") {
         loadEvaluation();
       }
@@ -37,7 +37,7 @@ function initNav() {
   });
 }
 
-// Teams API
+// Teams API & Team Management
 async function loadTeams() {
   try {
     const res = await fetch("/api/teams");
@@ -48,7 +48,6 @@ async function loadTeams() {
     container.innerHTML = "";
 
     if (teams.length === 0) {
-      // Create default team_1 if none exist
       const createRes = await fetch("/api/teams", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -71,11 +70,27 @@ async function loadTeams() {
     }
 
     state.teams.forEach((t) => {
+      const tabWrap = document.createElement("div");
+      tabWrap.style = "display:flex; align-items:center; gap:0.2rem; background:rgba(255,255,255,0.03); border-radius:4px; padding:0 0.2rem;";
+
       const btn = document.createElement("button");
       btn.className = `team-tab-btn ${t.team_id === state.activeTeamId ? "active" : ""}`;
       btn.textContent = t.name;
       btn.onclick = () => switchTeam(t.team_id);
-      container.appendChild(btn);
+      tabWrap.appendChild(btn);
+
+      if (t.team_id === state.activeTeamId) {
+        const renBtn = document.createElement("button");
+        renBtn.className = "btn-rename-team";
+        renBtn.innerHTML = "✏️";
+        renBtn.title = "Rename active team";
+        renBtn.onclick = (e) => {
+          e.stopPropagation();
+          openRenameModal(t.team_id, t.name);
+        };
+        tabWrap.appendChild(renBtn);
+      }
+      container.appendChild(tabWrap);
     });
 
     // Add Team Button (enforces 3 teams max limit)
@@ -101,6 +116,53 @@ async function switchTeam(teamId) {
   await fetch(`/api/teams/${teamId}/active`, { method: "POST" });
   await loadTeams();
   await loadDashboard();
+  if (state.activeTab === "trade-studio") {
+    loadTradeStudio();
+  }
+}
+
+// Rename Team Modal Handlers
+function openRenameModal(teamId, currentName) {
+  const modal = document.getElementById("rename-team-modal");
+  const input = document.getElementById("rename-team-input");
+  if (modal && input) {
+    modal.setAttribute("data-team-id", teamId);
+    input.value = currentName || "";
+    modal.style.display = "flex";
+    input.focus();
+  }
+}
+
+function closeRenameModal() {
+  const modal = document.getElementById("rename-team-modal");
+  if (modal) modal.style.display = "none";
+}
+
+async function submitRenameTeam() {
+  const modal = document.getElementById("rename-team-modal");
+  const input = document.getElementById("rename-team-input");
+  if (!modal || !input) return;
+  const teamId = modal.getAttribute("data-team-id") || state.activeTeamId;
+  const newName = input.value.trim();
+  if (!newName) return;
+
+  try {
+    const res = await fetch(`/api/teams/${teamId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: newName }),
+    });
+    if (res.ok) {
+      closeRenameModal();
+      await loadTeams();
+      await loadDashboard();
+    } else {
+      const err = await res.json();
+      alert("Failed to rename team: " + (err.detail || "Server error"));
+    }
+  } catch (err) {
+    console.error("Rename team failed:", err);
+  }
 }
 
 // Dashboard & Court Rendering
@@ -132,53 +194,75 @@ function renderCourt(lineup) {
   const container = document.getElementById("court-starters");
   container.innerHTML = "";
 
-  // Group starters by row (Guards perimeter, Forwards wings, Centers paint)
-  const guards = lineup.starters.filter((p) => p.position === "G");
-  const forwards = lineup.starters.filter((p) => p.position === "F");
-  const centers = lineup.starters.filter((p) => p.position === "C");
+  // Group starters by normalized position (Guards perimeter, Forwards wings, Centers paint)
+  const guards = lineup.starters.filter((p) => normalizePos(p.position) === "G");
+  const forwards = lineup.starters.filter((p) => normalizePos(p.position) === "F");
+  const centers = lineup.starters.filter((p) => normalizePos(p.position) === "C");
 
   const gRow = document.createElement("div");
   gRow.className = "court-row";
-  guards.forEach((p) => gRow.appendChild(createPlayerCard(p, lineup)));
+  guards.forEach((p) => gRow.appendChild(createPlayerCard(p, lineup, "starter")));
 
   const fRow = document.createElement("div");
   fRow.className = "court-row";
-  forwards.forEach((p) => fRow.appendChild(createPlayerCard(p, lineup)));
+  forwards.forEach((p) => fRow.appendChild(createPlayerCard(p, lineup, "starter")));
 
   const cRow = document.createElement("div");
   cRow.className = "court-row";
-  centers.forEach((p) => cRow.appendChild(createPlayerCard(p, lineup)));
+  centers.forEach((p) => cRow.appendChild(createPlayerCard(p, lineup, "starter")));
 
   container.appendChild(gRow);
   container.appendChild(fRow);
   container.appendChild(cRow);
 }
 
-function createPlayerCard(player, lineup) {
+function createPlayerCard(player, lineup, roleType = "starter") {
   const card = document.createElement("div");
   const isCap = player.player_id === lineup.captain_id;
   const is6th = player.player_id === lineup.sixth_man_id;
+  const posCode = normalizePos(player.position);
+  const isCoach = (posCode === "HC" || roleType === "coach");
 
   card.className = `player-card ${isCap ? "captain" : ""} ${is6th ? "sixth-man" : ""}`;
+  card.style.cursor = "pointer";
+  card.onclick = () => openPlayerModal(player.player_id);
 
   let roleHtml = "";
   if (isCap) roleHtml = `<span class="role-badge captain">CAP 2x</span>`;
   else if (is6th) roleHtml = `<span class="role-badge sixth-man">6TH 1x</span>`;
+  else if (roleType === "bench") roleHtml = `<span class="role-badge bench">0.5x</span>`;
+  else if (isCoach) roleHtml = `<span class="role-badge coach">1.0x</span>`;
+
+  // Action bar inside card: Cap & Sub
+  let actionHtml = "";
+  if (!isCoach) {
+    actionHtml = `
+      <div class="card-action-bar">
+        <button class="card-action-btn ${isCap ? "active-cap" : ""}" title="Name Captain" onclick="event.stopPropagation(); setCaptain(${player.player_id})">
+          👑 ${isCap ? "Cap" : "Cap"}
+        </button>
+        <button class="card-action-btn" title="Substitute Player" onclick="event.stopPropagation(); openSubModal(${player.player_id})">
+          ⇄ Sub
+        </button>
+      </div>
+    `;
+  }
 
   card.innerHTML = `
     <div class="player-header">
-      <span class="player-pos-badge">${player.position}</span>
+      <span class="player-pos-badge">${posCode}</span>
       ${roleHtml}
     </div>
     <div class="player-name" title="${player.name}">${player.name}</div>
     <div class="player-meta">
-      <span>${player.team_code}</span>
+      <span>${player.team_code || "UNK"}</span>
       <span>${player.credits} cr</span>
     </div>
     <div class="player-meta">
-      <span>T${player.turn_number} vs ${player.opponent_code || "OPP"}</span>
+      <span>T${player.turn_number || 1} vs ${player.opponent_code || "OPP"}</span>
       <span class="player-fp">${player.expected_fp} FP</span>
     </div>
+    ${actionHtml}
   `;
   return card;
 }
@@ -187,34 +271,21 @@ function renderBench(lineup) {
   const container = document.getElementById("bench-units");
   container.innerHTML = "";
 
-  // Sixth Man
+  // Sixth Man (1.0x)
   if (lineup.sixth_man) {
-    const smCard = createPlayerCard(lineup.sixth_man, lineup);
+    const smCard = createPlayerCard(lineup.sixth_man, lineup, "sixth_man");
     container.appendChild(smCard);
   }
 
   // Bench (0.5x)
   lineup.bench.forEach((p) => {
-    const bCard = createPlayerCard(p, lineup);
-    bCard.querySelector(".player-header").innerHTML += `<span class="role-badge bench">0.5x</span>`;
+    const bCard = createPlayerCard(p, lineup, "bench");
     container.appendChild(bCard);
   });
 
-  // Coach
+  // Coach (1.0x)
   if (lineup.coach) {
-    const cCard = document.createElement("div");
-    cCard.className = "player-card";
-    cCard.innerHTML = `
-      <div class="player-header">
-        <span class="player-pos-badge">HC</span>
-        <span class="role-badge coach">1.0x</span>
-      </div>
-      <div class="player-name">${lineup.coach.name}</div>
-      <div class="player-meta">
-        <span>${lineup.coach.team_code}</span>
-        <span class="player-fp">${lineup.coach.expected_fp} FP</span>
-      </div>
-    `;
+    const cCard = createPlayerCard(lineup.coach, lineup, "coach");
     container.appendChild(cCard);
   }
 }
@@ -245,6 +316,210 @@ function renderProvenance(prov, oracleMatch) {
     <span class="tag-provenance">Risk: <strong>${prov.risk_mode}</strong></span>
     ${oracleMatch ? '<span class="badge badge-green">✓ Oracle Verified</span>' : '<span class="badge badge-gold">Heuristic</span>'}
   `;
+}
+
+// Lineup Roles: Set Captain
+async function setCaptain(playerId) {
+  if (!state.dashboard || !state.activeTeamId) return;
+  const l = state.dashboard.optimal_lineup;
+  const starterIds = l.starters.map((p) => p.player_id);
+  const benchIds = l.bench.map((p) => p.player_id);
+  const sixthManId = l.sixth_man ? l.sixth_man.player_id : (l.sixth_man_id || 0);
+  const coachId = l.coach ? l.coach.player_id : (l.coach_id || 0);
+
+  try {
+    const res = await fetch(`/api/teams/${state.activeTeamId}/lineup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        starter_ids: starterIds,
+        captain_id: playerId,
+        sixth_man_id: sixthManId,
+        bench_ids: benchIds,
+        coach_id: coachId,
+      }),
+    });
+    if (res.ok) {
+      await loadDashboard();
+    } else {
+      const err = await res.json();
+      alert("Failed to update captain: " + (err.detail || "Server error"));
+    }
+  } catch (err) {
+    console.error("Failed to set captain:", err);
+  }
+}
+
+// Lineup Roles: Substitution Modal
+let currentSubTargetId = null;
+
+function openSubModal(playerId) {
+  if (!state.dashboard) return;
+  currentSubTargetId = playerId;
+  const l = state.dashboard.optimal_lineup;
+
+  const allUnits = [
+    ...l.starters.map((p) => ({ ...p, role: "starter" })),
+    ...(l.sixth_man ? [{ ...l.sixth_man, role: "sixth_man" }] : []),
+    ...l.bench.map((p) => ({ ...p, role: "bench" })),
+  ];
+
+  const targetPlayer = allUnits.find((p) => p.player_id === playerId);
+  if (!targetPlayer) return;
+
+  const modal = document.getElementById("sub-modal");
+  const targetLabel = document.getElementById("sub-target-name");
+  targetLabel.textContent = `${targetPlayer.name} (${normalizePos(targetPlayer.position)}, ${targetPlayer.role.toUpperCase()})`;
+
+  const listContainer = document.getElementById("sub-options-list");
+  listContainer.innerHTML = "";
+
+  // If target is starter, swap candidates are bench & 6th man. If target is bench/6th man, swap candidates are starters.
+  const isStarter = targetPlayer.role === "starter";
+  const candidates = allUnits.filter((p) => (isStarter ? p.role !== "starter" : p.role === "starter"));
+
+  candidates.forEach((cand) => {
+    const item = document.createElement("div");
+    item.style = "display:flex; justify-content:space-between; align-items:center; background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; padding:0.6rem 0.8rem;";
+    item.innerHTML = `
+      <div>
+        <strong>${cand.name}</strong> <span class="player-pos-badge">${normalizePos(cand.position)}</span>
+        <span style="font-size:0.75rem; color:var(--text-muted); margin-left:0.4rem;">${cand.credits} cr | ${cand.expected_fp} FP (${cand.role.toUpperCase()})</span>
+      </div>
+      <button class="btn btn-primary" style="padding:0.25rem 0.6rem; font-size:0.8rem;" onclick="executeSwap(${targetPlayer.player_id}, ${cand.player_id})">
+        ⇄ Swap
+      </button>
+    `;
+    listContainer.appendChild(item);
+  });
+
+  modal.style.display = "flex";
+}
+
+function closeSubModal() {
+  const modal = document.getElementById("sub-modal");
+  if (modal) modal.style.display = "none";
+}
+
+async function executeSwap(pidA, pidB) {
+  if (!state.dashboard || !state.activeTeamId) return;
+  const l = state.dashboard.optimal_lineup;
+
+  let starters = l.starters.map((p) => p.player_id);
+  let bench = l.bench.map((p) => p.player_id);
+  let sixthMan = l.sixth_man ? l.sixth_man.player_id : (l.sixth_man_id || 0);
+  const coach = l.coach ? l.coach.player_id : (l.coach_id || 0);
+  let captain = l.captain_id;
+
+  // Perform swap between starter and bench/sixthMan
+  if (starters.includes(pidA)) {
+    starters = starters.map((id) => (id === pidA ? pidB : id));
+    if (sixthMan === pidB) sixthMan = pidA;
+    else bench = bench.map((id) => (id === pidB ? pidA : id));
+  } else if (starters.includes(pidB)) {
+    starters = starters.map((id) => (id === pidB ? pidA : id));
+    if (sixthMan === pidA) sixthMan = pidB;
+    else bench = bench.map((id) => (id === pidA ? pidB : id));
+  }
+
+  try {
+    const res = await fetch(`/api/teams/${state.activeTeamId}/lineup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        starter_ids: starters,
+        captain_id: captain,
+        sixth_man_id: sixthMan,
+        bench_ids: bench,
+        coach_id: coach,
+      }),
+    });
+
+    if (res.ok) {
+      closeSubModal();
+      await loadDashboard();
+    } else {
+      const err = await res.json();
+      alert("Substitution failed: " + (err.detail || "Illegal lineup formation"));
+    }
+  } catch (err) {
+    console.error("Execute swap error:", err);
+  }
+}
+
+// Player Statistics Details Modal
+let currentModalPlayerId = null;
+
+async function openPlayerModal(playerId) {
+  currentModalPlayerId = playerId;
+  const modal = document.getElementById("player-modal");
+  if (!modal) return;
+
+  try {
+    const res = await fetch(`/api/workstation/players/${playerId}?season=${state.season}&round_number=${state.roundNumber}`);
+    if (!res.ok) {
+      alert("Could not load statistics for player #" + playerId);
+      return;
+    }
+    const p = await res.json();
+
+    document.getElementById("pm-name").textContent = p.name;
+    document.getElementById("pm-pos-badge").textContent = normalizePos(p.position);
+    document.getElementById("pm-team").textContent = `(${p.team_code || "UNK"})`;
+    document.getElementById("pm-credits").textContent = `${p.credits} cr`;
+    document.getElementById("pm-exp-fp").textContent = `${p.expected_fp} FP`;
+    document.getElementById("pm-avg-fp").textContent = `${p.avg_fantasy_pts.toFixed(1)} FP`;
+    document.getElementById("pm-last-fp").textContent = `${p.last_match_pts.toFixed(1)} FP`;
+    document.getElementById("pm-prob").textContent = `${Math.round(p.probability_of_playing * 100)}%`;
+    document.getElementById("pm-efficiency").textContent = p.fp_per_credit ? p.fp_per_credit.toFixed(2) : "-";
+
+    document.getElementById("pm-status").textContent = p.status ? p.status.toUpperCase() : "ACTIVE";
+    document.getElementById("pm-fixture").textContent = `Turn ${p.turn_number} vs ${p.opponent_code || "OPP"} (${p.is_home ? "Home" : "Away"})`;
+    document.getElementById("pm-minutes").textContent = `${p.expected_minutes || 20} min`;
+    document.getElementById("pm-uncertainty").textContent = `±${p.uncertainty || 0} FP`;
+    document.getElementById("pm-popularity").textContent = `${p.popularity || 0}%`;
+    document.getElementById("pm-gain").textContent = `${p.total_plus_credits >= 0 ? "+" : ""}${p.total_plus_credits} cr`;
+    document.getElementById("pm-condition").textContent = p.is_injured ? "Injured 🚑" : (p.is_on_fire ? "On Fire 🔥" : "Fit ✓");
+    document.getElementById("pm-risk-fp").textContent = `${p.risk_adjusted_fp || p.expected_fp} FP`;
+
+    // Check if player is in current team squad
+    const squadActions = document.getElementById("pm-squad-actions");
+    const isSquadPlayer = state.dashboard && state.dashboard.optimal_lineup && [
+      ...state.dashboard.optimal_lineup.starters,
+      ...(state.dashboard.optimal_lineup.sixth_man ? [state.dashboard.optimal_lineup.sixth_man] : []),
+      ...state.dashboard.optimal_lineup.bench,
+    ].some((x) => x.player_id === playerId);
+
+    if (isSquadPlayer && normalizePos(p.position) !== "HC") {
+      squadActions.style.display = "flex";
+    } else {
+      squadActions.style.display = "none";
+    }
+
+    modal.style.display = "flex";
+  } catch (err) {
+    console.error("Open player modal error:", err);
+  }
+}
+
+function closePlayerModal() {
+  const modal = document.getElementById("player-modal");
+  if (modal) modal.style.display = "none";
+}
+
+function onModalMakeCaptain() {
+  if (currentModalPlayerId) {
+    setCaptain(currentModalPlayerId);
+    closePlayerModal();
+  }
+}
+
+function onModalSubstitute() {
+  if (currentModalPlayerId) {
+    const pid = currentModalPlayerId;
+    closePlayerModal();
+    openSubModal(pid);
+  }
 }
 
 // Lineup Optimization Trigger
@@ -308,6 +583,294 @@ async function runTurnSubSimulator() {
   }
 }
 
+// =========================================================================
+// Trade Studio & Transfer Manager (Phase G & H)
+// =========================================================================
+let tradeStudioState = {
+  currentSquad: [],
+  transfersOut: [],
+  transfersIn: [],
+  unlimited: false,
+};
+
+async function loadTradeStudio() {
+  if (!state.activeTeamId) return;
+
+  try {
+    const res = await fetch(`/api/teams/${state.activeTeamId}`);
+    if (!res.ok) return;
+    const team = await res.json();
+
+    tradeStudioState.currentSquad = team.squad || [];
+    tradeStudioState.transfersRemaining = team.transfers_remaining;
+    tradeStudioState.bankCredits = (team.bank_tenths || 0) / 10.0;
+
+    renderTradeStudioSquad();
+    updateTradeStudioUI();
+    await loadPlayerPool();
+  } catch (err) {
+    console.error("Failed to load trade studio:", err);
+  }
+}
+
+function renderTradeStudioSquad() {
+  const tbody = document.getElementById("ts-squad-tbody");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+
+  tradeStudioState.currentSquad.forEach((unit) => {
+    const isOut = tradeStudioState.transfersOut.some((x) => x.id === unit.player_id);
+    const pos = normalizePos(unit.position);
+    const tr = document.createElement("tr");
+
+    tr.innerHTML = `
+      <td>
+        <strong style="cursor:pointer;" onclick="openPlayerModal(${unit.player_id})">${unit.name}</strong>
+        <span style="color:var(--text-muted); font-size:0.75rem;">(${unit.team_code || "UNK"})</span>
+      </td>
+      <td><span class="player-pos-badge">${pos}</span></td>
+      <td>${(unit.current_price_tenths / 10.0).toFixed(1)} cr</td>
+      <td style="color:var(--accent-orange); font-weight:700;">-</td>
+      <td>
+        <button class="btn ${isOut ? "btn-secondary" : "btn-primary"}"
+                style="padding:0.2rem 0.5rem; font-size:0.75rem; ${isOut ? "border-color:var(--accent-red); color:var(--accent-red);" : ""}"
+                onclick="toggleTradeOut(${unit.player_id}, '${unit.name.replace("'", "")}', ${unit.current_price_tenths / 10.0})">
+          ${isOut ? "✓ Selected (Out)" : "✕ Sell"}
+        </button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function toggleTradeOut(pid, name, credits) {
+  const idx = tradeStudioState.transfersOut.findIndex((x) => x.id === pid);
+  if (idx >= 0) {
+    tradeStudioState.transfersOut.splice(idx, 1);
+  } else {
+    if (!tradeStudioState.unlimited && tradeStudioState.transfersOut.length >= tradeStudioState.transfersRemaining) {
+      alert(`Limit reached: Maximum ${tradeStudioState.transfersRemaining} scheduled transfers allowed.`);
+      return;
+    }
+    tradeStudioState.transfersOut.push({ id: pid, name: name, credits: credits });
+  }
+  renderTradeStudioSquad();
+  updateTradeStudioUI();
+}
+
+function addTradeIn(pid, name, credits) {
+  // Check if already in squad and not being traded out
+  const inSquad = tradeStudioState.currentSquad.some((x) => x.player_id === pid);
+  if (inSquad) {
+    alert("Player is already in your squad!");
+    return;
+  }
+  if (!tradeStudioState.transfersIn.find((x) => x.id === pid)) {
+    tradeStudioState.transfersIn.push({ id: pid, name: name, credits: credits });
+    updateTradeStudioUI();
+  }
+}
+
+function removeTradeOut(pid) {
+  tradeStudioState.transfersOut = tradeStudioState.transfersOut.filter((x) => x.id !== pid);
+  renderTradeStudioSquad();
+  updateTradeStudioUI();
+}
+
+function removeTradeIn(pid) {
+  tradeStudioState.transfersIn = tradeStudioState.transfersIn.filter((x) => x.id !== pid);
+  updateTradeStudioUI();
+}
+
+function onUnlimitedToggleChange() {
+  const toggle = document.getElementById("unlimited-window-toggle");
+  tradeStudioState.unlimited = toggle ? toggle.checked : false;
+  updateTradeStudioUI();
+}
+
+function updateTradeStudioUI() {
+  const outContainer = document.getElementById("selected-trades-out");
+  const inContainer = document.getElementById("selected-trades-in");
+  const currentBankElem = document.getElementById("ts-current-bank");
+  const soldValElem = document.getElementById("ts-sold-val");
+  const boughtValElem = document.getElementById("ts-bought-val");
+  const newBankElem = document.getElementById("ts-new-bank");
+  const tradesLeftElem = document.getElementById("ts-trades-left");
+  const countBadge = document.getElementById("trades-count-badge");
+  const execBtn = document.getElementById("btn-execute-trades");
+  const validationMsg = document.getElementById("ts-validation-msg");
+
+  const bank = tradeStudioState.bankCredits || 0;
+  const sold = tradeStudioState.transfersOut.reduce((acc, p) => acc + p.credits, 0);
+  const bought = tradeStudioState.transfersIn.reduce((acc, p) => acc + p.credits, 0);
+  const newBank = bank + sold - bought;
+
+  if (currentBankElem) currentBankElem.textContent = `${bank.toFixed(1)} cr`;
+  if (soldValElem) soldValElem.textContent = `+${sold.toFixed(1)} cr`;
+  if (boughtValElem) boughtValElem.textContent = `-${bought.toFixed(1)} cr`;
+  if (newBankElem) {
+    newBankElem.textContent = `${newBank.toFixed(1)} cr`;
+    newBankElem.style.color = newBank < 0 ? "var(--accent-red)" : "var(--accent-orange)";
+  }
+  if (tradesLeftElem) {
+    tradesLeftElem.textContent = tradeStudioState.unlimited ? "Unlimited 🌟" : tradeStudioState.transfersRemaining;
+  }
+  if (countBadge) {
+    countBadge.textContent = `${tradeStudioState.transfersOut.length} out / ${tradeStudioState.transfersIn.length} in`;
+  }
+
+  // Render OUT chips
+  if (outContainer) {
+    if (tradeStudioState.transfersOut.length === 0) {
+      outContainer.innerHTML = `<span style="color:var(--text-muted); font-size:0.8rem; font-style:italic;">None selected</span>`;
+    } else {
+      outContainer.innerHTML = tradeStudioState.transfersOut.map(
+        (p) => `<span class="trade-chip out">${p.name} (${p.credits} cr) <span class="trade-chip-remove" onclick="removeTradeOut(${p.id})">✕</span></span>`
+      ).join(" ");
+    }
+  }
+
+  // Render IN chips
+  if (inContainer) {
+    if (tradeStudioState.transfersIn.length === 0) {
+      inContainer.innerHTML = `<span style="color:var(--text-muted); font-size:0.8rem; font-style:italic;">None selected</span>`;
+    } else {
+      inContainer.innerHTML = tradeStudioState.transfersIn.map(
+        (p) => `<span class="trade-chip in">${p.name} (${p.credits} cr) <span class="trade-chip-remove" onclick="removeTradeIn(${p.id})">✕</span></span>`
+      ).join(" ");
+    }
+  }
+
+  // Validation Check
+  let isValid = true;
+  let reason = "";
+
+  if (tradeStudioState.transfersOut.length === 0 && tradeStudioState.transfersIn.length === 0) {
+    isValid = false;
+    reason = "";
+  } else if (tradeStudioState.transfersOut.length !== tradeStudioState.transfersIn.length) {
+    isValid = false;
+    reason = `Trades unequal (${tradeStudioState.transfersOut.length} sold vs ${tradeStudioState.transfersIn.length} bought)`;
+  } else if (newBank < 0) {
+    isValid = false;
+    reason = `Budget deficit: -${Math.abs(newBank).toFixed(1)} cr`;
+  } else if (!tradeStudioState.unlimited && tradeStudioState.transfersOut.length > tradeStudioState.transfersRemaining) {
+    isValid = false;
+    reason = `Exceeds ${tradeStudioState.transfersRemaining} available transfers`;
+  }
+
+  if (validationMsg) {
+    validationMsg.textContent = reason;
+    validationMsg.style.color = isValid ? "var(--accent-green)" : "var(--accent-red)";
+  }
+
+  if (execBtn) {
+    execBtn.disabled = !isValid;
+  }
+}
+
+async function triggerSuggestTransfers() {
+  const btn = document.getElementById("btn-suggest-trades");
+  const banner = document.getElementById("trade-rec-banner");
+  if (btn) btn.textContent = "⏳ Finding Best Trades...";
+
+  try {
+    const res = await fetch("/api/workstation/optimize/transfers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        team_id: state.activeTeamId,
+        season: state.season,
+        round_number: state.roundNumber,
+        max_trades: tradeStudioState.unlimited ? 2 : Math.min(2, tradeStudioState.transfersRemaining || 1),
+        unlimited: tradeStudioState.unlimited,
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      const best = data.best_recommendation;
+
+      if (!best || !best.transfers_out_details || best.transfers_out_details.length === 0) {
+        if (banner) {
+          banner.style.display = "block";
+          banner.innerHTML = `<p style="margin:0; font-size:0.85rem; color:var(--text-muted);">Current squad is already optimal under current projections. No profitable trade found.</p>`;
+        }
+        return;
+      }
+
+      const outNames = best.transfers_out_details.map((p) => `<strong>${p.name}</strong> (${p.credits} cr)`).join(", ");
+      const inNames = best.transfers_in_details.map((p) => `<strong>${p.name}</strong> (${p.credits} cr)`).join(", ");
+
+      if (banner) {
+        banner.style.display = "block";
+        banner.innerHTML = `
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+            <div>
+              <strong style="color:var(--accent-orange);">⚡ Recommended Trade:</strong> Sell ${outNames} → Buy ${inNames}
+              <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.2rem;">
+                Net Gain: <strong style="color:var(--accent-green);">+${best.net_score_gain} FP</strong> | Projected Score: ${best.post_transfer_expected_score} FP | New Bank: ${best.remaining_bank_credits} cr
+              </div>
+            </div>
+            <button class="btn btn-primary" style="padding:0.3rem 0.7rem; font-size:0.8rem;" onclick="applySuggestedTrade(${JSON.stringify(best.transfers_out_details).replace(/"/g, '&quot;')}, ${JSON.stringify(best.transfers_in_details).replace(/"/g, '&quot;')})">
+              Apply to Studio
+            </button>
+          </div>
+        `;
+      }
+    } else {
+      const err = await res.json();
+      alert("Failed to compute transfers: " + (err.detail || "Optimizer error"));
+    }
+  } catch (err) {
+    console.error("Transfer optimization error:", err);
+  } finally {
+    if (btn) btn.textContent = "⚡ Suggest Transfers";
+  }
+}
+
+function applySuggestedTrade(outs, ins) {
+  tradeStudioState.transfersOut = outs.map((p) => ({ id: p.player_id, name: p.name, credits: p.credits }));
+  tradeStudioState.transfersIn = ins.map((p) => ({ id: p.player_id, name: p.name, credits: p.credits }));
+  renderTradeStudioSquad();
+  updateTradeStudioUI();
+}
+
+async function submitExecuteTransfers() {
+  const btn = document.getElementById("btn-execute-trades");
+  if (btn) btn.disabled = true;
+
+  try {
+    const res = await fetch(`/api/teams/${state.activeTeamId}/transfers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        transfers_out_ids: tradeStudioState.transfersOut.map((p) => p.id),
+        transfers_in_ids: tradeStudioState.transfersIn.map((p) => p.id),
+        unlimited: tradeStudioState.unlimited,
+        season: state.season,
+      }),
+    });
+
+    if (res.ok) {
+      alert("Transfers executed successfully!");
+      tradeStudioState.transfersOut = [];
+      tradeStudioState.transfersIn = [];
+      const banner = document.getElementById("trade-rec-banner");
+      if (banner) banner.style.display = "none";
+      await loadDashboard();
+      await loadTradeStudio();
+    } else {
+      const err = await res.json();
+      alert("Trade execution failed: " + (err.detail || "Server error"));
+      if (btn) btn.disabled = false;
+    }
+  } catch (err) {
+    console.error("Failed to execute transfers:", err);
+    if (btn) btn.disabled = false;
+  }
+}
+
 // Trade Studio & Player Pool
 async function loadPlayerPool() {
   const pos = document.getElementById("market-filter-pos")?.value || "";
@@ -317,85 +880,102 @@ async function loadPlayerPool() {
   if (pos) url += `&position=${pos}`;
   if (search) url += `&search=${encodeURIComponent(search)}`;
 
-  const res = await fetch(url);
-  if (res.ok) {
-    const players = await res.json();
-    const tbody = document.getElementById("player-pool-tbody");
-    tbody.innerHTML = "";
-    players.forEach((p) => {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td><strong>${p.name}</strong> <span style="color:var(--text-muted);font-size:0.75rem;">(${p.team_code})</span></td>
-        <td><span class="player-pos-badge">${p.position}</span></td>
-        <td>${p.credits} cr</td>
-        <td style="color:var(--accent-orange); font-weight:700;">${p.expected_fp}</td>
-        <td>${p.fp_per_credit.toFixed(2)}</td>
-        <td>T${p.turn_number}</td>
-        <td>
-          <button class="btn btn-primary" style="padding:0.2rem 0.5rem; font-size:0.75rem;" onclick="addTradeIn(${p.player_id}, '${p.name.replace("'", "")}', ${p.credits})">+ In</button>
-        </td>
-      `;
-      tbody.appendChild(tr);
-    });
+  try {
+    const res = await fetch(url);
+    if (res.ok) {
+      const players = await res.json();
+      const tbody = document.getElementById("player-pool-tbody");
+      if (!tbody) return;
+      tbody.innerHTML = "";
+      players.forEach((p) => {
+        const inSquad = tradeStudioState.currentSquad.some((x) => x.player_id === p.player_id);
+        const isIn = tradeStudioState.transfersIn.some((x) => x.id === p.player_id);
+        const tr = document.createElement("tr");
+
+        let actionBtn = "";
+        if (inSquad) {
+          actionBtn = `<span style="font-size:0.75rem; color:var(--text-muted); font-style:italic;">In Squad</span>`;
+        } else if (isIn) {
+          actionBtn = `<button class="btn btn-secondary" style="padding:0.2rem 0.5rem; font-size:0.75rem; color:var(--accent-green); border-color:var(--accent-green);" onclick="removeTradeIn(${p.player_id})">✓ In (Remove)</button>`;
+        } else {
+          actionBtn = `<button class="btn btn-primary" style="padding:0.2rem 0.5rem; font-size:0.75rem;" onclick="addTradeIn(${p.player_id}, '${p.name.replace("'", "")}', ${p.credits})">+ Buy</button>`;
+        }
+
+        tr.innerHTML = `
+          <td>
+            <strong style="cursor:pointer;" onclick="openPlayerModal(${p.player_id})">${p.name}</strong>
+            <span style="color:var(--text-muted); font-size:0.75rem;">(${p.team_code || "UNK"})</span>
+          </td>
+          <td><span class="player-pos-badge">${p.position}</span></td>
+          <td>${p.credits} cr</td>
+          <td style="color:var(--accent-orange); font-weight:700;">${p.expected_fp}</td>
+          <td>${p.fp_per_credit.toFixed(2)}</td>
+          <td>${actionBtn}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+  } catch (err) {
+    console.error("Failed to load player pool:", err);
   }
-}
-
-function addTradeIn(pid, name, credits) {
-  if (!state.transfersIn.find((x) => x.id === pid)) {
-    state.transfersIn.push({ id: pid, name: name, credits: credits });
-    updateTradeStudioUI();
-  }
-}
-
-function updateTradeStudioUI() {
-  const container = document.getElementById("selected-trades-in");
-  container.innerHTML = state.transfersIn.map((x) => `<span class="badge badge-green">${x.name} (${x.credits} cr) <a href="#" onclick="removeTradeIn(${x.id})" style="color:#fff;">✕</a></span>`).join(" ");
-}
-
-function removeTradeIn(pid) {
-  state.transfersIn = state.transfersIn.filter((x) => x.id !== pid);
-  updateTradeStudioUI();
 }
 
 // Multi-Round Planner
 async function triggerMultiRound() {
   const horizon = parseInt(document.getElementById("mr-horizon").value) || 3;
   const gamma = parseFloat(document.getElementById("mr-gamma").value) || 0.95;
+  const container = document.getElementById("multi-round-steps");
+  if (container) {
+    container.innerHTML = `<p style="color:var(--text-muted); font-size:0.85rem;">⏳ Computing multi-round transfer plan across ${horizon} rounds with beam search...</p>`;
+  }
 
-  const res = await fetch("/api/workstation/optimize/multi-round", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      team_id: state.activeTeamId,
-      season: state.season,
-      horizon: horizon,
-      gamma: gamma,
-    }),
-  });
-
-  if (res.ok) {
-    const plan = await res.json();
-    const container = document.getElementById("multi-round-steps");
-    container.innerHTML = `
-      <div style="margin-bottom:1rem; font-size:0.9rem;">
-        Total Cumulative: <strong style="color:var(--accent-orange);">${plan.total_expected_score} FP</strong> (Discounted: <strong>${plan.total_discounted_score} FP</strong>)
-      </div>
-    `;
-    plan.steps.forEach((s) => {
-      const stepDiv = document.createElement("div");
-      stepDiv.className = "card";
-      stepDiv.style = "margin-bottom:0.75rem;";
-      stepDiv.innerHTML = `
-        <div class="card-header">
-          <h3>Round ${s.round_number} (Formation ${s.formation})</h3>
-          <span style="color:var(--accent-orange); font-weight:700;">${s.expected_score} FP</span>
-        </div>
-        <p style="font-size:0.85rem; color:var(--text-muted);">
-          Trades: Out: [${s.transfers_out.join(", ") || "None"}] → In: [${s.transfers_in.join(", ") || "None"}] | Remaining Bank: ${s.bank_credits} cr
-        </p>
-      `;
-      container.appendChild(stepDiv);
+  try {
+    const res = await fetch("/api/workstation/optimize/multi-round", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        team_id: state.activeTeamId,
+        season: state.season,
+        horizon: horizon,
+        gamma: gamma,
+      }),
     });
+
+    if (res.ok) {
+      const plan = await res.json();
+      container.innerHTML = `
+        <div style="margin-bottom:1rem; font-size:0.9rem; background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; padding:0.6rem 0.8rem;">
+          Total Cumulative: <strong style="color:var(--accent-orange); font-size:1.1rem;">${plan.total_expected_score} FP</strong>
+          (Discounted [γ=${plan.discount_gamma}]: <strong>${plan.total_discounted_score} FP</strong>)
+        </div>
+      `;
+      plan.steps.forEach((s) => {
+        const stepDiv = document.createElement("div");
+        stepDiv.className = "card";
+        stepDiv.style = "margin-bottom:0.75rem;";
+        const outs = s.transfers_out.length > 0 ? s.transfers_out.join(", ") : "None";
+        const ins = s.transfers_in.length > 0 ? s.transfers_in.join(", ") : "None";
+
+        stepDiv.innerHTML = `
+          <div class="card-header">
+            <h3>Round ${s.round_number} (Formation ${s.formation})</h3>
+            <span style="color:var(--accent-orange); font-weight:700;">${s.expected_score} FP</span>
+          </div>
+          <p style="font-size:0.85rem; color:var(--text-muted); margin-top:0.3rem;">
+            Trades: <span style="color:var(--accent-red);">Out: [${outs}]</span> → <span style="color:var(--accent-green);">In: [${ins}]</span> | Bank: ${s.bank_credits} cr
+          </p>
+        `;
+        container.appendChild(stepDiv);
+      });
+    } else {
+      const err = await res.json();
+      container.innerHTML = `<p style="color:var(--accent-red); font-size:0.85rem;">Multi-round planning failed: ${err.detail || "Server error"}</p>`;
+    }
+  } catch (err) {
+    console.error("Multi-round planning failed:", err);
+    if (container) {
+      container.innerHTML = `<p style="color:var(--accent-red); font-size:0.85rem;">Planning failed: ${err.message}</p>`;
+    }
   }
 }
 
