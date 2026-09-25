@@ -98,6 +98,11 @@ class ClosedLoopSummary:
 
         return "\n".join(lines)
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert summary dataclass to a JSON-serializable dictionary."""
+        from dataclasses import asdict
+        return asdict(self)
+
 
 class ClosedLoopEvaluator:
     """Evaluates longitudinal closed-loop decision quality, regret, and model drift."""
@@ -110,8 +115,10 @@ class ClosedLoopEvaluator:
         team_id: str | None = None,
         season: str | None = None,
         rolling_window: int = 5,
+        window: int | None = None,
     ) -> ClosedLoopSummary:
         """Run comprehensive retrospective closed-loop evaluation across decisions and outcomes."""
+        eff_window = window if window is not None else rolling_window
         all_records = self.store.list_decisions(team_id=team_id, season=season)
         outcomes_data = self.store.list_outcomes(team_id=team_id, season=season)
 
@@ -245,3 +252,5 @@ class ClosedLoopEvaluator:
             segment_mae=segment_mae,
             round_details=round_details,
         )
+
+    evaluate_team_season = evaluate_decisions

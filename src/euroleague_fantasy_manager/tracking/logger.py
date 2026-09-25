@@ -45,6 +45,9 @@ class DecisionLogger:
         bank_tenths: int = 0,
         provenance: DecisionProvenance | None = None,
         notes: str | None = None,
+        recommended_lineup: LineupPayload | None = None,
+        actual_lineup: LineupPayload | None = None,
+        snapshot: StateSnapshot | None = None,
     ) -> DecisionRecord:
         """Record a pre-round or initial lineup decision."""
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -52,7 +55,10 @@ class DecisionLogger:
 
         # 1. State snapshot
         snapshot_id: str | None = None
-        if squad_contracts:
+        if snapshot:
+            snapshot_id = snapshot.snapshot_id
+            self.store.save_snapshot(snapshot)
+        elif squad_contracts:
             snapshot_id = f"snap_{season}_r{round_number:02d}_t{turn_number}_{uuid.uuid4().hex[:8]}"
             player_meta = {
                 p.player_id: {
@@ -81,8 +87,8 @@ class DecisionLogger:
             self.store.save_snapshot(snap)
 
         # 2. Recommended Lineup Payload
-        rec_payload: LineupPayload | None = None
-        if recommended_decision:
+        rec_payload: LineupPayload | None = recommended_lineup
+        if rec_payload is None and recommended_decision:
             rec_payload = LineupPayload(
                 formation=recommended_decision.formation,
                 starter_ids=tuple(recommended_decision.starter_ids),
@@ -98,38 +104,39 @@ class DecisionLogger:
             )
 
         # 3. Actual Lineup Payload
-        act_payload: LineupPayload | None = None
-        if actual_decision:
-            act_payload = LineupPayload(
-                formation=actual_decision.formation,
-                starter_ids=tuple(actual_decision.starter_ids),
-                captain_id=actual_decision.captain_id,
-                vice_captain_id=actual_decision.vice_captain_id,
-                sixth_man_id=actual_decision.sixth_man_id,
-                bench_ids=tuple(actual_decision.bench_ids),
-                head_coach_id=actual_decision.head_coach_id,
-                expected_score=actual_decision.expected_score,
-                projected_scores={
-                    p.player_id: p.expected_fp for p in (squad_contracts or ())
-                },
-            )
-        elif actual_starters is not None and actual_captain is not None and actual_coach is not None:
-            act_payload = LineupPayload(
-                formation=actual_formation or (rec_payload.formation if rec_payload else "2-2-1"),
-                starter_ids=tuple(actual_starters),
-                captain_id=actual_captain,
-                vice_captain_id=actual_vice_captain,
-                sixth_man_id=actual_sixth_man if actual_sixth_man is not None else (rec_payload.sixth_man_id if rec_payload else 0),
-                bench_ids=tuple(actual_bench) if actual_bench else (),
-                head_coach_id=actual_coach,
-                expected_score=0.0,
-                projected_scores={
-                    p.player_id: p.expected_fp for p in (squad_contracts or ())
-                },
-            )
-        elif rec_payload:
-            # Human accepted model recommendation without modifications
-            act_payload = rec_payload
+        act_payload: LineupPayload | None = actual_lineup
+        if act_payload is None:
+            if actual_decision:
+                act_payload = LineupPayload(
+                    formation=actual_decision.formation,
+                    starter_ids=tuple(actual_decision.starter_ids),
+                    captain_id=actual_decision.captain_id,
+                    vice_captain_id=actual_decision.vice_captain_id,
+                    sixth_man_id=actual_decision.sixth_man_id,
+                    bench_ids=tuple(actual_decision.bench_ids),
+                    head_coach_id=actual_decision.head_coach_id,
+                    expected_score=actual_decision.expected_score,
+                    projected_scores={
+                        p.player_id: p.expected_fp for p in (squad_contracts or ())
+                    },
+                )
+            elif actual_starters is not None and actual_captain is not None and actual_coach is not None:
+                act_payload = LineupPayload(
+                    formation=actual_formation or (rec_payload.formation if rec_payload else "2-2-1"),
+                    starter_ids=tuple(actual_starters),
+                    captain_id=actual_captain,
+                    vice_captain_id=actual_vice_captain,
+                    sixth_man_id=actual_sixth_man if actual_sixth_man is not None else (rec_payload.sixth_man_id if rec_payload else 0),
+                    bench_ids=tuple(actual_bench) if actual_bench else (),
+                    head_coach_id=actual_coach,
+                    expected_score=0.0,
+                    projected_scores={
+                        p.player_id: p.expected_fp for p in (squad_contracts or ())
+                    },
+                )
+            elif rec_payload:
+                # Human accepted model recommendation without modifications
+                act_payload = rec_payload
 
         # 4. Determine if this was an override
         is_override = False
@@ -176,13 +183,21 @@ class DecisionLogger:
         bank_tenths_after: int = 0,
         provenance: DecisionProvenance | None = None,
         notes: str | None = None,
+        recommended_transfers: TransferPayload | None = None,
+        actual_transfers: TransferPayload | None = None,
+        snapshot: StateSnapshot | None = None,
     ) -> DecisionRecord:
         """Record between-round transfer decision."""
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         decision_id = f"dec_tx_{season}_r{round_number:02d}_{uuid.uuid4().hex[:8]}"
 
-        rec_payload: TransferPayload | None = None
-        if recommended_transfer:
+        snapshot_id: str | None = None
+        if snapshot:
+            snapshot_id = snapshot.snapshot_id
+            self.store.save_snapshot(snapshot)
+
+        rec_payload: TransferPayload | None = recommended_transfers
+        if rec_payload is None and recommended_transfer:
             rec_payload = TransferPayload(
                 out_player_ids=tuple(p.player_id for p in recommended_transfer.out_players),
                 in_player_ids=tuple(p.player_id for p in recommended_transfer.in_players),
@@ -192,18 +207,19 @@ class DecisionLogger:
                 bank_tenths_after=bank_tenths_after,
             )
 
-        act_payload: TransferPayload | None = None
-        if actual_out_ids is not None and actual_in_ids is not None:
-            act_payload = TransferPayload(
-                out_player_ids=tuple(actual_out_ids),
-                in_player_ids=tuple(actual_in_ids),
-                num_trades=len(actual_in_ids),
-                net_transfer_value=0.0,
-                bank_tenths_before=bank_tenths_before,
-                bank_tenths_after=bank_tenths_after,
-            )
-        elif rec_payload:
-            act_payload = rec_payload
+        act_payload: TransferPayload | None = actual_transfers
+        if act_payload is None:
+            if actual_out_ids is not None and actual_in_ids is not None:
+                act_payload = TransferPayload(
+                    out_player_ids=tuple(actual_out_ids),
+                    in_player_ids=tuple(actual_in_ids),
+                    num_trades=len(actual_in_ids),
+                    net_transfer_value=0.0,
+                    bank_tenths_before=bank_tenths_before,
+                    bank_tenths_after=bank_tenths_after,
+                )
+            elif rec_payload:
+                act_payload = rec_payload
 
         is_override = False
         if rec_payload and act_payload:
@@ -293,6 +309,7 @@ class DecisionLogger:
         player_metadata: Mapping[int, Any] | None = None,
         provenance: DecisionProvenance | None = None,
         notes: str | None = None,
+        snapshot: StateSnapshot | None = None,
     ) -> DecisionRecord:
         """Record initial season team selection/builder decision."""
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -302,10 +319,14 @@ class DecisionLogger:
         act_squad = tuple(int(x) for x in actual_squad_ids) if actual_squad_ids else rec_squad
 
         snapshot_id: str | None = None
-        squad_to_snap = act_squad or rec_squad
-        if squad_to_snap:
-            snapshot_id = f"snap_init_{season}_{team_id}_{uuid.uuid4().hex[:8]}"
-            player_meta: dict[int, dict[str, Any]] = {}
+        if snapshot:
+            snapshot_id = snapshot.snapshot_id
+            self.store.save_snapshot(snapshot)
+        else:
+            squad_to_snap = act_squad or rec_squad
+            if squad_to_snap:
+                snapshot_id = f"snap_init_{season}_{team_id}_{uuid.uuid4().hex[:8]}"
+                player_meta: dict[int, dict[str, Any]] = {}
             if squad_contracts:
                 for p in squad_contracts:
                     player_meta[p.player_id] = {

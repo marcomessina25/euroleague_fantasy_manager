@@ -92,6 +92,33 @@ class FixedSquadLineupOptimizer:
         # 2. Squad constraint pre-check (budget does not apply to fixed-squad lineup optimization)
         squad_val = validate_squad_constraints(contracts, constraints=self.constraints, check_budget=False)
         if not squad_val.is_valid:
+            if not contracts:
+                breakdown = LineupScoreBreakdown(
+                    formation="none",
+                    raw_expected_total=0.0,
+                    starter_score=0.0,
+                    captain_bonus=0.0,
+                    sixth_man_score=0.0,
+                    bench_score=0.0,
+                    head_coach_score=0.0,
+                    risk_penalty=0.0,
+                    uncertainty_stdev=0.0,
+                    turn_sub_option_bonus=0.0,
+                    objective_value=0.0,
+                )
+                return OptimalLineupDecision(
+                    round_number=round_number,
+                    formation="none",
+                    starter_ids=(),
+                    captain_id=0,
+                    vice_captain_id=0,
+                    sixth_man_id=0,
+                    bench_ids=(),
+                    head_coach_id=0,
+                    breakdown=breakdown,
+                    is_valid=False,
+                    validation_errors=("Squad is empty.",),
+                )
             # Construct a graceful fallback invalid decision
             first_hc = next((p for p in contracts if p.position == Position.HEAD_COACH), contracts[0])
             court = [p for p in contracts if p.player_id != first_hc.player_id][:5]
@@ -354,7 +381,7 @@ def brute_force_exhaustive_lineup(
     best_key: tuple[float, float, int, int, int, tuple[int, ...]] | None = None
 
     for num_g, num_f, num_c in sorted(LEGAL_COURT_FORMATIONS):
-        formation_str = f"({num_g},{num_f},{num_c})"
+        formation_str = f"{num_g}-{num_f}-{num_c}"
         for g_combo in combinations(guards, num_g):
             for f_combo in combinations(forwards, num_f):
                 for c_combo in combinations(centers, num_c):

@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EuroLeague Fantasy Workstation</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+  <!-- Top Header -->
+  <header>
+    <div class="brand">
+      <span style="font-size:1.5rem;">🏀</span>
+      <h1>EuroLeague Fantasy Workstation</h1>
+      <span class="badge-version">v0.5.0</span>
+    </div>
+
+    <div class="header-controls">
+      <!-- Team Profile Tabs (up to 3) -->
+      <div class="team-tabs" id="team-tabs-container">
+        <!-- Rendered via JS -->
+      </div>
+
+      <!-- Live KPI Stats Bar -->
+      <div class="stats-bar">
+        <div class="stat-item">
+          <span class="stat-label">Round</span>
+          <span class="stat-val" id="round-badge">R1</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Bank</span>
+          <span class="stat-val" id="stat-bank">-- cr</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Squad Value</span>
+          <span class="stat-val" id="stat-value">-- cr</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Projected Total</span>
+          <span class="stat-val" id="stat-score" style="color:var(--accent-orange);">-- FP</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Formation</span>
+          <span class="stat-val" id="stat-formation">--</span>
+        </div>
+      </div>
+
+      <!-- Live API Update Button -->
+      <button class="btn btn-secondary" id="btn-update-data" onclick="triggerUpdateData()" title="Query EuroLeague Fantasy API to update live snapshot and player values" style="padding:0.4rem 0.8rem; font-size:0.8rem; white-space:nowrap; display:flex; align-items:center; gap:0.4rem;">
+        <span id="update-spinner" style="display:none;">⏳</span>
+        <span id="update-icon">🔄</span>
+        <span id="update-text">Update Data</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Navigation Bar -->
+  <nav class="main-nav">
+    <button class="nav-btn active" data-target="dashboard">🏀 Court & Lineup</button>
+    <button class="nav-btn" data-target="turn-sub">🔄 T1 → T2 Simulator</button>
+    <button class="nav-btn" data-target="trade-studio">💼 Trade Studio & Unlimited</button>
+    <button class="nav-btn" data-target="multi-round">🗺️ Multi-Round Planner</button>
+    <button class="nav-btn" data-target="evaluation">📊 Evaluation Hub</button>
+    <button class="nav-btn" data-target="scenarios">🧪 What-If Sandbox</button>
+  </nav>
+
+  <main>
+    <!-- 1. Court & Lineup Dashboard View -->
+    <section id="dashboard" class="view-section active">
+      <div class="dashboard-grid">
+        <!-- Left: Half Court Visualizer -->
+        <div class="card">
+          <div class="card-header">
+            <h2>🏀 Starting Five (Court Layout)</h2>
+            <div id="provenance-badges"></div>
+          </div>
+
+          <!-- Direct-Click Substitution Banner -->
+          <div id="sub-mode-banner" class="sub-banner" style="display:none;">
+            <div style="display:flex; align-items:center; gap:0.6rem; font-size:0.9rem;">
+              <span style="font-size:1.2rem;">⇄</span>
+              <span>
+                <strong>Substitution Mode:</strong> Click any teammate on the court or bench to swap with
+                <span id="sub-source-name" style="color:var(--accent-blue); font-weight:700;"></span>.
+              </span>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="cancelSubstitution()" style="padding:0.25rem 0.6rem; font-size:0.8rem;">✕ Cancel</button>
+          </div>
+
+          <div class="court-container">
+            <div class="court-lines">
+              <div class="court-paint"></div>
+              <div class="court-circle"></div>
+              <div class="court-arc"></div>
+              <div class="court-hoop"></div>
+              <div class="court-backboard"></div>
+            </div>
+
+            <div class="court-players" id="court-starters">
+              <!-- Starters rendered via JS -->
+            </div>
+          </div>
+
+          <div class="card-header" style="margin-top:0.5rem;">
+            <h2>Sixth Man (1.0x), Bench (0.5x) & Head Coach (1.0x)</h2>
+          </div>
+          <div class="bench-section" id="bench-units">
+            <!-- Bench units rendered via JS -->
+          </div>
+        </div>
+
+        <!-- Right: Optimization & Alternatives Panel -->
+        <div style="display:flex; flex-direction:column; gap:1.5rem;">
+          <div class="card">
+            <div class="card-header">
+              <h2>⚙️ Lineup Optimizer</h2>
+            </div>
+            <div class="form-group">
+              <label for="opt-risk-mode">Risk Strategy Mode</label>
+              <select id="opt-risk-mode">
+                <option value="expected" selected>Expected (Maximize E[FP])</option>
+                <option value="conservative">Conservative (Penalize Uncertainty)</option>
+                <option value="upside">Upside (Seek Prediction Ceiling)</option>
+              </select>
+            </div>
+            <button class="btn btn-primary" onclick="triggerOptimizeLineup()">🚀 Run Optimizer</button>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h2>📋 Alternative Lineups</h2>
+            </div>
+            <div id="alternatives-list">
+              <!-- Alternatives rendered via JS -->
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. T1 -> T2 Turn Simulator -->
+    <section id="turn-sub" class="view-section">
+      <div class="card">
+        <div class="card-header">
+          <h2>🔄 Intra-Round Turn 1 → Turn 2 Substitution Simulator</h2>
+        </div>
+        <p style="font-size:0.85rem; color:var(--text-muted);">
+          Enter realized Turn 1 fantasy points for completed games. The simulator conditions on observed outcomes and identifies the optimal substitutions and captain switch with incremental net gains.
+        </p>
+
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:1rem; margin-top:1rem;" id="t1-inputs-container">
+          <div class="form-group">
+            <label>Observed Turn 1 Player ID</label>
+            <input type="number" placeholder="Player ID (e.g. 3765)" id="sim-pid-1">
+            <label style="margin-top:0.3rem;">Realized Score</label>
+            <input type="number" step="0.1" placeholder="Score (e.g. 14.2)" class="t1-score-input" data-pid="3765">
+          </div>
+          <div class="form-group">
+            <label>Observed Turn 1 Player ID</label>
+            <input type="number" placeholder="Player ID (e.g. 3795)" id="sim-pid-2">
+            <label style="margin-top:0.3rem;">Realized Score</label>
+            <input type="number" step="0.1" placeholder="Score (e.g. 8.5)" class="t1-score-input" data-pid="3795">
+          </div>
+        </div>
+
+        <button class="btn btn-primary" style="margin-top:1rem;" onclick="runTurnSubSimulator()">⚡ Recalculate Optimal Actions</button>
+        <div id="turn-sub-results" class="card" style="display:none; margin-top:1rem; border-color:var(--accent-orange);"></div>
+      </div>
+    </section>
+
+    <!-- 3. Trade Studio & Unlimited Wildcard -->
+    <section id="trade-studio" class="view-section">
+      <div class="card">
+        <div class="card-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+          <h2>💼 Trade Studio & Transfer Manager</h2>
+          <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+            <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.85rem; font-weight:600; cursor:pointer;">
+              <input type="checkbox" id="unlimited-window-toggle" onchange="onUnlimitedToggleChange()"> 🌟 Unlimited Trade Window
+            </label>
+            <button class="btn btn-secondary" onclick="triggerSuggestTransfers()" id="btn-suggest-trades" style="font-size:0.8rem; padding:0.4rem 0.8rem;">
+              ⚡ Suggest Transfers
+            </button>
+            <button class="btn btn-primary" onclick="submitExecuteTransfers()" id="btn-execute-trades" style="font-size:0.8rem; padding:0.4rem 0.8rem;" disabled>
+              ✓ Execute Transfers (<span id="trades-count-badge">0</span>)
+            </button>
+          </div>
+        </div>
+
+        <!-- Trade Summary & Financials Bar -->
+        <div style="background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; padding:0.75rem 1rem; margin-top:1rem;">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
+            <div style="display:flex; gap:1.5rem; font-size:0.85rem;">
+              <div><span style="color:var(--text-muted);">Current Bank:</span> <strong id="ts-current-bank">0.0 cr</strong></div>
+              <div><span style="color:var(--accent-red);">Sold (+):</span> <strong id="ts-sold-val" style="color:var(--accent-red);">0.0 cr</strong></div>
+              <div><span style="color:var(--accent-green);">Bought (-):</span> <strong id="ts-bought-val" style="color:var(--accent-green);">0.0 cr</strong></div>
+              <div><span style="color:var(--text-muted);">New Bank:</span> <strong id="ts-new-bank" style="color:var(--accent-orange);">0.0 cr</strong></div>
+              <div><span style="color:var(--text-muted);">Trades Left:</span> <strong id="ts-trades-left">4</strong></div>
+            </div>
+            <div id="ts-validation-msg" style="font-size:0.8rem; font-weight:600;"></div>
+          </div>
+
+          <!-- Trade Chips: Selected OUT & IN -->
+          <div style="display:flex; flex-direction:column; gap:0.4rem; margin-top:0.75rem; padding-top:0.6rem; border-top:1px solid rgba(255,255,255,0.06);">
+            <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+              <span style="font-size:0.75rem; text-transform:uppercase; color:var(--accent-red); font-weight:700;">Transfers OUT:</span>
+              <div id="selected-trades-out" style="display:flex; gap:0.4rem; flex-wrap:wrap;">
+                <span style="color:var(--text-muted); font-size:0.8rem; font-style:italic;">None selected</span>
+              </div>
+            </div>
+            <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+              <span style="font-size:0.75rem; text-transform:uppercase; color:var(--accent-green); font-weight:700;">Transfers IN:</span>
+              <div id="selected-trades-in" style="display:flex; gap:0.4rem; flex-wrap:wrap;">
+                <span style="color:var(--text-muted); font-size:0.8rem; font-style:italic;">None selected</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Suggestion Banner (if triggered) -->
+        <div id="trade-rec-banner" style="display:none; margin-top:1rem; background:rgba(249, 115, 22, 0.1); border:1px solid var(--accent-orange); border-radius:6px; padding:0.75rem 1rem;">
+          <!-- Populated by JS -->
+        </div>
+
+        <!-- Two Column Workspace: Current Squad vs Market Browser -->
+        <div class="trade-studio-grid">
+          <!-- Left: Current Squad (Sell Targets) -->
+          <div style="background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; padding:0.75rem;">
+            <div class="card-header" style="padding-bottom:0.4rem; border-bottom:1px solid var(--border-color);">
+              <h3 style="font-size:0.9rem;">1. Current Squad (Select to Sell / Out)</h3>
+            </div>
+            <div style="overflow-x:auto; margin-top:0.5rem;">
+              <table class="data-table" style="font-size:0.8rem;">
+                <thead>
+                  <tr>
+                    <th>Player</th>
+                    <th>Pos</th>
+                    <th>Price</th>
+                    <th>Exp FP</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="ts-squad-tbody">
+                  <!-- Populated by JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Right: Market Browser (Buy Targets) -->
+          <div style="background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; padding:0.75rem;">
+            <div class="card-header" style="display:flex; justify-content:space-between; align-items:center; padding-bottom:0.4rem; border-bottom:1px solid var(--border-color); flex-wrap:wrap; gap:0.4rem;">
+              <h3 style="font-size:0.9rem;">2. Market Browser (Select to Buy / In)</h3>
+              <div style="display:flex; gap:0.5rem;">
+                <select id="market-filter-pos" onchange="loadPlayerPool()" style="padding:0.25rem 0.5rem; font-size:0.8rem;">
+                  <option value="">All Pos</option>
+                  <option value="G">Guard (G)</option>
+                  <option value="F">Forward (F)</option>
+                  <option value="C">Center (C)</option>
+                  <option value="HC">Coach (HC)</option>
+                </select>
+                <input type="text" id="market-filter-search" placeholder="Search..." oninput="loadPlayerPool()" style="padding:0.25rem 0.5rem; font-size:0.8rem; width:130px;">
+              </div>
+            </div>
+            <div style="overflow-x:auto; margin-top:0.5rem; max-height:480px; overflow-y:auto;">
+              <table class="data-table" style="font-size:0.8rem;">
+                <thead>
+                  <tr>
+                    <th>Player</th>
+                    <th>Pos</th>
+                    <th>Price</th>
+                    <th>Exp FP</th>
+                    <th>FP/Cr</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="player-pool-tbody">
+                  <!-- Populated by JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. Multi-Round Planner -->
+    <section id="multi-round" class="view-section">
+      <div class="card">
+        <div class="card-header">
+          <h2>🗺️ Multi-Round Transfer Planner (Beam Search)</h2>
+        </div>
+        <p style="font-size:0.85rem; color:var(--text-muted);">
+          Evaluate trade pathways over a rolling horizon (2..4 rounds) with strategic discounting.
+        </p>
+        <div style="display:flex; gap:1rem; margin-top:1rem; align-items:flex-end;">
+          <div class="form-group">
+            <label>Horizon (Rounds)</label>
+            <select id="mr-horizon">
+              <option value="2">2 Rounds</option>
+              <option value="3" selected>3 Rounds</option>
+              <option value="4">4 Rounds</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Discount Factor (γ)</label>
+            <input type="number" step="0.05" min="0.5" max="1.0" value="0.95" id="mr-gamma">
+          </div>
+          <button class="btn btn-primary" onclick="triggerMultiRound()">🚀 Run Multi-Round Planner</button>
+        </div>
+
+        <div id="multi-round-steps" style="margin-top:1.5rem;">
+          <!-- Multi-round steps rendered via JS -->
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. Evaluation Hub -->
+    <section id="evaluation" class="view-section">
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:1rem;">
+        <div class="card" style="text-align:center;">
+          <span class="stat-label">Model Win Rate vs Manager</span>
+          <span class="stat-val" id="eval-win-rate" style="font-size:1.5rem; color:var(--accent-green);">--%</span>
+        </div>
+        <div class="card" style="text-align:center;">
+          <span class="stat-label">Avg Human Regret</span>
+          <span class="stat-val" id="eval-human-regret" style="font-size:1.5rem; color:var(--accent-red);">-- FP</span>
+        </div>
+        <div class="card" style="text-align:center;">
+          <span class="stat-label">Avg Model Regret</span>
+          <span class="stat-val" id="eval-model-regret" style="font-size:1.5rem; color:var(--accent-gold);">-- FP</span>
+        </div>
+        <div class="card" style="text-align:center;">
+          <span class="stat-label">Overall Prediction MAE</span>
+          <span class="stat-val" id="eval-mae" style="font-size:1.5rem; color:var(--accent-blue);">--</span>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:1.5rem;">
+        <div class="card-header">
+          <h2>📊 Decision History & Regret Breakdown</h2>
+        </div>
+        <div style="overflow-x:auto;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Round/Turn</th>
+                <th>Status</th>
+                <th>Rec Score</th>
+                <th>Actual Score</th>
+                <th>Oracle Score</th>
+                <th>Human Regret</th>
+                <th>Captain Regret</th>
+              </tr>
+            </thead>
+            <tbody id="eval-history-tbody">
+              <!-- Rendered via JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 6. What-If Sandbox -->
+    <section id="scenarios" class="view-section">
+      <div class="card">
+        <div class="card-header">
+          <h2>🧪 What-If Ephemeral Scenario Sandbox</h2>
+        </div>
+        <p style="font-size:0.85rem; color:var(--text-muted);">
+          Simulate hypothetical situations (injuries, rule-outs, risk strategy shifts). Changes are computed in ephemeral memory and <strong>never mutate persistent team state</strong> until explicitly saved.
+        </p>
+
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1rem; margin-top:1rem;">
+          <div class="form-group">
+            <label>Rule Out Player IDs (Comma-separated)</label>
+            <input type="text" id="scen-rule-out" placeholder="e.g. 3765, 3770">
+          </div>
+          <div class="form-group">
+            <label>Risk Mode Override</label>
+            <select id="scen-risk">
+              <option value="">(Keep Baseline)</option>
+              <option value="conservative">Conservative</option>
+              <option value="upside">Upside</option>
+            </select>
+          </div>
+        </div>
+
+        <button class="btn btn-primary" style="margin-top:1rem;" onclick="triggerScenario()">🔬 Run What-If Simulation</button>
+        <div id="scenario-results" class="card" style="display:none; margin-top:1rem; border-color:var(--accent-purple);"></div>
+      </div>
+    </section>
+
+    <!-- 7. Initial Team Builder Modal (V0.5) -->
+    <div id="team-builder-modal" class="modal-backdrop" style="display:none;">
+      <div class="modal-content card">
+        <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+          <h2>🏀 Initial Team Builder</h2>
+          <button class="btn btn-icon" onclick="closeTeamBuilderModal()" style="font-size:1.2rem; background:transparent; border:none; color:var(--text-muted); cursor:pointer;">✕</button>
+        </div>
+
+        <!-- Team Name & Budget Bar -->
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1.25rem; margin-top:1rem; align-items:center;">
+          <div class="form-group">
+            <label for="tb-team-name">Team Name *</label>
+            <input type="text" id="tb-team-name" placeholder="e.g. Panathinaikos Elite" maxlength="32" oninput="updateTeamBuilderUI()">
+          </div>
+          <div class="stats-bar" style="justify-content:space-around;">
+            <div class="stat-item">
+              <span class="stat-label">Budget</span>
+              <span class="stat-val" id="tb-stat-budget">100.0 cr</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Spent</span>
+              <span class="stat-val" id="tb-stat-spent">0.0 cr</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Remaining</span>
+              <span class="stat-val" id="tb-stat-remaining" style="color:var(--accent-green);">100.0 cr</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Projected Total</span>
+              <span class="stat-val" id="tb-stat-fp" style="color:var(--accent-orange);">0.0 FP</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quota Progress Badges & Optimization Controls -->
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:1rem; flex-wrap:wrap; gap:0.75rem; background:rgba(15,23,42,0.6); padding:0.75rem; border-radius:6px; border:1px solid var(--border-color);">
+          <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;" id="tb-quota-badges">
+            <span class="badge" id="quota-g">Guards: 0/4</span>
+            <span class="badge" id="quota-f">Forwards: 0/4</span>
+            <span class="badge" id="quota-c">Centers: 0/2</span>
+            <span class="badge" id="quota-hc">Coach: 0/1</span>
+            <span class="badge badge-gold" id="quota-total">Total: 0/11</span>
+          </div>
+          <div style="display:flex; gap:0.5rem; align-items:center;">
+            <select id="tb-opt-risk" style="padding:0.35rem 0.6rem; font-size:0.8rem;">
+              <option value="expected">Expected E[FP]</option>
+              <option value="conservative">Conservative</option>
+              <option value="upside">Upside Ceiling</option>
+            </select>
+            <button class="btn btn-primary" onclick="suggestOptimalInitialTeam()" id="tb-btn-suggest" style="font-size:0.8rem; padding:0.4rem 0.8rem;" title="Round-1 expected FP maximization under salary cap & quotas (exact MILP)">
+              ⚡ Suggest Squad (Round 1 Objective)
+            </button>
+            <button class="btn btn-secondary" onclick="clearTeamBuilderRoster()" style="font-size:0.8rem; padding:0.4rem 0.6rem;">
+              🗑️ Clear
+            </button>
+          </div>
+        </div>
+
+        <!-- Player Search & Manual Addition -->
+        <div style="margin-top:1.25rem;">
+          <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+            <h3 style="font-size:0.95rem;">Select & Add Players Manually</h3>
+            <span id="tb-pool-count" style="font-size:0.75rem; color:var(--text-muted);"></span>
+          </div>
+          <div style="display:flex; gap:0.75rem; margin-top:0.5rem; position:relative;">
+            <select id="tb-search-pos" style="width:130px;" onchange="onTeamBuilderSearchInput()">
+              <option value="">All Pos</option>
+              <option value="G">Guard (G)</option>
+              <option value="F">Forward (F)</option>
+              <option value="C">Center (C)</option>
+              <option value="HC">Coach (HC)</option>
+            </select>
+            <div style="flex:1; position:relative;">
+              <input type="text" id="tb-player-search" placeholder="Type player or coach name to filter..." oninput="onTeamBuilderSearchInput()" onfocus="onTeamBuilderSearchInput()" autocomplete="off">
+              <div id="tb-search-dropdown" class="search-dropdown-menu" style="display:none;"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Selected Roster (11 Slots) -->
+        <div style="margin-top:1.25rem;">
+          <div class="card-header">
+            <h3 style="font-size:0.95rem;">Selected Squad Roster (<span id="tb-roster-count">0</span>/11)</h3>
+            <span id="tb-validation-msg" style="font-size:0.8rem; color:var(--accent-red); font-weight:600;"></span>
+          </div>
+          <div style="overflow-x:auto; margin-top:0.5rem;">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Player / Club</th>
+                  <th>Position</th>
+                  <th>Price</th>
+                  <th>Expected FP</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="tb-roster-tbody">
+                <!-- Populated via JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Modal Actions Footer -->
+        <div style="display:flex; justify-content:flex-end; gap:0.75rem; margin-top:1.5rem; border-top:1px solid var(--border-color); padding-top:1rem;">
+          <button class="btn btn-secondary" onclick="closeTeamBuilderModal()">Cancel</button>
+          <button class="btn btn-primary" id="tb-btn-create" onclick="submitCreateTeam()" disabled>
+            ✓ Create Team & Enter Workstation
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Player Statistics Details Modal -->
+    <div id="player-modal" class="modal-backdrop" style="display:none;">
+      <div class="modal-card" style="max-width: 650px;">
+        <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+          <div style="display:flex; align-items:center; gap:0.6rem;">
+            <span id="pm-pos-badge" class="player-pos-badge" style="font-size:0.9rem; padding:0.2rem 0.5rem;">G</span>
+            <h2 id="pm-name" style="margin:0; font-size:1.25rem;">Player Name</h2>
+            <span id="pm-team" style="color:var(--text-muted); font-size:0.9rem;">(BAR)</span>
+          </div>
+          <button class="btn btn-secondary" onclick="closePlayerModal()" style="padding:0.2rem 0.5rem; font-size:0.85rem;">✕</button>
+        </div>
+
+        <!-- Primary Metric Cards -->
+        <div class="stat-grid-modal">
+          <div class="stat-card-modal">
+            <span class="val" id="pm-credits">0.0 cr</span>
+            <span class="lbl">Price / Credits</span>
+          </div>
+          <div class="stat-card-modal">
+            <span class="val" id="pm-exp-fp">0.0 FP</span>
+            <span class="lbl">Expected FP</span>
+          </div>
+          <div class="stat-card-modal">
+            <span class="val" id="pm-avg-fp">0.0 FP</span>
+            <span class="lbl">Average FP</span>
+          </div>
+          <div class="stat-card-modal">
+            <span class="val" id="pm-last-fp">0.0 FP</span>
+            <span class="lbl">Last Match FP</span>
+          </div>
+          <div class="stat-card-modal">
+            <span class="val" id="pm-prob">100%</span>
+            <span class="lbl">Playing Prob</span>
+          </div>
+          <div class="stat-card-modal">
+            <span class="val" id="pm-efficiency">0.0</span>
+            <span class="lbl">FP / Credit</span>
+          </div>
+        </div>
+
+        <!-- Detailed Breakdown -->
+        <div style="background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; padding:0.75rem; margin-top:0.75rem;">
+          <h4 style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.5rem; text-transform:uppercase;">Player Telemetry & Match Context</h4>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.5rem; font-size:0.85rem;">
+            <div><strong>Status:</strong> <span id="pm-status">-</span></div>
+            <div><strong>Fixture:</strong> <span id="pm-fixture">-</span></div>
+            <div><strong>Expected Minutes:</strong> <span id="pm-minutes">-</span></div>
+            <div><strong>Uncertainty (σ):</strong> <span id="pm-uncertainty">-</span></div>
+            <div><strong>Popularity:</strong> <span id="pm-popularity">-</span></div>
+            <div><strong>Capital Gain (+/-):</strong> <span id="pm-gain">-</span></div>
+            <div><strong>Condition:</strong> <span id="pm-condition">-</span></div>
+            <div><strong>Risk-Adjusted FP:</strong> <span id="pm-risk-fp">-</span></div>
+          </div>
+        </div>
+
+        <!-- Squad Actions for Team Players -->
+        <div id="pm-squad-actions" style="display:none; gap:0.5rem; margin-top:1rem; justify-content:flex-end;">
+          <button class="btn btn-secondary" id="pm-btn-cap" onclick="onModalMakeCaptain()">👑 Name Captain</button>
+          <button class="btn btn-primary" id="pm-btn-sub" onclick="onModalSubstitute()">⇄ Substitute</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Substitution Selector Modal -->
+    <div id="sub-modal" class="modal-backdrop" style="display:none;">
+      <div class="modal-card" style="max-width: 500px;">
+        <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+          <h3 style="margin:0; font-size:1.1rem;">Substitute Player</h3>
+          <button class="btn btn-secondary" onclick="closeSubModal()" style="padding:0.2rem 0.5rem;">✕</button>
+        </div>
+        <p style="font-size:0.85rem; color:var(--text-muted); margin-top:0.5rem;">
+          Select a bench or court teammate to swap with <strong id="sub-target-name"></strong>:
+        </p>
+        <div id="sub-options-list" style="margin-top:1rem; display:flex; flex-direction:column; gap:0.5rem; max-height:300px; overflow-y:auto;">
+          <!-- Populated via JS -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Rename Team Modal -->
+    <div id="rename-team-modal" class="modal-backdrop" style="display:none;">
+      <div class="modal-card" style="max-width: 400px;">
+        <div class="card-header">
+          <h3 style="margin:0; font-size:1.1rem;">✏️ Rename Fantasy Team</h3>
+        </div>
+        <div class="form-group" style="margin-top:1rem;">
+          <label>New Team Name</label>
+          <input type="text" id="rename-team-input" placeholder="Enter new team name...">
+        </div>
+        <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1.5rem;">
+          <button class="btn btn-secondary" onclick="closeRenameModal()">Cancel</button>
+          <button class="btn btn-primary" onclick="submitRenameTeam()">Save Name</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

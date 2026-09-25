@@ -319,7 +319,7 @@ def test_multi_season_walk_forward_evaluation_and_sqlite(tmp_path: Path) -> None
         reports_dir=reports_dir,
     )
 
-    assert __version__ in ("0.2.5", "0.3.0")
+    assert __version__ in ("0.2.5", "0.3.0", "0.4.0", "0.4.5", "0.5.0")
     assert len(res["models"]) == 4
     assert len(res["paired_comparisons"]) >= 1
 
