@@ -12,6 +12,11 @@ The project deliberately separates deterministic facts and rule checks from stra
 EuroLeague Fantasy & Feeds APIs -> local SQLite snapshots -> rules + validation -> reports -> human / LLM analysis
 ```
 
+## Data attribution
+
+This project uses official EuroLeague fantasy data and related public competition data. Any reuse of that data must comply with the applicable terms and conditions of the data provider.
+
+
 ## Living roadmap
 
 - [`docs/architecture.md`](docs/architecture.md) defines the purpose, architectural boundaries, and responsibilities of each layer.
