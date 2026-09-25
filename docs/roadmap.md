@@ -2,7 +2,7 @@
 
 > **Living document.** This is the source of truth for delivery status, engineering priorities, release criteria, known risks, and long-term direction. Human contributors and AI agents must read it before material work and update it when priorities or milestone status changes.
 >
-> **Current planning baseline:** V0.1, V0.2, V0.2.5, V0.3, V0.4 (`0.4.0`), and **0.4.5** (Closed-Loop Evaluation & Live Decision State, `0.4.5`, completed on 2026-09-23) are completed. **V0.5** (Multi-Team Management, Application Services & Local Web GUI Workstation, `0.5.0`) is in pre-merge review under PR #6. **V0.6** (Strategic Analysis & LLM Copilot) is the next milestone.
+> **Current planning baseline:** V0.1, V0.2, V0.2.5, V0.3, V0.4 (`0.4.0`), **0.4.5** (Closed-Loop Evaluation & Live Decision State, `0.4.5`), and **V0.5** (Multi-Team Management, Application Services & Local Web GUI Workstation, `0.5.0`) are completed (2026-09-25). **V0.6** (Strategic Analysis & LLM Copilot) is the next milestone.
 >
 > See [`docs/architecture.md`](architecture.md), [`docs/specs/v02.md`](specs/v02.md), [`docs/specs/items_left_for_v02.md`](specs/items_left_for_v02.md), [`docs/specs/v025.md`](specs/v025.md), [`docs/specs/v025_cleanup.md`](specs/v025_cleanup.md), [`docs/specs/v03.md`](specs/v03.md), [`docs/specs/items_left_for_v03.md`](specs/items_left_for_v03.md), [`docs/specs/v04.md`](specs/v04.md), [`docs/specs/v04_items_left.md`](specs/v04_items_left.md), [`docs/specs/items_left_for_v04.md`](specs/items_left_for_v04.md), [`docs/specs/v045.md`](specs/v045.md), [`docs/specs/v05.md`](specs/v05.md), and [`docs/specs/items_left_for_v05.md`](specs/items_left_for_v05.md) for architectural and implementation details.
 
@@ -309,7 +309,7 @@ Connect the quantitative engine to real management decisions and actual outcomes
 
 ## V0.5 — Multi-Team Management, Application Services & Local Web GUI
 
-**Status: in pre-merge review (PR #6, 0.5.0-rc).**  
+**Status: completed on 2026-09-25 (0.5.0).**  
 **Prerequisites:** V0.4 (`0.4.0`) and 0.4.5 (`0.4.5`, completed on 2026-09-23) closed-loop decision/evaluation bridge.  
 **Core principle:** The GUI is a downstream interface over the quantitative engine. It must not become a second rules engine, prediction engine, or optimizer.
 

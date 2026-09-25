@@ -1,6 +1,6 @@
 # V0.5 — Items Left Before Merge
 
-> **Status:** V0.5 is substantially implemented. This checklist defines the final work before merging PR #6.
+> **Status:** Completed on 2026-09-25. All pre-merge items resolved.
 >
 > **Release boundary:** V0.5 turns the V0.3/V0.4/V0.45 quantitative engine into a usable local multi-team workstation. It should not create a second, disconnected quantitative engine.
 
