@@ -37,8 +37,9 @@
           <span class="stat-val" id="stat-value">-- cr</span>
         </div>
         <div class="stat-item">
-          <span class="stat-label">Projected Total</span>
+          <span class="stat-label">Total Score</span>
           <span class="stat-val" id="stat-score" style="color:var(--accent-orange);">-- FP</span>
+          <div id="stat-score-breakdown" style="font-size:0.68rem; color:var(--text-muted); margin-top:0.15rem; display:flex; gap:0.4rem; flex-wrap:wrap;"></div>
         </div>
         <div class="stat-item">
           <span class="stat-label">Formation</span>
@@ -58,7 +59,7 @@
   <!-- Navigation Bar -->
   <nav class="main-nav">
     <button class="nav-btn active" data-target="dashboard">🏀 Court & Lineup</button>
-    <button class="nav-btn" data-target="turn-sub">🔄 T1 → T2 Simulator</button>
+    <button class="nav-btn" data-target="turn-sub">🔄 Intra-Round Subs</button>
     <button class="nav-btn" data-target="trade-studio">💼 Trade Studio & Unlimited</button>
     <button class="nav-btn" data-target="multi-round">🗺️ Multi-Round Planner</button>
     <button class="nav-btn" data-target="evaluation">📊 Evaluation Hub</button>
@@ -124,7 +125,10 @@
                 <option value="upside">Upside (Seek Prediction Ceiling)</option>
               </select>
             </div>
-            <button class="btn btn-primary" onclick="triggerOptimizeLineup()">🚀 Run Optimizer</button>
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+              <button class="btn btn-primary" onclick="triggerOptimizeLineup()" style="flex:1;">🚀 Run Optimizer</button>
+              <button class="btn btn-secondary" id="btn-undo-optimizer" onclick="undoLineupOptimization()" style="display:none; padding:0.4rem 0.8rem; font-size:0.8rem;" title="Restore previous lineup prior to optimization">↩ Undo</button>
+            </div>
           </div>
 
           <div class="card">
@@ -139,33 +143,43 @@
       </div>
     </section>
 
-    <!-- 2. T1 -> T2 Turn Simulator -->
+    <!-- 2. Intra-Round Substitution Simulator -->
     <section id="turn-sub" class="view-section">
       <div class="card">
-        <div class="card-header">
-          <h2>🔄 Intra-Round Turn 1 → Turn 2 Substitution Simulator</h2>
+        <div class="card-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+          <h2>🔄 Intra-Round Substitution Simulator</h2>
+          <button class="btn btn-primary" onclick="runIntraRoundSimulator()" id="btn-run-intra-sub">
+            ⚡ Calculate Optimal Substitutions
+          </button>
         </div>
-        <p style="font-size:0.85rem; color:var(--text-muted);">
-          Enter realized Turn 1 fantasy points for completed games. The simulator conditions on observed outcomes and identifies the optimal substitutions and captain switch with incremental net gains.
+        <p style="font-size:0.85rem; color:var(--text-muted); margin-top:0.25rem;">
+          Evaluates legal intra-round bench-to-court substitutions across matchday turns (T1 → T2 → T3).
+          Uses realized actual points for completed games and expected points for upcoming games.
+          Bench players who already played are locked on the bench and cannot enter.
         </p>
 
-        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:1rem; margin-top:1rem;" id="t1-inputs-container">
-          <div class="form-group">
-            <label>Observed Turn 1 Player ID</label>
-            <input type="number" placeholder="Player ID (e.g. 3765)" id="sim-pid-1">
-            <label style="margin-top:0.3rem;">Realized Score</label>
-            <input type="number" step="0.1" placeholder="Score (e.g. 14.2)" class="t1-score-input" data-pid="3765">
-          </div>
-          <div class="form-group">
-            <label>Observed Turn 1 Player ID</label>
-            <input type="number" placeholder="Player ID (e.g. 3795)" id="sim-pid-2">
-            <label style="margin-top:0.3rem;">Realized Score</label>
-            <input type="number" step="0.1" placeholder="Score (e.g. 8.5)" class="t1-score-input" data-pid="3795">
-          </div>
+        <!-- Current Squad Turn Status Table -->
+        <div style="overflow-x:auto; margin-top:1rem;">
+          <table class="data-table" style="font-size:0.8rem;">
+            <thead>
+              <tr>
+                <th>Player</th>
+                <th>Role</th>
+                <th>Turn & Match</th>
+                <th>Score Status</th>
+                <th>Sub Eligibility</th>
+              </tr>
+            </thead>
+            <tbody id="intra-squad-tbody">
+              <!-- Rendered via JS -->
+            </tbody>
+          </table>
         </div>
 
-        <button class="btn btn-primary" style="margin-top:1rem;" onclick="runTurnSubSimulator()">⚡ Recalculate Optimal Actions</button>
-        <div id="turn-sub-results" class="card" style="display:none; margin-top:1rem; border-color:var(--accent-orange);"></div>
+        <!-- Simulation Results Banner -->
+        <div id="intra-sub-results" class="card" style="display:none; margin-top:1rem; border-color:var(--accent-orange); background:var(--bg-primary);">
+          <!-- Rendered via JS -->
+        </div>
       </div>
     </section>
 
@@ -175,6 +189,9 @@
         <div class="card-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
           <h2>💼 Trade Studio & Transfer Manager</h2>
           <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+            <button class="btn btn-secondary" onclick="confirmRevertRoundStart()" id="btn-revert-round-start" title="Reset all transfers and substitutions back to the round start baseline" style="font-size:0.8rem; padding:0.4rem 0.8rem; border-color:rgba(239, 68, 68, 0.4); color:var(--accent-red);">
+              ↺ Revert to Round Start
+            </button>
             <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.85rem; font-weight:600; cursor:pointer;">
               <input type="checkbox" id="unlimited-window-toggle" onchange="onUnlimitedToggleChange()"> 🌟 Unlimited Trade Window
             </label>

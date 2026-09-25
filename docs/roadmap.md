@@ -369,7 +369,15 @@ See [`docs/specs/v05.md`](specs/v05.md) for the complete specification.
 4. **Multi-Option Transfer Recommendations in Trade Studio**:
    - Optimizer produces and returns multiple distinct trade alternatives (`recommendations`).
    - Web workstation Trade Studio renders all options (Option 1 Optimal, Option 2, Option 3) with net gains, projected scores, sold/bought players, and individual "Apply to Studio" actions.
-   - Dynamic Turn 1 simulator auto-populates squad units with realized scores pre-filled.
+5. **Generalized Intra-Round Substitution Optimizer (`IntraRoundSubstitutionOptimizer`)**:
+   - Computes legal intra-round bench-to-court substitutions across matchday turns (T1 → T2 → T3) automatically using realized actual points for completed matches and projected expected points for upcoming matches without manual value editing.
+   - Enforces strict fantasy legality rules: bench players whose games have started/finished are permanently locked on the bench at 0.5x and cannot enter court or sixth man; bench players yet to play can substitute in; court/sixth man units can be subbed to the bench; Head Coach is fixed (out of simulator); preserves starting 5 formation quotas (1-3 G, 1-3 F, 1-2 C) and 1 Sixth Man.
+   - Substituted lineups and captaincy switches are audited and logged into `DecisionStore` under `TURN_SUB`.
+6. **Decision Logger & Round-Start Baseline Revert Mechanism**:
+   - `team_round_checkpoints` table in `TeamStore` saves point-in-time baseline snapshot at round start (squad units, bank credits, remaining transfers).
+   - `POST /api/teams/{team_id}/revert-round-start` resets team state back to baseline with decision log audit event.
+   - Lineup Optimizer Undo button provides instantaneous 1-click restoration of pre-optimization lineup state.
+   - Court presentation prominently displays broken-down realized actual points vs unplayed expected points, and renders doubled captain score explicitly (`2 x <score> = <doubled> FP [ACTUAL/EXP]`).
 
 ---
 

@@ -1235,4 +1235,154 @@ def test_transfer_optimizer_speed_and_multiple_recommendations():
     assert len(res_unlimited.recommendations) >= 1
 
 
+def test_intra_round_optimizer_locks_played_bench_units():
+    """Verify IntraRoundSubstitutionOptimizer strictly locks played bench players, preserves coach,
+
+    and finds optimal court/sixth/captain combinations."""
+    from euroleague_fantasy_manager.optimization.intra_round import (
+        IntraRoundSubstitutionOptimizer,
+        IntraRoundPlayerUnit,
+    )
+
+    # 10 players + 1 coach
+    # 4 Guards, 4 Forwards, 2 Centers, 1 Head Coach
+    # G1: starter, played T1, scored 4.0 FP (underperformed)
+    # G2: starter, unplayed T2, expected 15.0 FP
+    # F1: starter, played T1, scored 22.0 FP (captain candidate)
+    # F2: starter, unplayed T2, expected 12.0 FP
+    # C1: starter, played T1, scored 14.0 FP
+    # 6th man: F3, played T1, scored 10.0 FP
+    # Bench:
+    # G3: bench, played T1, scored 18.0 FP (HAS PLAYED ON BENCH -> LOCKED! Cannot enter!)
+    # G4: bench, unplayed T2, expected 16.0 FP (eligible to enter!)
+    # F4: bench, unplayed T2, expected 8.0 FP
+    # C2: bench, unplayed T2, expected 7.0 FP
+    # HC: Coach, unplayed T2, expected 10.0 FP
+    squad_units = [
+        IntraRoundPlayerUnit(1, "G1", "G", current_role="starter", is_captain=True, has_played=True, actual_fp=4.0, expected_fp=14.0),
+        IntraRoundPlayerUnit(2, "G2", "G", current_role="starter", has_played=False, actual_fp=None, expected_fp=15.0),
+        IntraRoundPlayerUnit(3, "F1", "F", current_role="starter", has_played=True, actual_fp=22.0, expected_fp=15.0),
+        IntraRoundPlayerUnit(4, "F2", "F", current_role="starter", has_played=False, actual_fp=None, expected_fp=12.0),
+        IntraRoundPlayerUnit(5, "C1", "C", current_role="starter", has_played=True, actual_fp=14.0, expected_fp=13.0),
+        IntraRoundPlayerUnit(6, "F3", "F", current_role="sixth_man", has_played=True, actual_fp=10.0, expected_fp=11.0),
+        IntraRoundPlayerUnit(7, "G3_PlayedBench", "G", current_role="bench", has_played=True, actual_fp=18.0, expected_fp=14.0),
+        IntraRoundPlayerUnit(8, "G4_UnplayedBench", "G", current_role="bench", has_played=False, actual_fp=None, expected_fp=16.0),
+        IntraRoundPlayerUnit(9, "F4", "F", current_role="bench", has_played=False, actual_fp=None, expected_fp=8.0),
+        IntraRoundPlayerUnit(10, "C2", "C", current_role="bench", has_played=False, actual_fp=None, expected_fp=7.0),
+        IntraRoundPlayerUnit(11, "Coach", "HC", current_role="coach", has_played=False, actual_fp=None, expected_fp=10.0),
+    ]
+
+    opt = IntraRoundSubstitutionOptimizer()
+    res = opt.optimize(squad_units=squad_units, captain_id=1)
+
+    # 1. G3_PlayedBench (player_id=7) was on bench and has played. It must NEVER enter starters or sixth man!
+    assert 7 not in res.starter_ids
+    assert res.sixth_man_id != 7
+    assert 7 in res.bench_ids
+
+    # 2. Optimal lineup must have promoted G4_UnplayedBench (player_id=8) or another unplayed bench player
+    assert 8 in res.starter_ids or res.sixth_man_id == 8
+
+    # 3. Captaincy: G1 scored 4.0 (doubled=8.0). G4 is unplayed with 16.0 expected.
+    # Player 3 has already played and cannot be selected as new captain mid-round.
+    # Captaincy switches to eligible unplayed starter G4_UnplayedBench (player_id=8)!
+    assert res.captain_id != 1
+    assert res.captain_id == 8
+
+    # 4. Formations and structural integrity
+    assert len(res.starter_ids) == 5
+    assert len(res.bench_ids) == 4
+    assert res.coach_id == 11
+    assert res.net_gain > 0.0
+
+
+def test_revert_round_start_checkpoint_lifecycle(tmp_path: Path):
+    """Verify team_round_checkpoints persistence and revert_to_round_start rollback."""
+    db_file = tmp_path / "teams_checkpoint.sqlite3"
+    ts = TeamService(db_path=db_file)
+
+    team = ts.create_team("checkpoint_team", "Checkpoint Team", season="2026/27", round_number=1, bank_tenths=150)
+    contracts = _build_test_squad_contracts()
+    units = _build_team_roster_units(contracts)
+    ts.set_squad(team.team_id, round_number=1, roster_units=units, validate=False)
+
+    initial_team = ts.get_team(team.team_id)
+    initial_pids = {u.player_id for u in initial_team.squad}
+    initial_bank = initial_team.bank_tenths
+    initial_transfers = initial_team.transfers_remaining
+
+    # Simulate changes during the round: transfer and squad alteration
+    ts.update_team(team.team_id, bank_tenths=50, transfers_remaining=2)
+    # Remove one player and add another
+    mod_units = list(initial_team.squad[:-1])
+    ts.set_squad(team.team_id, 1, mod_units, validate=False)
+
+    modified_team = ts.get_team(team.team_id)
+    assert modified_team.bank_tenths == 50
+    assert modified_team.transfers_remaining == 2
+    assert len(modified_team.squad) == 10
+
+    # Execute Revert
+    reverted_team = ts.revert_to_round_start(team.team_id, season="2026/27", round_number=1)
+
+    assert reverted_team.bank_tenths == initial_bank
+    assert reverted_team.transfers_remaining == initial_transfers
+    assert len(reverted_team.squad) == 11
+    reverted_pids = {u.player_id for u in reverted_team.squad}
+    assert reverted_pids == initial_pids
+
+
+def test_workstation_simulate_and_apply_intra_round_routes(tmp_path: Path):
+    """Verify workstation routes for intra-round simulation, application, and revert."""
+    db_file = tmp_path / "routes_test.sqlite3"
+    set_db_path(db_file)
+    app = create_app(db_path=db_file)
+    client = TestClient(app)
+
+    ts = TeamService(db_path=db_file)
+    ds = DecisionService(db_path=db_file)
+
+    team = ts.create_team("sub_team", "Sub Team", season="2026/27", round_number=1, bank_tenths=100)
+    contracts = _build_test_squad_contracts()
+    units = _build_team_roster_units(contracts)
+    ts.set_squad(team.team_id, round_number=1, roster_units=units, validate=False)
+
+    # 1. Simulate intra-round
+    sim_res = client.post("/api/workstation/simulate/intra-round", json={
+        "team_id": team.team_id,
+        "season": "2026/27",
+        "round_number": 1,
+    })
+    assert sim_res.status_code == 200
+    sim_data = sim_res.json()
+    assert "baseline_score" in sim_data
+    assert "optimal_score" in sim_data
+    assert "net_gain" in sim_data
+    assert "recommended_substitutions" in sim_data
+
+    # 2. Apply intra-round substitutions
+    apply_res = client.post("/api/workstation/apply/intra-round", json={
+        "team_id": team.team_id,
+        "season": "2026/27",
+        "round_number": 1,
+    })
+    assert apply_res.status_code == 200
+    apply_data = apply_res.json()
+    assert apply_data["success"] is True
+
+    # 3. Check decisions logged
+    decisions = ds.list_decisions(team.team_id)
+    assert any(d.decision_type == DecisionType.TURN_SUB for d in decisions)
+
+    # 4. Revert to round start
+    revert_res = client.post(f"/api/teams/{team.team_id}/revert-round-start", json={
+        "season": "2026/27",
+        "round_number": 1,
+    })
+    assert revert_res.status_code == 200
+    revert_data = revert_res.json()
+    assert revert_data["success"] is True
+
+
+
 
