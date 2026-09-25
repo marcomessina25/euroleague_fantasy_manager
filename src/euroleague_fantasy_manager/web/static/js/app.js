@@ -1382,7 +1382,7 @@ async function suggestOptimalInitialTeam() {
     console.error("Failed to suggest initial team:", err);
   } finally {
     btn.disabled = false;
-    btn.textContent = "⚡ Suggest Optimal Squad";
+    btn.textContent = "⚡ Suggest Squad (Round 1 Objective)";
   }
 }
 

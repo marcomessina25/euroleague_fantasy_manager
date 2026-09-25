@@ -147,8 +147,16 @@ def create_team(
                     notes=f"Initial team draft: {req.name}",
                     squad_contracts=contracts,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                # Transactional rollback: team must not exist if audit record fails
+                try:
+                    service.delete_team(tid)
+                except Exception:
+                    pass
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Required initial-team decision audit log failed: {e}",
+                )
 
         # Switch active team to new team
         service.set_active_team(tid)
@@ -338,6 +346,11 @@ def execute_transfers(
                 )
             )
 
+        # Snapshot current state for rollback in case of audit failure
+        prev_bank_tenths = team.bank_tenths
+        prev_transfers_remaining = team.transfers_remaining
+        prev_squad = list(team.squad)
+
         # Update team state
         rem_trades = team.transfers_remaining if req.unlimited else max(0, team.transfers_remaining - len(out_ids))
         service.update_team(
@@ -350,28 +363,34 @@ def execute_transfers(
         # Log decision
         try:
             from euroleague_fantasy_manager.tracking.models import TransferPayload
+            payload = TransferPayload(
+                out_player_ids=tuple(out_ids),
+                in_player_ids=tuple(in_ids),
+                num_trades=len(in_ids),
+                net_transfer_value=0.0,
+                bank_tenths_before=team.bank_tenths,
+                bank_tenths_after=new_bank_tenths,
+            )
             decision_service.log_transfers(
                 team_id=team_id,
                 season=req.season,
                 round_number=team.round_number,
-                recommended_transfers=TransferPayload(
-                    transfers_out=list(out_ids),
-                    transfers_in=in_ids,
-                    bank_before_tenths=team.bank_tenths,
-                    bank_after_tenths=new_bank_tenths,
-                    expected_score_gain=0.0,
-                ),
-                actual_transfers=TransferPayload(
-                    transfers_out=list(out_ids),
-                    transfers_in=in_ids,
-                    bank_before_tenths=team.bank_tenths,
-                    bank_after_tenths=new_bank_tenths,
-                    expected_score_gain=0.0,
-                ),
+                recommended_transfers=payload,
+                actual_transfers=payload,
                 notes=f"Executed {len(out_ids)} trade(s)" if not req.unlimited else "Executed Unlimited Overhaul",
             )
-        except Exception:
-            pass
+        except Exception as e:
+            # Transactional rollback: revert squad and state if decision log fails
+            service.update_team(
+                team_id=team_id,
+                bank_tenths=prev_bank_tenths,
+                transfers_remaining=prev_transfers_remaining,
+            )
+            service.set_squad(team_id, team.round_number, prev_squad, validate=False)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Required transfer decision audit log failed: {e}",
+            )
 
         return service.get_team(team_id).to_dict()
     except HTTPException:

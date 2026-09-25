@@ -2,9 +2,9 @@
 
 > **Living document.** This is the source of truth for delivery status, engineering priorities, release criteria, known risks, and long-term direction. Human contributors and AI agents must read it before material work and update it when priorities or milestone status changes.
 >
-> **Current planning baseline:** V0.1, V0.2, V0.2.5, V0.3, V0.4 (`0.4.0`), **0.4.5** (Closed-Loop Evaluation & Live Decision State), and **V0.5** (Multi-Team Management, Application Services & Local Web GUI, `0.5.0`) are completed (2026-09-23). **V0.6** (Strategic Analysis & LLM Copilot) is the next milestone.
+> **Current planning baseline:** V0.1, V0.2, V0.2.5, V0.3, V0.4 (`0.4.0`), and **0.4.5** (Closed-Loop Evaluation & Live Decision State, `0.4.5`, completed on 2026-09-23) are completed. **V0.5** (Multi-Team Management, Application Services & Local Web GUI Workstation, `0.5.0`) is in pre-merge review under PR #6. **V0.6** (Strategic Analysis & LLM Copilot) is the next milestone.
 >
-> See [`docs/architecture.md`](architecture.md), [`docs/specs/v02.md`](specs/v02.md), [`docs/specs/items_left_for_v02.md`](specs/items_left_for_v02.md), [`docs/specs/v025.md`](specs/v025.md), [`docs/specs/v025_cleanup.md`](specs/v025_cleanup.md), [`docs/specs/v03.md`](specs/v03.md), [`docs/specs/items_left_for_v03.md`](specs/items_left_for_v03.md), [`docs/specs/v04.md`](specs/v04.md), [`docs/specs/v04_items_left.md`](specs/v04_items_left.md), [`docs/specs/items_left_for_v04.md`](specs/items_left_for_v04.md), [`docs/specs/v045.md`](specs/v045.md), and [`docs/specs/v05.md`](specs/v05.md) for architectural and implementation details.
+> See [`docs/architecture.md`](architecture.md), [`docs/specs/v02.md`](specs/v02.md), [`docs/specs/items_left_for_v02.md`](specs/items_left_for_v02.md), [`docs/specs/v025.md`](specs/v025.md), [`docs/specs/v025_cleanup.md`](specs/v025_cleanup.md), [`docs/specs/v03.md`](specs/v03.md), [`docs/specs/items_left_for_v03.md`](specs/items_left_for_v03.md), [`docs/specs/v04.md`](specs/v04.md), [`docs/specs/v04_items_left.md`](specs/v04_items_left.md), [`docs/specs/items_left_for_v04.md`](specs/items_left_for_v04.md), [`docs/specs/v045.md`](specs/v045.md), [`docs/specs/v05.md`](specs/v05.md), and [`docs/specs/items_left_for_v05.md`](specs/items_left_for_v05.md) for architectural and implementation details.
 
 
 ---
@@ -309,31 +309,37 @@ Connect the quantitative engine to real management decisions and actual outcomes
 
 ## V0.5 — Multi-Team Management, Application Services & Local Web GUI
 
-**Status: completed on 2026-09-23 (0.5.0).**  
-**Prerequisites:** V0.4 and 0.4.5 closed-loop decision/evaluation bridge.  
+**Status: in pre-merge review (PR #6, 0.5.0-rc).**  
+**Prerequisites:** V0.4 (`0.4.0`) and 0.4.5 (`0.4.5`, completed on 2026-09-23) closed-loop decision/evaluation bridge.  
 **Core principle:** The GUI is a downstream interface over the quantitative engine. It must not become a second rules engine, prediction engine, or optimizer.
 
 ### Scope
 
 1. **Multi-Team Domain Model & Strict Isolation (`src/euroleague_fantasy_manager/multi_team/`)**:
    - Supports up to 3 isolated Classic Mode teams (`team_id`, `name`, `mode`, `squad`, `bank`, `round_number`, `turn_number`, `settings`).
-   - Team-scoped SQLite storage (`teams`, `team_squads`, `team_state`) ensuring Team A never reads or mutates Team B/C state.
+   - Team-scoped SQLite storage (`managed_teams`, `managed_team_squads`) preventing collision with official EuroLeague club records.
 2. **Application Service Layer (`src/euroleague_fantasy_manager/services/`)**:
    - `TeamService`: Team CRUD, active team context, squad/budget management, constraint validation.
    - `PredictionService`: Projections, availability, uncertainty, risk bounds, PAR, value metrics.
-   - `OptimizationService`: Lineup optimization, transfer exploration, multi-round beam search planning, initial team draft recommendations.
+   - `OptimizationService`: Lineup optimization, transfer exploration, multi-round beam search planning, initial team draft adapter.
    - `DecisionService`: Decision logging, history inspection, and audit events.
    - `ScenarioService`: Ephemeral what-if simulation (ruling out players, risk overrides, custom turn outcomes) with guaranteed state immutability.
    - `EvaluationService`: Realized outcome ingestion, component regret calculation, longitudinal drift reporting.
-3. **Local Web GUI Workstation (`src/euroleague_fantasy_manager/web/`)**:
+3. **Quantitative Initial Team Optimization (`src/euroleague_fantasy_manager/optimization/initial_team.py`)**:
+   - Solves the Round-1 starting squad optimization problem using exact MILP under budget (100.0 Cr), position quotas (4G, 4F, 2C, 1HC), and club quotas (max 6 court players per club).
+   - Supports locked and excluded players with deterministic tie-breaking.
+   - Explicitly distinguished from future strategic multi-round initial drafting (deferred to V0.5.x/V0.6).
+   - Mandatory `INITIAL_TEAM` decision logging with zero silent audit swallowing.
+4. **Local Web GUI Workstation (`src/euroleague_fantasy_manager/web/`)**:
    - Fast, local, framework-independent Python Web workstation (FastAPI + responsive HTML5/CSS/JS).
-   - **Interactive Half-Court Lineup View**: Visual court layout showing Starters, Captain ($2.0\times$), Sixth Man ($1.0\times$), Bench ($0.5\times$), and Head Coach ($1.0\times$) with projections, opponent, turn, and availability status.
+   - **Initial Team Builder**: Interactive draft modal with live player search, budget tracking, position progress, and engine recommendation.
+   - **Direct-Click Court View & Starting Five**: Visual court layout showing Starters, Captain ($2.0\times$), Sixth Man ($1.0\times$), Bench ($0.5\times$), and Head Coach ($1.0\times$) with projections, opponent, turn, and availability status.
    - **T1/T2/T3 State & Turn Substitution Simulator**: Realized Turn 1 outcomes $\to$ recalculate $\to$ show optimal bench swap and captain switch with net incremental gain.
    - **Trade Studio & Unlimited Trade Window Planner**: Legal 1..4 transfer and overhaul exploration with bank delta and squad legality checks.
    - **Multi-Round Planner**: Beam search paths across horizons $N=2..4$ with discount factor $\gamma$.
    - **Evaluation Hub & Decision Comparison**: Model recommendation vs manager decision vs hindsight oracle, component regrets, rolling MAE windows, and role segment errors.
    - **Scenario & What-If Analysis**: Isolated what-if analysis with parameter provenance badges.
-4. **CLI First-Class Support**:
+5. **CLI First-Class Support**:
    - `elf gui`: Launch the local workstation server.
    - `elf team`: Manage multi-team profiles from the terminal.
 

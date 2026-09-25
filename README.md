@@ -15,13 +15,13 @@ EuroLeague Fantasy & Feeds APIs -> local SQLite snapshots -> rules + validation 
 ## Living roadmap
 
 - [`docs/architecture.md`](docs/architecture.md) defines the purpose, architectural boundaries, and responsibilities of each layer.
-- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1`, `V0.2`, `V0.2.5`, `V0.3`, `V0.4`, `0.4.5`, and `V0.5` completed; `V0.6` is next).
+- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1`, `V0.2`, `V0.2.5`, `V0.3`, `V0.4`, and `0.4.5` completed; `V0.5` in pre-merge review under PR #6; `V0.6` is next).
 - [`docs/specs/v02.md`](docs/specs/v02.md) and [`docs/specs/items_left_for_v02.md`](docs/specs/items_left_for_v02.md) define the **V0.2** heuristic decision-support baseline specification and pre-merge checklist.
 - [`docs/specs/v025.md`](docs/specs/v025.md) and [`docs/specs/v025_cleanup.md`](docs/specs/v025_cleanup.md) define the **V0.2.5** historical evaluation foundation.
 - [`docs/specs/v03.md`](docs/specs/v03.md) and [`docs/specs/items_left_for_v03.md`](docs/specs/items_left_for_v03.md) define the **V0.3** validated predictive projection layer (`0.3.0`) and merge checklist.
 - [`docs/specs/v04.md`](docs/specs/v04.md), [`docs/specs/v04_items_left.md`](docs/specs/v04_items_left.md), and [`docs/specs/items_left_for_v04.md`](docs/specs/items_left_for_v04.md) define the **V0.4** decision and optimization layer (`0.4.0`).
 - [`docs/specs/v045.md`](docs/specs/v045.md) defines **0.4.5** closed-loop evaluation and live decision state (`0.4.5`).
-- [`docs/specs/v05.md`](docs/specs/v05.md) defines **V0.5** multi-team management, application services, and local Web GUI workstation (`0.5.0`).
+- [`docs/specs/v05.md`](docs/specs/v05.md) and [`docs/specs/items_left_for_v05.md`](docs/specs/items_left_for_v05.md) define the **V0.5** multi-team management, application services, and local Web GUI workstation (`0.5.0-rc`).
 
 Both human contributors and AI agents must read the relevant living documents before making material changes and update them whenever architecture, scope, priorities, or delivery status changes.
 

@@ -38,6 +38,12 @@ from .option_value import (
     compute_captain_option_value,
     compute_turn_substitution_option_bonus,
 )
+from .initial_team import (
+    InitialTeamOptimizationResult,
+    InitialTeamRiskMode,
+    optimize_initial_team,
+    optimize_initial_team_detailed,
+)
 from .transfers import (
     TransferOptimizationResult,
     TransferOptimizer,
@@ -62,6 +68,10 @@ __all__ = [
     "brute_force_exhaustive_lineup",
     "CandidateGenerator",
     "CandidatePool",
+    "InitialTeamOptimizationResult",
+    "InitialTeamRiskMode",
+    "optimize_initial_team",
+    "optimize_initial_team_detailed",
     "TransferOptimizer",
     "TransferRecommendation",
     "TransferOptimizationResult",

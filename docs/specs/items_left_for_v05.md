@@ -10,11 +10,11 @@
 
 The current Initial Team Builder implements a separate MILP optimizer inside `OptimizationService`.
 
-- [ ] Move the actual initial-team optimization algorithm into the quantitative `optimization` layer.
-- [ ] Keep `OptimizationService` as the application/service adapter.
-- [ ] Reuse existing projection/rules/constraint abstractions where possible.
-- [ ] Ensure GUI → service → quantitative engine.
-- [ ] Do not duplicate fantasy rules in GUI/service code.
+- [x] Move the actual initial-team optimization algorithm into the quantitative `optimization` layer.
+- [x] Keep `OptimizationService` as the application/service adapter.
+- [x] Reuse existing projection/rules/constraint abstractions where possible.
+- [x] Ensure GUI → service → quantitative engine.
+- [x] Do not duplicate fantasy rules in GUI/service code.
 
 MILP itself is fine; the issue is architectural ownership and reuse.
 
@@ -22,10 +22,10 @@ MILP itself is fine; the issue is architectural ownership and reuse.
 
 The current Initial Team Builder can be accepted as a Round-1/immediate-objective starting-squad optimizer.
 
-- [ ] Document the actual objective precisely.
-- [ ] Do not call the result universally "the best team".
-- [ ] Expose the objective/strategy used.
-- [ ] Preserve the architecture for future multi-round strategic initial-team optimization.
+- [x] Document the actual objective precisely.
+- [x] Do not call the result universally "the best team".
+- [x] Expose the objective/strategy used.
+- [x] Preserve the architecture for future multi-round strategic initial-team optimization.
 
 The richer:
 
@@ -39,22 +39,22 @@ is **not a V0.5 merge blocker** if it is not already implemented. It can be V0.5
 
 This is a merge blocker.
 
-- [ ] Remove `except Exception: pass` around required initial-team decision logging.
-- [ ] Remove equivalent silent swallowing around required transfer logging.
-- [ ] Log failures and return an appropriate error.
-- [ ] Prefer transactional behavior where practical.
-- [ ] Add tests proving audit failures are not silently ignored.
+- [x] Remove `except Exception: pass` around required initial-team decision logging.
+- [x] Remove equivalent silent swallowing around required transfer logging.
+- [x] Log failures and return an appropriate error.
+- [x] Prefer transactional behavior where practical.
+- [x] Add tests proving audit failures are not silently ignored.
 
 A team must not appear successfully created while its required historical decision record has disappeared.
 
 ### 1.4 Documentation/status cleanup
 
-- [ ] Remove duplicate planned/completed V0.5 status entries.
-- [ ] Make README, roadmap and `docs/specs/v05.md` consistent.
-- [ ] Ensure V0.45 is completed before V0.5.
-- [ ] Do not mark V0.5 completed until the PR is actually ready/merged.
-- [ ] Document Initial Team Builder accurately.
-- [ ] Explicitly distinguish Round-1 initial-team optimization from future strategic multi-round optimization.
+- [x] Remove duplicate planned/completed V0.5 status entries.
+- [x] Make README, roadmap and `docs/specs/v05.md` consistent.
+- [x] Ensure V0.45 is completed before V0.5.
+- [x] Do not mark V0.5 completed until the PR is actually ready/merged.
+- [x] Document Initial Team Builder accurately.
+- [x] Explicitly distinguish Round-1 initial-team optimization from future strategic multi-round optimization.
 
 ---
 
@@ -478,20 +478,20 @@ without state contamination.
 
 ### 🔴 Must fix
 
-- [ ] Move initial-team optimization algorithm into the quantitative optimization layer.
-- [ ] Remove silent audit/decision logging failures.
-- [ ] Fix README/roadmap/spec status duplication.
-- [ ] Ensure initial-team decision logging is reliable.
-- [ ] Full regression suite passes.
+- [x] Move initial-team optimization algorithm into the quantitative optimization layer.
+- [x] Remove silent audit/decision logging failures.
+- [x] Fix README/roadmap/spec status duplication.
+- [x] Ensure initial-team decision logging is reliable.
+- [x] Full regression suite passes.
 
 ### 🟠 Should verify
 
-- [ ] Initial-team objective wording is accurate.
-- [ ] Optimizer constraints are shared with the engine.
-- [ ] Scenario isolation.
-- [ ] Multi-team isolation.
-- [ ] CLI remains functional.
-- [ ] Provenance is preserved.
+- [x] Initial-team objective wording is accurate.
+- [x] Optimizer constraints are shared with the engine.
+- [x] Scenario isolation.
+- [x] Multi-team isolation.
+- [x] CLI remains functional.
+- [x] Provenance is preserved.
 
 ### 🟢 Acceptable for V0.5
 

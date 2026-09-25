@@ -815,3 +815,273 @@ def test_workstation_player_details_rename_transfers_and_multiround(tmp_path: Pa
     assert mr_data["steps"][0]["formation"] is not None
 
 
+def test_initial_team_optimizer_constraints_and_locks():
+    """Verify initial team optimizer respects position quotas, club quotas, budget, and locked/excluded players."""
+    from euroleague_fantasy_manager.optimization.initial_team import (
+        optimize_initial_team,
+        optimize_initial_team_detailed,
+    )
+
+    contracts = _build_test_squad_contracts()
+    # Add extra players to create a larger pool (total 15 players)
+    extra_g = PlayerProjectionContract(
+        player_id=901,
+        player_name="Extra Guard",
+        position=Position.GUARD,
+        team_id=1,
+        team_code="CLB1",
+        price_tenths=90,
+        expected_fp=18.0,
+    )
+    extra_f = PlayerProjectionContract(
+        player_id=902,
+        player_name="Extra Forward",
+        position=Position.FORWARD,
+        team_id=2,
+        team_code="CLB2",
+        price_tenths=85,
+        expected_fp=17.5,
+    )
+    extra_c = PlayerProjectionContract(
+        player_id=903,
+        player_name="Extra Center",
+        position=Position.CENTER,
+        team_id=3,
+        team_code="CLB3",
+        price_tenths=95,
+        expected_fp=19.0,
+    )
+    pool = contracts + [extra_g, extra_f, extra_c]
+
+    # 1. Basic optimization
+    res = optimize_initial_team_detailed(pool=pool, budget_credits=120.0, risk_mode="expected")
+    assert len(res.squad) == 11
+    assert res.total_cost_tenths <= 1200
+    pos_counts = {
+        "G": sum(1 for p in res.squad if p.position == Position.GUARD),
+        "F": sum(1 for p in res.squad if p.position == Position.FORWARD),
+        "C": sum(1 for p in res.squad if p.position == Position.CENTER),
+        "HC": sum(1 for p in res.squad if p.position == Position.HEAD_COACH),
+    }
+    assert pos_counts == {"G": 4, "F": 4, "C": 2, "HC": 1}
+
+    # 2. Locked players preserved
+    locked_pid = contracts[0].player_id
+    res_locked = optimize_initial_team(pool=pool, budget_credits=120.0, locked_player_ids=[locked_pid])
+    assert any(p.player_id == locked_pid for p in res_locked)
+
+    # 3. Excluded players omitted
+    res_excluded = optimize_initial_team(pool=pool, budget_credits=120.0, excluded_player_ids=[901])
+    assert all(p.player_id != 901 for p in res_excluded)
+
+    # 4. Deterministic replay
+    res_a = optimize_initial_team(pool=pool, budget_credits=120.0, risk_mode="expected")
+    res_b = optimize_initial_team(pool=pool, budget_credits=120.0, risk_mode="expected")
+    assert [p.player_id for p in res_a] == [p.player_id for p in res_b]
+
+
+def test_initial_team_optimizer_exhaustive_oracle():
+    """Verify MILP matches exhaustive enumeration on small synthetic pool."""
+    from itertools import combinations
+    from euroleague_fantasy_manager.optimization.initial_team import optimize_initial_team
+
+    # Construct pool with exactly: 5 Guards, 5 Forwards, 3 Centers, 1 Head Coach (total 14)
+    # Total combinations = C(5,4)*C(5,4)*C(3,2)*C(1,1) = 5 * 5 * 3 * 1 = 75 legal combinations
+    contracts = _build_test_squad_contracts()
+    extra_g = PlayerProjectionContract(
+        player_id=901,
+        player_name="Extra Guard",
+        position=Position.GUARD,
+        team_id=1,
+        team_code="CLB1",
+        price_tenths=85,
+        expected_fp=16.0,
+    )
+    extra_f = PlayerProjectionContract(
+        player_id=902,
+        player_name="Extra Forward",
+        position=Position.FORWARD,
+        team_id=2,
+        team_code="CLB2",
+        price_tenths=90,
+        expected_fp=17.0,
+    )
+    extra_c = PlayerProjectionContract(
+        player_id=903,
+        player_name="Extra Center",
+        position=Position.CENTER,
+        team_id=3,
+        team_code="CLB3",
+        price_tenths=95,
+        expected_fp=18.0,
+    )
+    pool = contracts + [extra_g, extra_f, extra_c]
+
+    guards = [p for p in pool if p.position == Position.GUARD]
+    forwards = [p for p in pool if p.position == Position.FORWARD]
+    centers = [p for p in pool if p.position == Position.CENTER]
+    coaches = [p for p in pool if p.position == Position.HEAD_COACH]
+
+    budget_tenths = 1200
+
+    best_score = -1.0
+    best_combo = None
+
+    for g_comb in combinations(guards, 4):
+        for f_comb in combinations(forwards, 4):
+            for c_comb in combinations(centers, 2):
+                for hc_comb in combinations(coaches, 1):
+                    cand = list(g_comb) + list(f_comb) + list(c_comb) + list(hc_comb)
+                    cost = sum(p.price_tenths for p in cand)
+                    if cost > budget_tenths:
+                        continue
+                    # Check club quota
+                    club_counts = {}
+                    valid_club = True
+                    for p in cand:
+                        if p.position != Position.HEAD_COACH and p.team_id:
+                            club_counts[p.team_id] = club_counts.get(p.team_id, 0) + 1
+                            if club_counts[p.team_id] > 6:
+                                valid_club = False
+                                break
+                    if not valid_club:
+                        continue
+                    # Score
+                    score = sum(p.expected_fp for p in cand)
+                    if score > best_score:
+                        best_score = score
+                        best_combo = set(p.player_id for p in cand)
+
+    milp_squad = optimize_initial_team(pool=pool, budget_credits=120.0, risk_mode="expected")
+    milp_pids = set(p.player_id for p in milp_squad)
+    assert milp_pids == best_combo
+
+
+def test_initial_team_optimizer_infeasible_inputs():
+    """Verify descriptive ValueErrors on infeasible or conflicting inputs."""
+    from euroleague_fantasy_manager.optimization.initial_team import optimize_initial_team
+
+    contracts = _build_test_squad_contracts()
+
+    # 1. Empty pool
+    with pytest.raises(ValueError, match="empty"):
+        optimize_initial_team(pool=[], budget_credits=100.0)
+
+    # 2. Overlapping locked and excluded
+    with pytest.raises(ValueError, match="simultaneously locked and excluded"):
+        optimize_initial_team(pool=contracts, locked_player_ids=[101], excluded_player_ids=[101])
+
+    # 3. Locked players exceeding budget
+    with pytest.raises(ValueError, match="exceeds budget"):
+        optimize_initial_team(pool=contracts, budget_credits=10.0, locked_player_ids=[101, 102])
+
+    # 4. Too many locked players for a position (e.g. 3 centers locked when quota is 2)
+    c1 = PlayerProjectionContract(1, "C1", Position.CENTER, 1, "C", 50, 10.0)
+    c2 = PlayerProjectionContract(2, "C2", Position.CENTER, 1, "C", 50, 10.0)
+    c3 = PlayerProjectionContract(3, "C3", Position.CENTER, 1, "C", 50, 10.0)
+    with pytest.raises(ValueError, match="Too many locked players for position 'C'"):
+        optimize_initial_team(pool=contracts + [c1, c2, c3], locked_player_ids=[1, 2, 3])
+
+
+def test_audit_failure_transactional_rollbacks(tmp_path: Path):
+    """Verify that failures in required decision logging rollback team creation and transfers."""
+    from euroleague_fantasy_manager.web.deps import get_decision_service, get_prediction_service
+
+    db_path = tmp_path / "audit_rollback.db"
+    app = create_app(db_path=db_path)
+
+    contracts = [
+        PlayerProjectionContract(
+            player_id=c.player_id,
+            player_name=c.player_name,
+            position=c.position,
+            team_id=c.team_id,
+            team_code=c.team_code,
+            price_tenths=60 + (i * 2),
+            expected_fp=c.expected_fp,
+            turn_number=c.turn_number,
+        )
+        for i, c in enumerate(_build_test_squad_contracts(), start=1)
+    ]
+    ts = TeamStore(db_path)
+    contracts_dict = {c.player_id: c for c in contracts}
+
+    mock_ps = PredictionService(database_path=db_path)
+    mock_ps.get_projections = lambda s, r: contracts
+    mock_ps.get_projections_dict = lambda s, r: contracts_dict
+    mock_ps.get_player_projection = lambda s, r, pid: next((c for c in contracts if c.player_id == pid), None)
+    app.dependency_overrides[get_prediction_service] = lambda: mock_ps
+
+    mock_ds = DecisionService(store=DecisionStore(db_path))
+    app.dependency_overrides[get_decision_service] = lambda: mock_ds
+
+    client = TestClient(app)
+
+    # 1. Initial team creation rollback on audit failure
+    def _fail_init(*args, **kwargs):
+        raise RuntimeError("Disk failure")
+
+    mock_ds.log_initial_team = _fail_init
+
+    res_create = client.post("/api/teams", json={
+        "name": "Audit Fail Squad",
+        "season": "2026/27",
+        "player_ids": [c.player_id for c in contracts],
+    })
+    assert res_create.status_code == 500
+    assert "Required initial-team decision audit log failed" in res_create.json()["detail"]
+    # Ensure team was rolled back and does not exist in store
+    teams = ts.list_teams()
+    assert not any(t.name == "Audit Fail Squad" for t in teams)
+
+    # 2. Transfer execution rollback on audit failure
+    real_ds = DecisionService(store=DecisionStore(db_path))
+    mock_ds.log_initial_team = real_ds.log_initial_team
+
+    res_clean = client.post("/api/teams", json={
+        "name": "Clean Team",
+        "season": "2026/27",
+        "player_ids": [c.player_id for c in contracts],
+    })
+    assert res_clean.status_code == 200
+    team_data = res_clean.json()
+    team_id = team_data["team_id"]
+    orig_bank = team_data["bank_tenths"]
+    orig_pids = {u["player_id"] for u in team_data["squad"]}
+
+    cheap_g = PlayerProjectionContract(
+        player_id=888,
+        player_name="Cheap G",
+        position=Position.GUARD,
+        team_id=1,
+        team_code="CLB1",
+        price_tenths=40,
+        expected_fp=10.0,
+    )
+    mock_ps.get_projections = lambda s, r: contracts + [cheap_g]
+    mock_ps.get_projections_dict = lambda s, r: {**contracts_dict, 888: cheap_g}
+    mock_ps.get_player_projection = lambda s, r, pid: next((c for c in (contracts + [cheap_g]) if c.player_id == pid), None)
+
+    def _fail_tx(*args, **kwargs):
+        raise RuntimeError("Audit write error")
+
+    mock_ds.log_transfers = _fail_tx
+
+    res_trade = client.post(f"/api/teams/{team_id}/transfers", json={
+        "transfers_out_ids": [contracts[0].player_id],
+        "transfers_in_ids": [888],
+        "unlimited": False,
+        "season": "2026/27",
+    })
+    assert res_trade.status_code == 500
+    assert "Required transfer decision audit log failed" in res_trade.json()["detail"]
+
+    # Ensure team squad and bank were rolled back in store
+    persisted_team = ts.get_team(team_id)
+    assert persisted_team.bank_tenths == orig_bank
+    persisted_pids = {u.player_id for u in persisted_team.squad}
+    assert persisted_pids == orig_pids
+    assert persisted_team.transfers_remaining == 4
+
+
+
