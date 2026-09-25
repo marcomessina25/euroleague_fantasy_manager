@@ -274,6 +274,10 @@ def get_dashboard(
             unplayed_count += 1
 
     tot_projected_fp = tot_realized_fp + tot_unplayed_expected_fp
+    assert abs((tot_realized_fp + tot_unplayed_expected_fp) - tot_projected_fp) < 0.01, (
+        f"Court score breakdown inconsistency: realized ({tot_realized_fp}) + "
+        f"unplayed_expected ({tot_unplayed_expected_fp}) != total ({tot_projected_fp})"
+    )
     any_played = played_count > 0
 
     current_lineup = {

@@ -3,12 +3,15 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import logging
 from pathlib import Path
 import sqlite3
 from typing import Any
 
 from .models import Player, Position
 from .rules import EUROLEAGUE_LEAGUE_ID
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,79 +48,129 @@ class SnapshotStore:
         conn.row_factory = sqlite3.Row
         return conn
 
+    def _get_schema_version(self, conn: sqlite3.Connection) -> int:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schema_version (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                version INTEGER NOT NULL,
+                applied_at TEXT NOT NULL,
+                description TEXT
+            );
+            """
+        )
+        row = conn.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()
+        return row[0] if row else 0
+
+    def _set_schema_version(self, conn: sqlite3.Connection, version: int, description: str) -> None:
+        conn.execute(
+            "INSERT INTO schema_version (version, applied_at, description) VALUES (?, ?, ?)",
+            (version, datetime.now(timezone.utc).isoformat(), description),
+        )
+
+    def _migrate_to_v2_add_has_played_column(self, conn: sqlite3.Connection) -> None:
+        """Safely add has_played column to players table if it doesn't exist."""
+        info = conn.execute("PRAGMA table_info(players)").fetchall()
+        column_names = [col[1] for col in info]
+        if "has_played" in column_names:
+            logger.info("Column 'has_played' already exists in 'players'; skipping ALTER.")
+            return
+
+        logger.info("Migrating schema to v2: adding 'has_played' column to 'players' table...")
+        conn.execute("ALTER TABLE players ADD COLUMN has_played INTEGER NOT NULL DEFAULT 0")
+        logger.info("Migration complete: 'has_played' column added.")
+
     def _initialize_schema(self) -> None:
         with self._connect() as conn:
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS snapshots (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    created_at TEXT NOT NULL,
-                    league_id INTEGER NOT NULL DEFAULT 10,
-                    competition_code TEXT NOT NULL DEFAULT 'E',
-                    season_code TEXT NOT NULL DEFAULT 'E2026',
-                    matchday_id INTEGER NOT NULL DEFAULT 0,
-                    round_number INTEGER NOT NULL DEFAULT 1,
-                    num_turns INTEGER NOT NULL DEFAULT 2,
-                    raw_archive_path TEXT
-                );
+            current_version = self._get_schema_version(conn)
 
-                CREATE TABLE IF NOT EXISTS teams (
-                    snapshot_id INTEGER NOT NULL,
-                    id INTEGER NOT NULL,
-                    name TEXT NOT NULL,
-                    short_name TEXT NOT NULL,
-                    PRIMARY KEY (snapshot_id, id),
-                    FOREIGN KEY (snapshot_id) REFERENCES snapshots(id)
-                );
+            # Check if tables already exist in an unversioned legacy database
+            if current_version == 0:
+                row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='players'").fetchone()
+                if row:
+                    info = conn.execute("PRAGMA table_info(players)").fetchall()
+                    has_played = any(col[1] == "has_played" for col in info)
+                    if has_played:
+                        self._set_schema_version(conn, 2, "Backfilled schema v2 for existing database")
+                        current_version = 2
+                    else:
+                        self._set_schema_version(conn, 1, "Backfilled schema v1 for existing database")
+                        current_version = 1
 
-                CREATE TABLE IF NOT EXISTS fixtures (
-                    snapshot_id INTEGER NOT NULL,
-                    id INTEGER NOT NULL,
-                    round_number INTEGER NOT NULL,
-                    turn_number INTEGER NOT NULL,
-                    started_at TEXT,
-                    status TEXT,
-                    home_team_id INTEGER NOT NULL,
-                    home_team_code TEXT NOT NULL,
-                    away_team_id INTEGER NOT NULL,
-                    away_team_code TEXT NOT NULL,
-                    home_score INTEGER,
-                    away_score INTEGER,
-                    PRIMARY KEY (snapshot_id, id),
-                    FOREIGN KEY (snapshot_id) REFERENCES snapshots(id)
-                );
+            if current_version < 1:
+                conn.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS snapshots (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        created_at TEXT NOT NULL,
+                        league_id INTEGER NOT NULL DEFAULT 10,
+                        competition_code TEXT NOT NULL DEFAULT 'E',
+                        season_code TEXT NOT NULL DEFAULT 'E2026',
+                        matchday_id INTEGER NOT NULL DEFAULT 0,
+                        round_number INTEGER NOT NULL DEFAULT 1,
+                        num_turns INTEGER NOT NULL DEFAULT 2,
+                        raw_archive_path TEXT
+                    );
 
-                CREATE TABLE IF NOT EXISTS players (
-                    snapshot_id INTEGER NOT NULL,
-                    id INTEGER NOT NULL,
-                    first_name TEXT NOT NULL,
-                    last_name TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    position INTEGER NOT NULL,
-                    position_code TEXT NOT NULL,
-                    team_id INTEGER NOT NULL,
-                    team_code TEXT NOT NULL,
-                    team_name TEXT NOT NULL,
-                    price_tenths INTEGER NOT NULL,
-                    status TEXT NOT NULL,
-                    probability_of_playing REAL NOT NULL DEFAULT 1.0,
-                    turn_number INTEGER NOT NULL DEFAULT 1,
-                    last_match_pts REAL NOT NULL DEFAULT 0.0,
-                    avg_fantasy_pts REAL NOT NULL DEFAULT 0.0,
-                    total_plus_tenths INTEGER NOT NULL DEFAULT 0,
-                    popularity REAL NOT NULL DEFAULT 0.0,
-                    is_injured INTEGER NOT NULL DEFAULT 0,
-                    is_on_fire INTEGER NOT NULL DEFAULT 0,
-                    has_played INTEGER NOT NULL DEFAULT 0,
-                    PRIMARY KEY (snapshot_id, id),
-                    FOREIGN KEY (snapshot_id) REFERENCES snapshots(id)
-                );
-                """
-            )
-            try:
-                conn.execute("ALTER TABLE players ADD COLUMN has_played INTEGER NOT NULL DEFAULT 0")
-            except Exception:
-                pass
+                    CREATE TABLE IF NOT EXISTS teams (
+                        snapshot_id INTEGER NOT NULL,
+                        id INTEGER NOT NULL,
+                        name TEXT NOT NULL,
+                        short_name TEXT NOT NULL,
+                        PRIMARY KEY (snapshot_id, id),
+                        FOREIGN KEY (snapshot_id) REFERENCES snapshots(id)
+                    );
+
+                    CREATE TABLE IF NOT EXISTS fixtures (
+                        snapshot_id INTEGER NOT NULL,
+                        id INTEGER NOT NULL,
+                        round_number INTEGER NOT NULL,
+                        turn_number INTEGER NOT NULL,
+                        started_at TEXT,
+                        status TEXT,
+                        home_team_id INTEGER NOT NULL,
+                        home_team_code TEXT NOT NULL,
+                        away_team_id INTEGER NOT NULL,
+                        away_team_code TEXT NOT NULL,
+                        home_score INTEGER,
+                        away_score INTEGER,
+                        PRIMARY KEY (snapshot_id, id),
+                        FOREIGN KEY (snapshot_id) REFERENCES snapshots(id)
+                    );
+
+                    CREATE TABLE IF NOT EXISTS players (
+                        snapshot_id INTEGER NOT NULL,
+                        id INTEGER NOT NULL,
+                        first_name TEXT NOT NULL,
+                        last_name TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        position INTEGER NOT NULL,
+                        position_code TEXT NOT NULL,
+                        team_id INTEGER NOT NULL,
+                        team_code TEXT NOT NULL,
+                        team_name TEXT NOT NULL,
+                        price_tenths INTEGER NOT NULL,
+                        status TEXT NOT NULL,
+                        probability_of_playing REAL NOT NULL DEFAULT 1.0,
+                        turn_number INTEGER NOT NULL DEFAULT 1,
+                        last_match_pts REAL NOT NULL DEFAULT 0.0,
+                        avg_fantasy_pts REAL NOT NULL DEFAULT 0.0,
+                        total_plus_tenths INTEGER NOT NULL DEFAULT 0,
+                        popularity REAL NOT NULL DEFAULT 0.0,
+                        is_injured INTEGER NOT NULL DEFAULT 0,
+                        is_on_fire INTEGER NOT NULL DEFAULT 0,
+                        has_played INTEGER NOT NULL DEFAULT 0,
+                        PRIMARY KEY (snapshot_id, id),
+                        FOREIGN KEY (snapshot_id) REFERENCES snapshots(id)
+                    );
+                    """
+                )
+                self._set_schema_version(conn, 1, "Initial schema: snapshots, teams, fixtures, players")
+                current_version = 1
+
+            if current_version < 2:
+                self._migrate_to_v2_add_has_played_column(conn)
+                self._set_schema_version(conn, 2, "Added has_played column for live score tracking")
 
     def save_snapshot(
         self,

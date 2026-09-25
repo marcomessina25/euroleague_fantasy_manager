@@ -417,8 +417,8 @@ class TeamStore:
         team_id: str,
         round_number: int,
         season: str,
-    ) -> dict[str, Any] | None:
-        """Get the round start checkpoint for a team."""
+    ) -> dict[str, Any]:
+        """Get the exact round start checkpoint for a team. Raises ValueError if not found."""
         with self._get_connection() as conn:
             row = conn.execute(
                 """
@@ -428,14 +428,35 @@ class TeamStore:
                 (team_id, round_number, season),
             ).fetchone()
             if not row:
-                row = conn.execute(
-                    """
-                    SELECT * FROM team_round_checkpoints
-                    WHERE team_id = ? AND season = ? AND round_number <= ?
-                    ORDER BY round_number DESC LIMIT 1;
-                    """,
-                    (team_id, season, round_number),
-                ).fetchone()
+                raise ValueError(
+                    f"No checkpoint found for team '{team_id}' in Round {round_number}, season '{season}'."
+                )
+            return {
+                "team_id": row["team_id"],
+                "round_number": row["round_number"],
+                "season": row["season"],
+                "bank_tenths": row["bank_tenths"],
+                "transfers_remaining": row["transfers_remaining"],
+                "squad": [TeamRosterUnit.from_dict(d) for d in json.loads(row["squad_json"])],
+                "created_at": row["created_at"],
+            }
+
+    def get_latest_checkpoint_before_round(
+        self,
+        team_id: str,
+        round_number: int,
+        season: str,
+    ) -> dict[str, Any] | None:
+        """Get the latest checkpoint at or before round_number. Returns None if not found."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM team_round_checkpoints
+                WHERE team_id = ? AND season = ? AND round_number <= ?
+                ORDER BY round_number DESC LIMIT 1;
+                """,
+                (team_id, season, round_number),
+            ).fetchone()
             if not row:
                 return None
             return {
@@ -458,8 +479,6 @@ class TeamStore:
         team = self.get_team(team_id)
         rnd = round_number or team.round_number
         checkpoint = self.get_round_checkpoint(team_id, rnd, season)
-        if not checkpoint:
-            raise ValueError(f"No round start checkpoint found for team '{team_id}' in Round {rnd}.")
 
         restored_squad = checkpoint["squad"]
         restored_bank = checkpoint["bank_tenths"]

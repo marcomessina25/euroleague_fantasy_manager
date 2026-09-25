@@ -202,16 +202,20 @@ class IntraRoundSubstitutionOptimizer:
                     continue
 
                 # Determine legal Captaincy for this starting 5
-                # Captain options:
-                # 1. Retain current captain (if he is in this starter combo)
-                # 2. Or any starter who has NOT played yet (has_played == False)
-                # Note: A player who already played cannot BECOME the new captain if not already captain!
-                candidate_caps: list[int] = []
-                if curr_cap_id in s_ids_set:
-                    candidate_caps.append(curr_cap_id)
-                for pid in s_ids:
-                    if not played_map[pid] and pid not in candidate_caps:
-                        candidate_caps.append(pid)
+                # Captaincy rule:
+                # 1. If current captain has already played, their score is locked: they must remain starter and captain.
+                # 2. If current captain has NOT played yet, captaincy can stay or switch to another unplayed starter.
+                if curr_cap_id and played_map.get(curr_cap_id, False):
+                    if curr_cap_id not in s_ids_set:
+                        continue  # Played captain cannot be removed from starters
+                    candidate_caps = [curr_cap_id]
+                else:
+                    candidate_caps = []
+                    if curr_cap_id in s_ids_set and not played_map.get(curr_cap_id, False):
+                        candidate_caps.append(curr_cap_id)
+                    for pid in s_ids:
+                        if not played_map[pid] and pid not in candidate_caps:
+                            candidate_caps.append(pid)
 
                 if not candidate_caps:
                     candidate_caps = [s_ids[0]]
