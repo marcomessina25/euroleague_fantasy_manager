@@ -132,6 +132,10 @@ def get_dashboard(
     squad_details = []
     for unit in team.squad:
         c = proj_dict.get(unit.player_id)
+        has_played = getattr(c, "has_played", False) if c else False
+        actual_fp = getattr(c, "actual_fp", None) if c else None
+        exp_fp = round(c.expected_fp, 2) if c else 0.0
+
         squad_details.append({
             "player_id": unit.player_id,
             "name": unit.name or (c.player_name if c else f"Player {unit.player_id}"),
@@ -145,7 +149,9 @@ def get_dashboard(
             "is_bench": unit.is_bench,
             "is_coach": unit.is_coach,
             "turn_number": unit.turn_number,
-            "expected_fp": round(c.expected_fp, 2) if c else 0.0,
+            "expected_fp": exp_fp,
+            "actual_fp": round(actual_fp, 2) if actual_fp is not None else None,
+            "has_played": has_played,
             "probability_play": round(c.probability_play, 2) if c else 1.0,
             "uncertainty": round(c.uncertainty, 2) if c else 0.0,
             "opponent_code": c.opponent_code if c else "",
@@ -183,13 +189,20 @@ def get_dashboard(
             pos = c.position.short_code if hasattr(c.position, "short_code") else str(c.position)
         elif u.is_coach or pos == "HEAD_COACH":
             pos = "HC"
+
+        has_played = getattr(c, "has_played", False) if c else False
+        actual_fp = getattr(c, "actual_fp", None) if c else None
+        exp_fp = round(c.expected_fp, 2) if c else 0.0
+
         return {
             "player_id": u.player_id,
             "name": u.name or (c.player_name if c else f"Player {u.player_id}"),
             "position": pos,
             "team_code": u.team_code or (c.team_code if c else ""),
             "credits": round(u.current_price_tenths / 10.0, 1),
-            "expected_fp": round(c.expected_fp, 2) if c else 0.0,
+            "expected_fp": exp_fp,
+            "actual_fp": round(actual_fp, 2) if actual_fp is not None else None,
+            "has_played": has_played,
             "turn_number": u.turn_number or (c.turn_number if c else 1),
             "opponent_code": c.opponent_code if c else "",
             "is_home": c.is_home if c else True,
@@ -221,17 +234,35 @@ def get_dashboard(
     sixth_man_id = team.sixth_man_id or (sixth_man_formatted["player_id"] if sixth_man_formatted else 0)
     coach_id = team.coach_id or (coach_formatted["player_id"] if coach_formatted else 0)
 
-    # Compute total expected FP reflecting actual captain (2.0x), starters (1.0x), 6th man (1.0x), bench (0.5x), coach (1.0x)
-    tot_fp = 0.0
+    # Compute total expected FP: Realized points for played players + Expected points for unplayed players
+    tot_projected_fp = 0.0
+    tot_realized_fp = 0.0
+    any_played = False
     for p in starters_formatted:
         mult = 2.0 if p["player_id"] == captain_id else 1.0
-        tot_fp += p["expected_fp"] * mult
+        score_val = p["actual_fp"] if (p["has_played"] and p["actual_fp"] is not None) else p["expected_fp"]
+        tot_projected_fp += score_val * mult
+        if p["has_played"] and p["actual_fp"] is not None:
+            tot_realized_fp += p["actual_fp"] * mult
+            any_played = True
     if sixth_man_formatted:
-        tot_fp += sixth_man_formatted["expected_fp"] * 1.0
+        score_val = sixth_man_formatted["actual_fp"] if (sixth_man_formatted["has_played"] and sixth_man_formatted["actual_fp"] is not None) else sixth_man_formatted["expected_fp"]
+        tot_projected_fp += score_val * 1.0
+        if sixth_man_formatted["has_played"] and sixth_man_formatted["actual_fp"] is not None:
+            tot_realized_fp += sixth_man_formatted["actual_fp"] * 1.0
+            any_played = True
     for p in bench_formatted:
-        tot_fp += p["expected_fp"] * 0.5
+        score_val = p["actual_fp"] if (p["has_played"] and p["actual_fp"] is not None) else p["expected_fp"]
+        tot_projected_fp += score_val * 0.5
+        if p["has_played"] and p["actual_fp"] is not None:
+            tot_realized_fp += p["actual_fp"] * 0.5
+            any_played = True
     if coach_formatted:
-        tot_fp += coach_formatted["expected_fp"] * 1.0
+        score_val = coach_formatted["actual_fp"] if (coach_formatted["has_played"] and coach_formatted["actual_fp"] is not None) else coach_formatted["expected_fp"]
+        tot_projected_fp += score_val * 1.0
+        if coach_formatted["has_played"] and coach_formatted["actual_fp"] is not None:
+            tot_realized_fp += coach_formatted["actual_fp"] * 1.0
+            any_played = True
 
     current_lineup = {
         "starters": starters_formatted,
@@ -242,7 +273,9 @@ def get_dashboard(
         "sixth_man_id": sixth_man_id,
         "coach_id": coach_id,
         "formation": formation_str,
-        "expected_total_fp": round(tot_fp, 2),
+        "expected_total_fp": round(tot_projected_fp, 2),
+        "realized_total_fp": round(tot_realized_fp, 2),
+        "any_played": any_played,
         "alternatives": opt_lineup.alternatives,
         "unpruned_oracle_match": opt_lineup.unpruned_oracle_match,
     }
@@ -255,6 +288,8 @@ def get_dashboard(
         "squad": squad_details,
         "current_lineup": current_lineup,
         "optimal_lineup": opt_lineup.to_dict(),
+        "realized_total_fp": round(tot_realized_fp, 2),
+        "any_played": any_played,
         "provenance": {
             "prediction_model": "production_ridge_v03",
             "optimizer_version": "0.5.0",
@@ -535,6 +570,8 @@ def list_players_endpoint(
             "price_tenths": c.price_tenths,
             "credits": c.credits,
             "expected_fp": round(c.expected_fp, 2),
+            "actual_fp": round(c.actual_fp, 2) if getattr(c, "actual_fp", None) is not None else None,
+            "has_played": getattr(c, "has_played", False),
             "probability_play": round(c.probability_play, 2),
             "expected_minutes": round(c.expected_minutes, 1),
             "fp_per_credit": val.get("fp_per_credit", 0.0),
@@ -612,6 +649,8 @@ def get_player_details_endpoint(
         "turn_number": player_row.get("turn_number", contract.turn_number if contract else 1),
         "avg_fantasy_pts": player_row.get("avg_fantasy_pts", 0.0),
         "last_match_pts": player_row.get("last_match_pts", 0.0),
+        "has_played": getattr(contract, "has_played", False) if contract else bool(player_row.get("has_played", False)),
+        "actual_fp": round(getattr(contract, "actual_fp", 0.0), 2) if (contract and getattr(contract, "actual_fp", None) is not None) else (round(player_row.get("last_match_pts", 0.0), 2) if player_row.get("has_played") else None),
         "total_plus_tenths": player_row.get("total_plus_tenths", 0),
         "total_plus_credits": round((player_row.get("total_plus_tenths", 0)) / 10.0, 1),
         "popularity": player_row.get("popularity", 0.0),

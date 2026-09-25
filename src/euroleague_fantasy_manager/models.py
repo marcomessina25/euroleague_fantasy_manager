@@ -84,6 +84,7 @@ class Player:
     popularity: float = 0.0
     is_injured: bool = False
     is_on_fire: bool = False
+    has_played: bool = False
     first_name: str = ""
     last_name: str = ""
     team_name: str = ""

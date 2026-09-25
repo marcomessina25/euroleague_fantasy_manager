@@ -209,7 +209,11 @@ async function loadDashboard() {
     // Update Stats Bar
     document.getElementById("stat-bank").textContent = `${data.bank_credits.toFixed(1)} cr`;
     document.getElementById("stat-value").textContent = `${data.squad_value_credits.toFixed(1)} cr`;
-    document.getElementById("stat-score").textContent = `${activeLineup.expected_total_fp.toFixed(1)} FP`;
+    if (data.any_played) {
+      document.getElementById("stat-score").textContent = `${data.realized_total_fp.toFixed(1)} FP (${activeLineup.expected_total_fp.toFixed(1)} proj)`;
+    } else {
+      document.getElementById("stat-score").textContent = `${activeLineup.expected_total_fp.toFixed(1)} FP`;
+    }
     document.getElementById("stat-formation").textContent = activeLineup.formation;
     document.getElementById("round-badge").textContent = `R${data.round_number}`;
 
@@ -217,6 +221,7 @@ async function loadDashboard() {
     renderBench(activeLineup);
     renderAlternatives(activeLineup.alternatives);
     renderProvenance(data.provenance, activeLineup.unpruned_oracle_match);
+    populateTurn1Simulator(activeLineup);
   } catch (err) {
     console.error("Dashboard fetch error:", err);
   }
@@ -296,6 +301,11 @@ function createPlayerCard(player, lineup, roleType = "starter") {
     `;
   }
 
+  const hasPlayed = !!(player.has_played && player.actual_fp !== null && player.actual_fp !== undefined);
+  const fpDisplay = hasPlayed
+    ? `<span class="player-fp fp-actual" title="Actual score realized in match">${player.actual_fp.toFixed(1)} FP <span class="fp-type-badge badge-actual">ACTUAL</span></span>`
+    : `<span class="player-fp fp-expected" title="Projected expected fantasy points">${Number(player.expected_fp || 0).toFixed(1)} FP <span class="fp-type-badge badge-exp">EXP</span></span>`;
+
   card.innerHTML = `
     <div class="player-header">
       <span class="player-pos-badge">${posCode}</span>
@@ -308,7 +318,7 @@ function createPlayerCard(player, lineup, roleType = "starter") {
     </div>
     <div class="player-meta">
       <span>T${player.turn_number || 1} vs ${player.opponent_code || "OPP"}</span>
-      <span class="player-fp">${player.expected_fp} FP</span>
+      ${fpDisplay}
     </div>
     ${actionHtml}
   `;
@@ -597,13 +607,21 @@ async function openPlayerModal(playerId) {
     document.getElementById("pm-pos-badge").textContent = normalizePos(p.position);
     document.getElementById("pm-team").textContent = `(${p.team_code || "UNK"})`;
     document.getElementById("pm-credits").textContent = `${p.credits} cr`;
-    document.getElementById("pm-exp-fp").textContent = `${p.expected_fp} FP`;
+
+    const hasPlayed = !!(p.has_played && p.actual_fp !== null && p.actual_fp !== undefined);
+    if (hasPlayed) {
+      document.getElementById("pm-exp-fp").innerHTML = `<span style="color:#22c55e; font-weight:700;">${p.actual_fp.toFixed(1)} FP</span> <span class="fp-type-badge badge-actual">ACTUAL</span>`;
+      document.getElementById("pm-status").innerHTML = `<span style="color:#22c55e; font-weight:700;">PLAYED (${p.actual_fp.toFixed(1)} FP)</span>`;
+    } else {
+      document.getElementById("pm-exp-fp").innerHTML = `${p.expected_fp} FP <span class="fp-type-badge badge-exp">EXP</span>`;
+      document.getElementById("pm-status").textContent = p.status ? p.status.toUpperCase() : "UPCOMING";
+    }
+
     document.getElementById("pm-avg-fp").textContent = `${p.avg_fantasy_pts.toFixed(1)} FP`;
     document.getElementById("pm-last-fp").textContent = `${p.last_match_pts.toFixed(1)} FP`;
     document.getElementById("pm-prob").textContent = `${Math.round(p.probability_of_playing * 100)}%`;
     document.getElementById("pm-efficiency").textContent = p.fp_per_credit ? p.fp_per_credit.toFixed(2) : "-";
 
-    document.getElementById("pm-status").textContent = p.status ? p.status.toUpperCase() : "ACTIVE";
     document.getElementById("pm-fixture").textContent = `Turn ${p.turn_number} vs ${p.opponent_code || "OPP"} (${p.is_home ? "Home" : "Away"})`;
     document.getElementById("pm-minutes").textContent = `${p.expected_minutes || 20} min`;
     document.getElementById("pm-uncertainty").textContent = `±${p.uncertainty || 0} FP`;
@@ -685,6 +703,48 @@ async function triggerOptimizeLineup() {
 }
 
 // Turn 1 -> Turn 2 Simulator
+function populateTurn1Simulator(lineup) {
+  const container = document.getElementById("t1-inputs-container");
+  if (!container || !lineup) return;
+
+  const allPlayers = [
+    ...lineup.starters,
+    ...(lineup.sixth_man ? [lineup.sixth_man] : []),
+    ...lineup.bench,
+    ...(lineup.coach ? [lineup.coach] : []),
+  ];
+
+  const t1Players = allPlayers.filter((p) => p.turn_number === 1);
+  if (t1Players.length === 0) {
+    container.innerHTML = `<p style="font-size:0.85rem; color:var(--text-muted); grid-column:1/-1;">No Turn 1 players currently in squad.</p>`;
+    return;
+  }
+
+  container.innerHTML = "";
+  t1Players.forEach((p) => {
+    const div = document.createElement("div");
+    div.className = "form-group";
+    div.style = "background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:6px; padding:0.6rem;";
+    const scoreVal = (p.actual_fp !== null && p.actual_fp !== undefined) ? p.actual_fp.toFixed(1) : "";
+    const playedBadge = p.has_played
+      ? `<span class="fp-type-badge badge-actual">PLAYED</span>`
+      : `<span class="fp-type-badge badge-exp">EXP: ${Number(p.expected_fp || 0).toFixed(1)}</span>`;
+
+    div.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
+        <strong style="font-size:0.85rem;">${p.name}</strong>
+        ${playedBadge}
+      </div>
+      <div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:0.3rem;">
+        ${normalizePos(p.position)} • ${p.team_code} vs ${p.opponent_code || "OPP"}
+      </div>
+      <label style="font-size:0.75rem;">Turn 1 Score (Realized or Simulated)</label>
+      <input type="number" step="0.1" class="t1-score-input" data-pid="${p.player_id}" value="${scoreVal}" placeholder="Score (e.g. 14.5)" style="width:100%; margin-top:0.2rem;">
+    `;
+    container.appendChild(div);
+  });
+}
+
 async function runTurnSubSimulator() {
   const t1Inputs = document.querySelectorAll(".t1-score-input");
   const scores = {};
@@ -757,10 +817,32 @@ function renderTradeStudioSquad() {
   if (!tbody) return;
   tbody.innerHTML = "";
 
+  const dashLineup = state.dashboard ? (state.dashboard.current_lineup || state.dashboard.optimal_lineup) : null;
+  const dashMap = {};
+  if (dashLineup) {
+    const all = [
+      ...dashLineup.starters,
+      ...(dashLineup.sixth_man ? [dashLineup.sixth_man] : []),
+      ...dashLineup.bench,
+      ...(dashLineup.coach ? [dashLineup.coach] : []),
+    ];
+    all.forEach((p) => { dashMap[p.player_id] = p; });
+  }
+
   tradeStudioState.currentSquad.forEach((unit) => {
     const isOut = tradeStudioState.transfersOut.some((x) => x.id === unit.player_id);
     const pos = normalizePos(unit.position);
     const tr = document.createElement("tr");
+
+    const dashUnit = dashMap[unit.player_id];
+    let fpCell = `<span style="color:var(--text-muted);">-</span>`;
+    if (dashUnit) {
+      if (dashUnit.has_played && dashUnit.actual_fp !== null && dashUnit.actual_fp !== undefined) {
+        fpCell = `<span class="fp-actual">${dashUnit.actual_fp.toFixed(1)} FP <span class="fp-type-badge badge-actual">ACTUAL</span></span>`;
+      } else {
+        fpCell = `<span class="fp-expected">${Number(dashUnit.expected_fp || 0).toFixed(1)} FP <span class="fp-type-badge badge-exp">EXP</span></span>`;
+      }
+    }
 
     tr.innerHTML = `
       <td>
@@ -769,7 +851,7 @@ function renderTradeStudioSquad() {
       </td>
       <td><span class="player-pos-badge">${pos}</span></td>
       <td>${(unit.current_price_tenths / 10.0).toFixed(1)} cr</td>
-      <td style="color:var(--accent-orange); font-weight:700;">-</td>
+      <td>${fpCell}</td>
       <td>
         <button class="btn ${isOut ? "btn-secondary" : "btn-primary"}"
                 style="padding:0.2rem 0.5rem; font-size:0.75rem; ${isOut ? "border-color:var(--accent-red); color:var(--accent-red);" : ""}"
@@ -928,9 +1010,11 @@ async function triggerSuggestTransfers() {
 
     if (res.ok) {
       const data = await res.json();
-      const best = data.best_recommendation;
+      const recs = (data.recommendations && data.recommendations.length > 0)
+        ? data.recommendations
+        : (data.best_recommendation ? [data.best_recommendation] : []);
 
-      if (!best || !best.transfers_out_details || best.transfers_out_details.length === 0) {
+      if (recs.length === 0 || !recs[0].transfers_out_details || recs[0].transfers_out_details.length === 0) {
         if (banner) {
           banner.style.display = "block";
           banner.innerHTML = `<p style="margin:0; font-size:0.85rem; color:var(--text-muted);">Current squad is already optimal under current projections. No profitable trade found.</p>`;
@@ -938,24 +1022,45 @@ async function triggerSuggestTransfers() {
         return;
       }
 
-      const outNames = best.transfers_out_details.map((p) => `<strong>${p.name}</strong> (${p.credits} cr)`).join(", ");
-      const inNames = best.transfers_in_details.map((p) => `<strong>${p.name}</strong> (${p.credits} cr)`).join(", ");
-
       if (banner) {
         banner.style.display = "block";
-        banner.innerHTML = `
-          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
-            <div>
-              <strong style="color:var(--accent-orange);">⚡ Recommended Trade:</strong> Sell ${outNames} → Buy ${inNames}
-              <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.2rem;">
-                Net Gain: <strong style="color:var(--accent-green);">+${best.net_score_gain} FP</strong> | Projected Score: ${best.post_transfer_expected_score} FP | New Bank: ${best.remaining_bank_credits} cr
+        let html = `
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+            <strong style="color:var(--accent-orange); font-size:0.95rem;">⚡ Transfer Recommendations (${recs.length} option${recs.length > 1 ? "s" : ""})</strong>
+          </div>
+          <div class="trade-rec-container">
+        `;
+
+        recs.forEach((rec, idx) => {
+          const isOptimal = idx === 0;
+          const outNames = rec.transfers_out_details.map((p) => `<strong>${p.name}</strong> (${p.credits} cr)`).join(", ");
+          const inNames = rec.transfers_in_details.map((p) => `<strong>${p.name}</strong> (${p.credits} cr)`).join(", ");
+          const outsJson = JSON.stringify(rec.transfers_out_details).replace(/"/g, '&quot;');
+          const insJson = JSON.stringify(rec.transfers_in_details).replace(/"/g, '&quot;');
+
+          html += `
+            <div class="trade-rec-option ${isOptimal ? "optimal" : ""}">
+              <div style="flex:1; min-width:260px;">
+                <div class="trade-rec-header">
+                  <span class="trade-rec-badge ${isOptimal ? "optimal" : "alt"}">${isOptimal ? "★ Option 1 (Optimal)" : `Option ${idx + 1}`}</span>
+                  <span style="font-size:0.8rem; color:var(--accent-green); font-weight:700;">+${rec.net_score_gain.toFixed(1)} FP</span>
+                  <span style="font-size:0.75rem; color:var(--text-muted);">| Proj: ${rec.post_transfer_expected_score.toFixed(1)} FP | Bank: ${rec.remaining_bank_credits.toFixed(1)} cr</span>
+                </div>
+                <div style="font-size:0.85rem; margin-top:0.25rem;">
+                  <span style="color:var(--accent-red); font-weight:600;">Sell:</span> ${outNames} → <span style="color:var(--accent-green); font-weight:600;">Buy:</span> ${inNames}
+                </div>
+              </div>
+              <div>
+                <button class="btn ${isOptimal ? "btn-primary" : "btn-secondary"}" style="padding:0.35rem 0.8rem; font-size:0.8rem;" onclick="applySuggestedTrade(${outsJson}, ${insJson})">
+                  Apply to Studio
+                </button>
               </div>
             </div>
-            <button class="btn btn-primary" style="padding:0.3rem 0.7rem; font-size:0.8rem;" onclick="applySuggestedTrade(${JSON.stringify(best.transfers_out_details).replace(/"/g, '&quot;')}, ${JSON.stringify(best.transfers_in_details).replace(/"/g, '&quot;')})">
-              Apply to Studio
-            </button>
-          </div>
-        `;
+          `;
+        });
+
+        html += `</div>`;
+        banner.innerHTML = html;
       }
     } else {
       const err = await res.json();

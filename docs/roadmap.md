@@ -2,7 +2,7 @@
 
 > **Living document.** This is the source of truth for delivery status, engineering priorities, release criteria, known risks, and long-term direction. Human contributors and AI agents must read it before material work and update it when priorities or milestone status changes.
 >
-> **Current planning baseline:** V0.1, V0.2, V0.2.5, V0.3, V0.4 (`0.4.0`), **0.4.5** (Closed-Loop Evaluation & Live Decision State, `0.4.5`), and **V0.5** (Multi-Team Management, Application Services & Local Web GUI Workstation, `0.5.0`) are completed (2026-09-25). **V0.6** (Strategic Analysis & LLM Copilot) is the next milestone.
+> **Current planning baseline:** V0.1, V0.2, V0.2.5, V0.3, V0.4 (`0.4.0`), **0.4.5** (Closed-Loop Evaluation & Live Decision State, `0.4.5`), **V0.5** (Multi-Team Management, Application Services & Local Web GUI Workstation, `0.5.0`), and **V0.5.1** (Live Score Presentation, Decomposed Predictions & High-Speed Transfer Optimizer, `0.5.1`) are completed (2026-09-25). **V0.6** (Strategic Analysis & LLM Copilot) is the next milestone.
 >
 > See [`docs/architecture.md`](architecture.md), [`docs/specs/v02.md`](specs/v02.md), [`docs/specs/items_left_for_v02.md`](specs/items_left_for_v02.md), [`docs/specs/v025.md`](specs/v025.md), [`docs/specs/v025_cleanup.md`](specs/v025_cleanup.md), [`docs/specs/v03.md`](specs/v03.md), [`docs/specs/items_left_for_v03.md`](specs/items_left_for_v03.md), [`docs/specs/v04.md`](specs/v04.md), [`docs/specs/v04_items_left.md`](specs/v04_items_left.md), [`docs/specs/items_left_for_v04.md`](specs/items_left_for_v04.md), [`docs/specs/v045.md`](specs/v045.md), [`docs/specs/v05.md`](specs/v05.md), and [`docs/specs/items_left_for_v05.md`](specs/items_left_for_v05.md) for architectural and implementation details.
 
@@ -344,6 +344,32 @@ Connect the quantitative engine to real management decisions and actual outcomes
    - `elf team`: Manage multi-team profiles from the terminal.
 
 See [`docs/specs/v05.md`](specs/v05.md) for the complete specification.
+
+---
+
+## V0.5.1 — Live Score Presentation, Quantitative Decomposed Predictions & High-Speed Transfer Optimizer
+
+**Status: completed on 2026-09-25 (0.5.1).**  
+**Prerequisites:** V0.5 (`0.5.0`).  
+**Core principle:** Cost is never score; live actual points and expected points must be cleanly decoupled in data storage, projection contracts, and UI; transfer optimization must be interactive (<1s) and yield multiple diverse options.
+
+### Scope
+
+1. **Clean Separation of Actual vs Expected Score in Live Rounds**:
+   - `storage.py`: Schema migration adding `has_played` flag to `players` table. `save_snapshot` computes `is_game_played` from match status (`played`, `finished`, `final`), sets `last_match_pts`, and keeps `avg_fantasy_pts` cleanly separated from single-match scores.
+   - `PlayerProjectionContract`: Added `has_played` and `actual_fp` fields.
+   - Court view & Trade Studio: Players who played display their real score with a green `ACTUAL` badge; players yet to play display their expected projection with an `EXP` badge. Stats bar displays realized total FP alongside projected total FP.
+2. **Decomposed Quantitative Prediction Baseline**:
+   - Eliminated the simplistic fallback `exp_fp = price / 10.0`.
+   - Prediction priors for unplayed seasons/rounds are now calculated via the decomposed model: $P(\text{play}) \times \mathbb{E}[\text{minutes}] \times \mathbb{E}[\text{FP/min}]$ factored by role, position, price talent tier, location multiplier, and Head Coach win expectations.
+3. **High-Speed Transfer Optimizer (< 0.5s)**:
+   - Replaced exhaustive combinatorial cartesian products with candidate screening and bounded dynamic limits.
+   - Implemented 2-stage screening for limited transfers ($k=1..4$): Stage 1 screens candidate combinations via proxy net delta in milliseconds; Stage 2 evaluates full lineup MILP only on top packages.
+   - Fast MILP overhaul path for unlimited trade windows using `optimize_initial_team` on the combined squad and market pool.
+4. **Multi-Option Transfer Recommendations in Trade Studio**:
+   - Optimizer produces and returns multiple distinct trade alternatives (`recommendations`).
+   - Web workstation Trade Studio renders all options (Option 1 Optimal, Option 2, Option 3) with net gains, projected scores, sold/bought players, and individual "Apply to Studio" actions.
+   - Dynamic Turn 1 simulator auto-populates squad units with realized scores pre-filled.
 
 ---
 

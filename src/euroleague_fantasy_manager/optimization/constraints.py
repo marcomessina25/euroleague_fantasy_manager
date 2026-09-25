@@ -41,6 +41,8 @@ class PlayerProjectionContract:
     turn_number: int = 1
     opponent_code: str = ""
     is_home: bool = True
+    actual_fp: float | None = None
+    has_played: bool = False
 
     @property
     def credits(self) -> float:
@@ -52,7 +54,11 @@ class PlayerProjectionContract:
         player: Player,
         expected_fp: float = 0.0,
         uncertainty: float = 0.0,
+        actual_fp: float | None = None,
+        has_played: bool = False,
     ) -> "PlayerProjectionContract":
+        act = actual_fp if actual_fp is not None else (player.last_match_pts if getattr(player, "has_played", False) else None)
+        played = has_played or getattr(player, "has_played", False)
         return cls(
             player_id=player.id,
             player_name=player.name,
@@ -66,6 +72,8 @@ class PlayerProjectionContract:
             fp_per_minute=0.0,
             uncertainty=uncertainty,
             turn_number=player.turn_number,
+            actual_fp=act,
+            has_played=played,
         )
 
     @classmethod

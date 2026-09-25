@@ -108,11 +108,16 @@ class SnapshotStore:
                     popularity REAL NOT NULL DEFAULT 0.0,
                     is_injured INTEGER NOT NULL DEFAULT 0,
                     is_on_fire INTEGER NOT NULL DEFAULT 0,
+                    has_played INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY (snapshot_id, id),
                     FOREIGN KEY (snapshot_id) REFERENCES snapshots(id)
                 );
                 """
             )
+            try:
+                conn.execute("ALTER TABLE players ADD COLUMN has_played INTEGER NOT NULL DEFAULT 0")
+            except Exception:
+                pass
 
     def save_snapshot(
         self,
@@ -185,6 +190,8 @@ class SnapshotStore:
         players_by_id: dict[int, dict[str, Any]] = {}
         for mdata in payload.get("match_lineups", []):
             turn_num = int(mdata.get("turn_number", 1))
+            m_status = str(mdata.get("status") or "scheduled").lower()
+            is_game_played = (m_status in ("played", "finished", "final"))
             for side in ("home_team", "away_team"):
                 side_obj = mdata.get(side, {})
                 tid = int(side_obj.get("id", 0))
@@ -202,11 +209,14 @@ class SnapshotStore:
                     status = str(p.get("status") or "starter")
                     prob = float(p.get("probability_of_playing") if p.get("probability_of_playing") is not None else 1.0)
                     pts = float(p.get("pts") or 0.0)
-                    avg_pts = float(p.get("avg_fantasy_pts") or pts)
+                    raw_avg = p.get("avg_fantasy_pts")
+                    avg_pts = float(raw_avg) if raw_avg is not None else 0.0
+                    last_pts = pts if is_game_played else 0.0
                     plus_tenths = _price_to_tenths(p.get("total_plus", 0))
                     popularity = float(p.get("popularity") or 0.0)
                     is_injured = 1 if (status.lower() in ("out", "injured") or p.get("is_injured")) else 0
                     is_on_fire = 1 if p.get("is_on_fire") else 0
+                    has_played_val = 1 if is_game_played else 0
 
                     players_by_id[pid] = {
                         "id": pid,
@@ -222,12 +232,13 @@ class SnapshotStore:
                         "status": status,
                         "probability_of_playing": prob,
                         "turn_number": turn_num,
-                        "last_match_pts": pts,
+                        "last_match_pts": last_pts,
                         "avg_fantasy_pts": avg_pts,
                         "total_plus_tenths": plus_tenths,
                         "popularity": popularity,
                         "is_injured": is_injured,
                         "is_on_fire": is_on_fire,
+                        "has_played": has_played_val,
                     }
 
         with self._connect() as conn:
@@ -266,8 +277,8 @@ class SnapshotStore:
                         snapshot_id, id, first_name, last_name, name, position, position_code,
                         team_id, team_code, team_name, price_tenths, status, probability_of_playing,
                         turn_number, last_match_pts, avg_fantasy_pts, total_plus_tenths,
-                        popularity, is_injured, is_on_fire
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        popularity, is_injured, is_on_fire, has_played
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         snapshot_id,
@@ -290,6 +301,7 @@ class SnapshotStore:
                         p["popularity"],
                         p["is_injured"],
                         p["is_on_fire"],
+                        p["has_played"],
                     ),
                 )
 
@@ -369,6 +381,7 @@ class SnapshotStore:
                     popularity=float(r["popularity"]),
                     is_injured=bool(r["is_injured"]),
                     is_on_fire=bool(r["is_on_fire"]),
+                    has_played=bool(r["has_played"]) if "has_played" in r.keys() else False,
                 )
                 for r in rows
             ]

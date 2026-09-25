@@ -670,7 +670,8 @@ def test_snapshot_store_fallback_and_update_endpoint(tmp_path: Path):
     assert rob.player_name == "Justin Robinson"
     assert rob.position == Position.GUARD
     assert rob.credits == 12.2
-    assert rob.expected_fp == 12.2  # Price-derived prior when avg_fp is 0
+    assert rob.expected_fp == 14.66  # Quantitative decomposed prior (never equal to cost)
+    assert rob.expected_fp != rob.credits
     assert rob.opponent_code == "RMB"
     assert rob.is_home is True
 
@@ -1082,6 +1083,156 @@ def test_audit_failure_transactional_rollbacks(tmp_path: Path):
     persisted_pids = {u.player_id for u in persisted_team.squad}
     assert persisted_pids == orig_pids
     assert persisted_team.transfers_remaining == 4
+
+
+def test_live_scores_vs_expected_scores_never_equal_cost(tmp_path: Path):
+    """Verify that during an active round, played players show actual scores, unplayed show expected,
+
+    and expected score is calculated via decomposed model rather than equating to cost."""
+    import sqlite3
+    from euroleague_fantasy_manager.storage import SnapshotStore
+    from euroleague_fantasy_manager.services.prediction_service import PredictionService
+    from euroleague_fantasy_manager.web.app import create_app
+    from starlette.testclient import TestClient
+
+    db_file = tmp_path / "live_scores.sqlite3"
+    with sqlite3.connect(db_file) as conn:
+        conn.execute("""
+            CREATE TABLE snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                league_id INTEGER NOT NULL,
+                competition_code TEXT NOT NULL,
+                season_code TEXT NOT NULL,
+                matchday_id INTEGER,
+                round_number INTEGER NOT NULL,
+                num_turns INTEGER NOT NULL,
+                raw_archive_path TEXT
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE players (
+                snapshot_id INTEGER NOT NULL,
+                id INTEGER NOT NULL,
+                first_name TEXT,
+                last_name TEXT,
+                name TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                position_code TEXT NOT NULL,
+                team_id INTEGER NOT NULL,
+                team_code TEXT NOT NULL,
+                team_name TEXT NOT NULL,
+                price_tenths INTEGER NOT NULL,
+                status TEXT,
+                probability_of_playing REAL,
+                turn_number INTEGER,
+                last_match_pts REAL,
+                avg_fantasy_pts REAL,
+                total_plus_tenths INTEGER,
+                popularity REAL,
+                is_injured INTEGER,
+                is_on_fire INTEGER,
+                has_played INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE fixtures (
+                snapshot_id INTEGER NOT NULL,
+                id INTEGER NOT NULL,
+                round_number INTEGER NOT NULL,
+                turn_number INTEGER NOT NULL,
+                started_at TEXT,
+                status TEXT,
+                home_team_id INTEGER,
+                home_team_code TEXT,
+                away_team_id INTEGER,
+                away_team_code TEXT,
+                home_score INTEGER,
+                away_score INTEGER
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE teams (
+                snapshot_id INTEGER NOT NULL,
+                id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                short_name TEXT NOT NULL
+            );
+        """)
+
+        conn.execute("INSERT INTO snapshots VALUES (1, '2026-09-25T12:00:00Z', 10, 'E', 'E2026', 1, 1, 2, 'raw.json')")
+        # Player 1: Played Turn 1, scored 21.4 FP, price 13.0 cr (130 tenths)
+        conn.execute(
+            "INSERT INTO players VALUES (1, 101, 'Kendrick', 'Nunn', 'Kendrick Nunn', 1, 'G', 10, 'PAO', 'Panathinaikos', 130, 'starter', 1.0, 1, 21.4, 0.0, 0, 0.0, 0, 0, 1)"
+        )
+        # Player 2: Not yet played Turn 2, price 12.0 cr (120 tenths), avg_fantasy_pts 0.0
+        conn.execute(
+            "INSERT INTO players VALUES (1, 102, 'Shane', 'Larkin', 'Shane Larkin', 1, 'G', 20, 'EFS', 'Anadolu Efes', 120, 'starter', 1.0, 2, 0.0, 0.0, 0, 0.0, 0, 0, 0)"
+        )
+        conn.execute(
+            "INSERT INTO fixtures VALUES (1, 1, 1, 1, '2026-09-24T18:00:00Z', 'played', 10, 'PAO', 30, 'BER', 85, 70)"
+        )
+        conn.execute(
+            "INSERT INTO fixtures VALUES (1, 2, 1, 2, '2026-09-25T20:00:00Z', 'scheduled', 20, 'EFS', 40, 'MCO', NULL, NULL)"
+        )
+
+    ps = PredictionService(database_path=db_file)
+    projs = ps.get_projections("2026/27", 1)
+    p_played = next(p for p in projs if p.player_id == 101)
+    p_unplayed = next(p for p in projs if p.player_id == 102)
+
+    # Played player
+    assert p_played.has_played is True
+    assert p_played.actual_fp == 21.4
+    assert p_played.credits == 13.0
+
+    # Unplayed player: expected score must NOT equal credits/cost
+    assert p_unplayed.has_played is False
+    assert p_unplayed.actual_fp is None
+    assert p_unplayed.credits == 12.0
+    assert p_unplayed.expected_fp > 0.0
+    assert p_unplayed.expected_fp != p_unplayed.credits
+    assert p_unplayed.expected_fp == 14.42  # Decomposed quantitative model
+
+
+def test_transfer_optimizer_speed_and_multiple_recommendations():
+    """Verify that transfer optimization runs fast (<1.5s) and yields multiple distinct options."""
+    import time
+    from euroleague_fantasy_manager.optimization.transfers import TransferOptimizer
+    from tests.test_v04_optimization import make_standard_squad, make_test_player
+
+    squad = make_standard_squad()
+    # Market with diverse candidate tiers
+    market = [
+        make_test_player(901, Position.GUARD, expected_fp=25.0, price_tenths=130),
+        make_test_player(902, Position.GUARD, expected_fp=24.0, price_tenths=120),
+        make_test_player(903, Position.GUARD, expected_fp=22.0, price_tenths=110),
+        make_test_player(904, Position.FORWARD, expected_fp=26.0, price_tenths=140),
+        make_test_player(905, Position.FORWARD, expected_fp=25.0, price_tenths=135),
+        make_test_player(906, Position.FORWARD, expected_fp=23.0, price_tenths=115),
+        make_test_player(907, Position.CENTER, expected_fp=27.0, price_tenths=150),
+        make_test_player(908, Position.CENTER, expected_fp=24.0, price_tenths=125),
+    ]
+
+    opt = TransferOptimizer()
+
+    # 1. Limited transfers: 2 trades
+    t0 = time.perf_counter()
+    res_2 = opt.optimize_transfers(current_squad=squad, market=market, bank_tenths=300, max_trades=2, top_n=3)
+    duration_2 = time.perf_counter() - t0
+
+    assert duration_2 < 1.5  # Sub-second fast screening
+    assert len(res_2.recommendations) > 1  # Proposes multiple options
+    # Options must be sorted by net transfer value descending
+    assert res_2.recommendations[0].net_transfer_value >= res_2.recommendations[1].net_transfer_value
+
+    # 2. Unlimited mode: multiple diverse overhaul options
+    t0 = time.perf_counter()
+    res_unlimited = opt.optimize_transfers(current_squad=squad, market=market, bank_tenths=500, max_trades=None, unlimited=True, top_n=3)
+    duration_unlimited = time.perf_counter() - t0
+
+    assert duration_unlimited < 1.5
+    assert len(res_unlimited.recommendations) >= 1
 
 
 
