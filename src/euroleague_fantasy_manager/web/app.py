@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from euroleague_fantasy_manager.multi_team.store import TeamStore
 from euroleague_fantasy_manager.services.team_service import TeamService
+from euroleague_fantasy_manager.web.api.routes_intelligence import router as intelligence_router
 from euroleague_fantasy_manager.web.api.routes_teams import router as teams_router
 from euroleague_fantasy_manager.web.api.routes_workstation import router as workstation_router
 from euroleague_fantasy_manager.web.deps import set_db_path
@@ -25,7 +26,7 @@ def create_app(db_path: str | Path = "data/euroleague.sqlite3") -> FastAPI:
     app = FastAPI(
         title="EuroLeague Fantasy Manager Workstation",
         description="Local-first decision-support and multi-team management workstation.",
-        version="0.5.0",
+        version="0.6.0",
     )
 
     web_dir = Path(__file__).parent
@@ -37,6 +38,7 @@ def create_app(db_path: str | Path = "data/euroleague.sqlite3") -> FastAPI:
 
     app.include_router(teams_router)
     app.include_router(workstation_router)
+    app.include_router(intelligence_router)
 
     # Initialize default team if none exist
     _ensure_initial_team(db_path)

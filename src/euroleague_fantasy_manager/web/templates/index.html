@@ -13,11 +13,11 @@
     <div class="brand">
       <span style="font-size:1.5rem;">🏀</span>
       <h1>EuroLeague Fantasy Workstation</h1>
-      <span class="badge-version">v0.5.0</span>
+      <span class="badge-version">v0.6.0</span>
     </div>
 
     <div class="header-controls">
-      <!-- Team Profile Tabs (up to 3) -->
+      <!-- Team Profile Tabs (up to 6) -->
       <div class="team-tabs" id="team-tabs-container">
         <!-- Rendered via JS -->
       </div>
@@ -64,6 +64,7 @@
     <button class="nav-btn" data-target="multi-round">🗺️ Multi-Round Planner</button>
     <button class="nav-btn" data-target="evaluation">📊 Evaluation Hub</button>
     <button class="nav-btn" data-target="scenarios">🧪 What-If Sandbox</button>
+    <button class="nav-btn" data-target="intelligence">🧠 Intelligence & Copilot</button>
   </nav>
 
   <main>
@@ -408,7 +409,162 @@
       </div>
     </section>
 
-    <!-- 7. Initial Team Builder Modal (V0.5) -->
+    <!-- 7. Strategic Intelligence & Copilot (V0.6) -->
+    <section id="intelligence" class="view-section">
+      <div class="card" style="margin-bottom:1.5rem;">
+        <div class="card-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
+          <div>
+            <h2>🧠 Strategic Intelligence & LLM Copilot</h2>
+            <p style="font-size:0.85rem; color:var(--text-muted); margin-top:0.25rem;">
+              Deterministic quantitative briefing dossier, sensitivity stress tests, Devil's Advocate checklist, and grounded AI copilot narrative.
+            </p>
+          </div>
+          <div style="display:flex; gap:0.5rem; align-items:center;">
+            <span class="badge" id="dossier-provenance-badge" style="font-size:0.75rem;">Dossier: --</span>
+            <span class="badge badge-gold" id="dossier-league-badge" style="font-size:0.75rem;">EUROLEAGUE</span>
+          </div>
+        </div>
+
+        <!-- Copilot Controls -->
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)) auto; gap:1rem; margin-top:1rem; align-items:flex-end; background:var(--bg-primary); padding:1rem; border-radius:6px; border:1px solid var(--border-color);">
+          <div class="form-group">
+            <label for="copilot-persona">Analytical Persona</label>
+            <select id="copilot-persona" class="form-control">
+              <option value="briefing">Manager Briefing (Executive Summary)</option>
+              <option value="devil_advocate">Devil's Advocate (Downside Challenger)</option>
+              <option value="tactical_analyst">Tactical Analyst (Turn & Matchups)</option>
+              <option value="strategic_planner">Strategic Planner (Long-Range Elasticity)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="copilot-provider">LLM Provider</label>
+            <select id="copilot-provider" class="form-control">
+              <option value="heuristic">Heuristic (100% Offline Fallback)</option>
+              <option value="gemini">Google Gemini</option>
+              <option value="openai">OpenAI (ChatGPT / GPT-4o)</option>
+              <option value="claude">Anthropic Claude</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="local">Local LLM (Ollama / vLLM)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="copilot-tier">Analysis Tier</label>
+            <select id="copilot-tier" class="form-control">
+              <option value="standard">Standard</option>
+              <option value="fast">Fast (Low Latency)</option>
+              <option value="extended">Extended (Deep Reasoning)</option>
+            </select>
+          </div>
+
+          <div style="display:flex; gap:0.5rem;">
+            <button class="btn btn-primary" id="btn-run-intelligence" onclick="triggerCopilotAdvise()" style="white-space:nowrap; padding:0.55rem 1.25rem;">
+              <span id="intel-spinner" style="display:none;">⏳</span>
+              <span id="intel-icon">⚡</span>
+              <span id="intel-btn-text">Generate Intelligence</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Two Column Layout: Deterministic Strategic Analysis vs Copilot Narrative -->
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1.5rem; align-items:start;">
+        <!-- Left Column: Deterministic Signals -->
+        <div style="display:flex; flex-direction:column; gap:1.5rem;">
+          <!-- Key Assumptions Card -->
+          <div class="card">
+            <div class="card-header">
+              <h3>🔍 Key Projections & Assumptions</h3>
+            </div>
+            <div id="strat-assumptions-list" style="margin-top:0.75rem; display:flex; flex-direction:column; gap:0.75rem;">
+              <p style="color:var(--text-muted); font-size:0.85rem;">Click "Generate Intelligence" to compute ranked assumptions.</p>
+            </div>
+          </div>
+
+          <!-- Sensitivity Analysis Card -->
+          <div class="card">
+            <div class="card-header">
+              <h3>⚡ Sensitivity Analysis (Perturbations)</h3>
+            </div>
+            <div id="strat-sensitivities-list" style="margin-top:0.75rem; display:flex; flex-direction:column; gap:0.75rem;">
+              <p style="color:var(--text-muted); font-size:0.85rem;">One-way stress tests will appear here.</p>
+            </div>
+          </div>
+
+          <!-- Devil's Advocate Checklist -->
+          <div class="card">
+            <div class="card-header">
+              <h3>🛡️ Devil's Advocate Risk Checklist</h3>
+            </div>
+            <div style="overflow-x:auto; margin-top:0.75rem;">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Status</th>
+                    <th>Audit Check</th>
+                    <th>Detail</th>
+                  </tr>
+                </thead>
+                <tbody id="strat-checklist-tbody">
+                  <tr><td colspan="3" style="text-align:center; color:var(--text-muted);">No checklist computed yet.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Column: Copilot Narrative & Dialogue -->
+        <div style="display:flex; flex-direction:column; gap:1.5rem;">
+          <div class="card" style="min-height:500px; display:flex; flex-direction:column;">
+            <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+              <h3>💬 Copilot Strategic Briefing</h3>
+              <div style="display:flex; gap:0.5rem; align-items:center;">
+                <span class="badge" id="copilot-meta-badge" style="font-size:0.75rem;">Ready</span>
+                <button class="btn btn-secondary btn-sm" onclick="copyCopilotAdvice()" title="Copy advice text" style="padding:0.25rem 0.6rem; font-size:0.8rem;">
+                  📋 Copy
+                </button>
+              </div>
+            </div>
+
+            <!-- Fallback Alert Banner -->
+            <div id="copilot-fallback-banner" class="sub-banner" style="display:none; margin-top:0.75rem; background:rgba(234, 179, 8, 0.15); border-color:var(--accent-gold); color:var(--accent-gold);">
+              <span>⚠️ <strong>Fallback Notice:</strong> <span id="copilot-fallback-reason"></span></span>
+            </div>
+
+            <!-- Advice Narrative Box -->
+            <div id="copilot-advice-text" style="flex:1; margin-top:1rem; padding:1.25rem; background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; font-size:0.95rem; line-height:1.6; white-space:pre-wrap; overflow-y:auto; max-height:650px;">
+Welcome to the V0.6 Strategic Intelligence Copilot.
+
+Select an Analytical Persona and click "Generate Intelligence" to receive:
+• Grounded tactical and roster synthesis
+• Deterministic stress tests and alternative comparisons
+• Constructive Devil's Advocate critique
+
+All advice is grounded strictly in the deterministic Manager Dossier with guaranteed zero state mutation.
+            </div>
+
+            <!-- Consistency Verification Footer -->
+            <div style="margin-top:1rem; padding-top:0.75rem; border-top:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center; font-size:0.8rem; color:var(--text-muted);">
+              <span id="copilot-consistency-status">Consistency: Verified Grounded</span>
+              <span id="copilot-latency">Latency: -- ms</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom Card: Raw Dossier Inspector (Collapsible) -->
+      <div class="card" style="margin-top:1.5rem;">
+        <details>
+          <summary style="cursor:pointer; font-weight:600; color:var(--text-muted); outline:none;">
+            📋 View Deterministic Manager Dossier JSON & Provenance
+          </summary>
+          <pre id="dossier-raw-json" style="margin-top:1rem; padding:1rem; background:var(--bg-primary); border-radius:6px; font-size:0.8rem; overflow-x:auto; max-height:400px; color:#cbd5e1;"></pre>
+        </details>
+      </div>
+    </section>
+
+    <!-- 8. Initial Team Builder Modal (V0.5/V0.6) -->
     <div id="team-builder-modal" class="modal-backdrop" style="display:none;">
       <div class="modal-content card">
         <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
@@ -416,11 +572,18 @@
           <button class="btn btn-icon" onclick="closeTeamBuilderModal()" style="font-size:1.2rem; background:transparent; border:none; color:var(--text-muted); cursor:pointer;">✕</button>
         </div>
 
-        <!-- Team Name & Budget Bar -->
-        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1.25rem; margin-top:1rem; align-items:center;">
+        <!-- Team Name, League & Budget Bar -->
+        <div style="display:grid; grid-template-columns: 1fr 140px 1.5fr; gap:1rem; margin-top:1rem; align-items:center;">
           <div class="form-group">
             <label for="tb-team-name">Team Name *</label>
             <input type="text" id="tb-team-name" placeholder="e.g. Panathinaikos Elite" maxlength="32" oninput="updateTeamBuilderUI()">
+          </div>
+          <div class="form-group">
+            <label for="tb-team-league">Competition League</label>
+            <select id="tb-team-league" style="padding:0.45rem 0.5rem; font-size:0.85rem;">
+              <option value="euroleague">EuroLeague [EL]</option>
+              <option value="eurocup">EuroCup [EC]</option>
+            </select>
           </div>
           <div class="stats-bar" style="justify-content:space-around;">
             <div class="stat-item">

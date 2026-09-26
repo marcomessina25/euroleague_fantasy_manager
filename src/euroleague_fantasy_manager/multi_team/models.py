@@ -74,10 +74,11 @@ class TeamRosterUnit:
 
 @dataclass
 class Team:
-    """Team entity representing an isolated fantasy squad profile (up to 3 teams)."""
+    """Team entity representing an isolated fantasy squad profile (up to 6 teams)."""
 
     team_id: str
     name: str
+    league: str = "euroleague"
     mode: str = "classic"
     season: str = "2026/27"
     round_number: int = 1
@@ -134,6 +135,7 @@ class Team:
         return {
             "team_id": self.team_id,
             "name": self.name,
+            "league": self.league,
             "mode": self.mode,
             "season": self.season,
             "round_number": self.round_number,
@@ -154,6 +156,7 @@ class Team:
         return cls(
             team_id=str(data["team_id"]),
             name=str(data.get("name", data["team_id"])),
+            league=str(data.get("league", "euroleague")),
             mode=str(data.get("mode", "classic")),
             season=str(data.get("season", "2026/27")),
             round_number=int(data.get("round_number", 1)),

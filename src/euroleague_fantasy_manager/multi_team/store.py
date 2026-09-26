@@ -14,11 +14,11 @@ from euroleague_fantasy_manager.multi_team.models import (
     TeamSettings,
 )
 
-MAX_TEAMS = 3
+MAX_TEAMS = 6
 
 
 class TeamStore:
-    """Thread-safe SQLite store managing up to 3 isolated fantasy teams."""
+    """Thread-safe SQLite store managing up to 6 isolated fantasy teams."""
 
     def __init__(self, db_path: str | Path = "data/euroleague.sqlite3") -> None:
         self.db_path = str(db_path)
@@ -39,6 +39,7 @@ class TeamStore:
                 CREATE TABLE IF NOT EXISTS managed_teams (
                     team_id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
+                    league TEXT NOT NULL DEFAULT 'euroleague',
                     mode TEXT NOT NULL DEFAULT 'classic',
                     season TEXT NOT NULL DEFAULT '2026/27',
                     round_number INTEGER NOT NULL DEFAULT 1,
@@ -86,9 +87,16 @@ class TeamStore:
                 );
                 """
             )
+            # Safe migration: ensure league column exists
+            info = conn.execute("PRAGMA table_info(managed_teams);").fetchall()
+            col_names = [col[1] for col in info]
+            if "league" not in col_names:
+                conn.execute(
+                    "ALTER TABLE managed_teams ADD COLUMN league TEXT NOT NULL DEFAULT 'euroleague';"
+                )
 
     def create_team(self, team: Team) -> Team:
-        """Create a new team, enforcing the strict max 3 teams limit."""
+        """Create a new team, enforcing the strict max 6 teams limit."""
         with self._get_connection() as conn:
             count = conn.execute("SELECT COUNT(*) FROM managed_teams;").fetchone()[0]
             if count >= MAX_TEAMS:
@@ -101,18 +109,20 @@ class TeamStore:
             now = datetime.now(timezone.utc).isoformat()
             created_at = team.created_at or now
             updated_at = team.updated_at or now
+            league_val = getattr(team, "league", "euroleague") or "euroleague"
 
             conn.execute(
                 """
                 INSERT INTO managed_teams (
-                    team_id, name, mode, season, round_number, turn_number,
+                    team_id, name, league, mode, season, round_number, turn_number,
                     bank_tenths, transfers_remaining, settings_json, is_active,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 (
                     team.team_id,
                     team.name,
+                    league_val,
                     team.mode,
                     team.season,
                     team.round_number,
@@ -145,10 +155,12 @@ class TeamStore:
 
             squad = self._get_squad_conn(conn, team_id, row["round_number"])
             settings = TeamSettings.from_dict(json.loads(row["settings_json"]))
+            league_val = str(row["league"]) if "league" in row.keys() else "euroleague"
 
             return Team(
                 team_id=row["team_id"],
                 name=row["name"],
+                league=league_val,
                 mode=row["mode"],
                 season=row["season"],
                 round_number=row["round_number"],
@@ -162,7 +174,7 @@ class TeamStore:
             )
 
     def list_teams(self) -> list[Team]:
-        """List all managed teams (up to 3)."""
+        """List all managed teams (up to 6)."""
         with self._get_connection() as conn:
             rows = conn.execute(
                 "SELECT * FROM managed_teams ORDER BY created_at ASC;"
@@ -175,10 +187,12 @@ class TeamStore:
                 settings = TeamSettings.from_dict(
                     json.loads(row["settings_json"])
                 )
+                league_val = str(row["league"]) if "league" in row.keys() else "euroleague"
                 teams.append(
                     Team(
                         team_id=row["team_id"],
                         name=row["name"],
+                        league=league_val,
                         mode=row["mode"],
                         season=row["season"],
                         round_number=row["round_number"],
@@ -196,11 +210,13 @@ class TeamStore:
     def update_team(self, team: Team) -> Team:
         """Update team attributes, bank, settings, and current round squad."""
         now = datetime.now(timezone.utc).isoformat()
+        league_val = getattr(team, "league", "euroleague") or "euroleague"
         with self._get_connection() as conn:
             res = conn.execute(
                 """
                 UPDATE managed_teams SET
                     name = ?,
+                    league = ?,
                     mode = ?,
                     season = ?,
                     round_number = ?,
@@ -213,6 +229,7 @@ class TeamStore:
                 """,
                 (
                     team.name,
+                    league_val,
                     team.mode,
                     team.season,
                     team.round_number,
