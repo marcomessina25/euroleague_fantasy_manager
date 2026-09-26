@@ -251,7 +251,7 @@ class DecisionLogger:
     def log_turn_substitution(
         self,
         round_number: int,
-        t1_actuals: Mapping[int, float],
+        t1_actuals: Mapping[int, float] | None = None,
         season: str = "2026",
         team_id: str = "default_team",
         turn_number: int = 2,
@@ -262,18 +262,26 @@ class DecisionLogger:
         resulting_lineup: LineupPayload | None = None,
         provenance: DecisionProvenance | None = None,
         notes: str | None = None,
+        turn_decision: TurnSubPayload | None = None,
+        recommended_turn_sub: TurnSubPayload | None = None,
+        actual_turn_sub: TurnSubPayload | None = None,
+        snapshot: StateSnapshot | None = None,
     ) -> DecisionRecord:
         """Record intra-round Turn 1 -> Turn 2 substitutions or captain switch."""
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         decision_id = f"dec_turn_{season}_r{round_number:02d}_t{turn_number}_{uuid.uuid4().hex[:8]}"
 
-        turn_payload = TurnSubPayload(
-            t1_actuals={int(k): float(v) for k, v in t1_actuals.items()},
-            substituted_out_id=substituted_out_id,
-            substituted_in_id=substituted_in_id,
-            old_captain_id=old_captain_id,
-            new_captain_id=new_captain_id,
-        )
+        payload = actual_turn_sub or turn_decision or recommended_turn_sub
+        if payload is not None:
+            turn_payload = payload
+        else:
+            turn_payload = TurnSubPayload(
+                t1_actuals={int(k): float(v) for k, v in (t1_actuals or {}).items()},
+                substituted_out_id=substituted_out_id,
+                substituted_in_id=substituted_in_id,
+                old_captain_id=old_captain_id,
+                new_captain_id=new_captain_id,
+            )
 
         prov = provenance or DecisionProvenance()
 

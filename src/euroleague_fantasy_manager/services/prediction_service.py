@@ -158,20 +158,57 @@ class PredictionService:
                 players = store.load_latest_players()
                 fixtures = store.load_latest_fixtures()
 
-                team_fix: dict[str, tuple[str, bool, int]] = {}
+                team_fix: dict[str, tuple[str, bool, int, bool]] = {}
                 for f in fixtures:
                     if f.get("round_number") == round_number:
                         h_code = f.get("home_team_code", "")
                         a_code = f.get("away_team_code", "")
                         t_num = f.get("turn_number", 1)
+                        f_status = str(f.get("status") or "scheduled").lower()
+                        is_played = (f_status in ("played", "finished", "final"))
                         if h_code:
-                            team_fix[h_code] = (a_code, True, t_num)
+                            team_fix[h_code] = (a_code, True, t_num, is_played)
                         if a_code:
-                            team_fix[a_code] = (h_code, False, t_num)
+                            team_fix[a_code] = (h_code, False, t_num, is_played)
 
                 for p in players:
-                    opp, is_home, t_num = team_fix.get(p.team_code, ("", True, p.turn_number))
-                    exp_fp = p.avg_fantasy_pts if p.avg_fantasy_pts > 0 else round(p.price_tenths / 10.0, 2)
+                    opp, is_home, t_num, is_played_fix = team_fix.get(
+                        p.team_code, ("", True, p.turn_number, getattr(p, "has_played", False))
+                    )
+                    has_played = bool(getattr(p, "has_played", False) or is_played_fix)
+                    actual_fp = float(p.last_match_pts) if has_played else None
+
+                    # Quantitative expectation based on V0.3 decomposed principles:
+                    # E[FP] = P(play) * E[min] * E[FP/min] * loc_mult (never equal to cost in credits)
+                    cr = p.credits
+                    pos_enum = p.position
+                    if pos_enum == Position.HEAD_COACH:
+                        base_hc = 11.0 if is_home else 8.5
+                        exp_fp = max(4.0, min(16.0, round(base_hc + (cr - 6.0) * 0.6, 2)))
+                        exp_min = 40.0
+                        fp_per_min = round(exp_fp / 40.0, 3)
+                    else:
+                        is_starter = (p.status.lower() in ("starter", "start") or cr >= 11.0)
+                        if is_starter:
+                            exp_min = min(30.0, max(18.0, 22.0 + (cr - 10.0) * 0.8))
+                        else:
+                            exp_min = min(22.0, max(6.0, 12.0 + (cr - 7.0) * 0.7))
+
+                        pos_code = pos_enum.short_code if hasattr(pos_enum, "short_code") else str(pos_enum)
+                        pos_base = 0.54 if "G" in pos_code else (0.56 if "F" in pos_code else 0.60)
+                        fp_per_min = max(0.32, min(0.85, pos_base + (cr - 10.5) * 0.028))
+                        loc_mult = 1.05 if is_home else 0.95
+                        p_play = p.probability_of_playing if not p.is_injured else 0.0
+                        raw_exp = exp_min * fp_per_min * loc_mult
+                        exp_fp = round(p_play * raw_exp, 2)
+
+                        # If multi-game season average is available from completed rounds
+                        if p.avg_fantasy_pts > 0 and not has_played:
+                            exp_fp = round(0.6 * p.avg_fantasy_pts + 0.4 * exp_fp, 2)
+
+                    unc_val = round(max(3.0, exp_fp * 0.25), 2)
+                    spread_val = round(max(6.0, exp_fp * 0.50), 2)
+
                     contracts[p.id] = PlayerProjectionContract(
                         player_id=p.id,
                         player_name=p.name,
@@ -181,13 +218,15 @@ class PredictionService:
                         price_tenths=p.price_tenths,
                         expected_fp=exp_fp,
                         probability_play=p.probability_of_playing,
-                        expected_minutes=20.0,
-                        fp_per_minute=round(exp_fp / 20.0, 3) if exp_fp > 0 else 0.5,
-                        uncertainty=round(exp_fp * 0.25, 2),
-                        prediction_spread=round(exp_fp * 0.5, 2),
+                        expected_minutes=round(exp_min, 1),
+                        fp_per_minute=round(fp_per_min, 3),
+                        uncertainty=unc_val,
+                        prediction_spread=spread_val,
                         turn_number=t_num,
                         opponent_code=opp,
                         is_home=is_home,
+                        actual_fp=actual_fp,
+                        has_played=has_played,
                     )
             except Exception:
                 pass

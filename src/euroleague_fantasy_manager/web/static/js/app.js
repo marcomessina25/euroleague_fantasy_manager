@@ -30,6 +30,8 @@ function initNav() {
 
       if (targetId === "trade-studio") {
         loadTradeStudio();
+      } else if (targetId === "turn-sub") {
+        if (state.dashboard) renderIntraRoundSquadTable(state.dashboard.current_lineup || state.dashboard.optimal_lineup);
       } else if (targetId === "evaluation") {
         loadEvaluation();
       }
@@ -209,7 +211,31 @@ async function loadDashboard() {
     // Update Stats Bar
     document.getElementById("stat-bank").textContent = `${data.bank_credits.toFixed(1)} cr`;
     document.getElementById("stat-value").textContent = `${data.squad_value_credits.toFixed(1)} cr`;
-    document.getElementById("stat-score").textContent = `${activeLineup.expected_total_fp.toFixed(1)} FP`;
+
+    const totalScore = (data.total_fp !== undefined ? data.total_fp : activeLineup.expected_total_fp).toFixed(1);
+    document.getElementById("stat-score").textContent = `${totalScore} FP`;
+
+    const breakdownEl = document.getElementById("stat-score-breakdown");
+    if (breakdownEl) {
+      if (data.any_played) {
+        const actualPts = (data.realized_total_fp || 0).toFixed(1);
+        const expPts = (data.unplayed_expected_fp !== undefined ? data.unplayed_expected_fp : (activeLineup.expected_total_fp - data.realized_total_fp)).toFixed(1);
+        const playedCnt = data.played_count || 0;
+        const unplayedCnt = data.unplayed_count || 0;
+        breakdownEl.innerHTML = `
+          <span class="breakdown-actual" title="Realized points from finished matches">● ${actualPts} Actual (${playedCnt} played)</span>
+          <span style="opacity:0.5;">|</span>
+          <span class="breakdown-exp" title="Projected points from upcoming matches">● ${expPts} Exp (${unplayedCnt} to play)</span>
+        `;
+      } else {
+        const expPts = (data.unplayed_expected_fp !== undefined ? data.unplayed_expected_fp : activeLineup.expected_total_fp).toFixed(1);
+        const unplayedCnt = data.unplayed_count || 10;
+        breakdownEl.innerHTML = `
+          <span class="breakdown-exp" title="All points projected from expected scores">● ${expPts} Exp (${unplayedCnt} to play)</span>
+        `;
+      }
+    }
+
     document.getElementById("stat-formation").textContent = activeLineup.formation;
     document.getElementById("round-badge").textContent = `R${data.round_number}`;
 
@@ -217,6 +243,7 @@ async function loadDashboard() {
     renderBench(activeLineup);
     renderAlternatives(activeLineup.alternatives);
     renderProvenance(data.provenance, activeLineup.unpruned_oracle_match);
+    renderIntraRoundSquadTable(activeLineup);
   } catch (err) {
     console.error("Dashboard fetch error:", err);
   }
@@ -296,6 +323,24 @@ function createPlayerCard(player, lineup, roleType = "starter") {
     `;
   }
 
+  const hasPlayed = !!(player.has_played && player.actual_fp !== null && player.actual_fp !== undefined);
+  let fpDisplay = "";
+  if (isCap) {
+    if (hasPlayed) {
+      const base = Number(player.actual_fp).toFixed(1);
+      const doubled = (Number(player.actual_fp) * 2).toFixed(1);
+      fpDisplay = `<span class="player-fp fp-actual" title="Captain doubled score">2 x ${base} = ${doubled} FP <span class="fp-type-badge badge-actual">ACTUAL</span></span>`;
+    } else {
+      const base = Number(player.expected_fp || 0).toFixed(1);
+      const doubled = (Number(player.expected_fp || 0) * 2).toFixed(1);
+      fpDisplay = `<span class="player-fp fp-expected" title="Captain doubled projected score">2 x ${base} = ${doubled} FP <span class="fp-type-badge badge-exp">EXP</span></span>`;
+    }
+  } else {
+    fpDisplay = hasPlayed
+      ? `<span class="player-fp fp-actual" title="Actual score realized in match">${Number(player.actual_fp).toFixed(1)} FP <span class="fp-type-badge badge-actual">ACTUAL</span></span>`
+      : `<span class="player-fp fp-expected" title="Projected expected fantasy points">${Number(player.expected_fp || 0).toFixed(1)} FP <span class="fp-type-badge badge-exp">EXP</span></span>`;
+  }
+
   card.innerHTML = `
     <div class="player-header">
       <span class="player-pos-badge">${posCode}</span>
@@ -308,7 +353,7 @@ function createPlayerCard(player, lineup, roleType = "starter") {
     </div>
     <div class="player-meta">
       <span>T${player.turn_number || 1} vs ${player.opponent_code || "OPP"}</span>
-      <span class="player-fp">${player.expected_fp} FP</span>
+      ${fpDisplay}
     </div>
     ${actionHtml}
   `;
@@ -597,13 +642,21 @@ async function openPlayerModal(playerId) {
     document.getElementById("pm-pos-badge").textContent = normalizePos(p.position);
     document.getElementById("pm-team").textContent = `(${p.team_code || "UNK"})`;
     document.getElementById("pm-credits").textContent = `${p.credits} cr`;
-    document.getElementById("pm-exp-fp").textContent = `${p.expected_fp} FP`;
+
+    const hasPlayed = !!(p.has_played && p.actual_fp !== null && p.actual_fp !== undefined);
+    if (hasPlayed) {
+      document.getElementById("pm-exp-fp").innerHTML = `<span style="color:#22c55e; font-weight:700;">${p.actual_fp.toFixed(1)} FP</span> <span class="fp-type-badge badge-actual">ACTUAL</span>`;
+      document.getElementById("pm-status").innerHTML = `<span style="color:#22c55e; font-weight:700;">PLAYED (${p.actual_fp.toFixed(1)} FP)</span>`;
+    } else {
+      document.getElementById("pm-exp-fp").innerHTML = `${p.expected_fp} FP <span class="fp-type-badge badge-exp">EXP</span>`;
+      document.getElementById("pm-status").textContent = p.status ? p.status.toUpperCase() : "UPCOMING";
+    }
+
     document.getElementById("pm-avg-fp").textContent = `${p.avg_fantasy_pts.toFixed(1)} FP`;
     document.getElementById("pm-last-fp").textContent = `${p.last_match_pts.toFixed(1)} FP`;
     document.getElementById("pm-prob").textContent = `${Math.round(p.probability_of_playing * 100)}%`;
     document.getElementById("pm-efficiency").textContent = p.fp_per_credit ? p.fp_per_credit.toFixed(2) : "-";
 
-    document.getElementById("pm-status").textContent = p.status ? p.status.toUpperCase() : "ACTIVE";
     document.getElementById("pm-fixture").textContent = `Turn ${p.turn_number} vs ${p.opponent_code || "OPP"} (${p.is_home ? "Home" : "Away"})`;
     document.getElementById("pm-minutes").textContent = `${p.expected_minutes || 20} min`;
     document.getElementById("pm-uncertainty").textContent = `±${p.uncertainty || 0} FP`;
@@ -653,8 +706,22 @@ function onModalSubstitute() {
   }
 }
 
-// Lineup Optimization Trigger
+// Lineup Optimization Trigger & Undo Mechanism
+let previousLineupSnapshot = null;
+
 async function triggerOptimizeLineup() {
+  if (!state.activeTeamId) return;
+  const activeLineup = state.dashboard ? (state.dashboard.current_lineup || state.dashboard.optimal_lineup) : null;
+  if (activeLineup) {
+    previousLineupSnapshot = {
+      starter_ids: activeLineup.starters.map((p) => p.player_id),
+      captain_id: activeLineup.captain_id,
+      sixth_man_id: activeLineup.sixth_man ? activeLineup.sixth_man.player_id : (activeLineup.sixth_man_id || 0),
+      bench_ids: activeLineup.bench.map((p) => p.player_id),
+      coach_id: activeLineup.coach ? activeLineup.coach.player_id : (activeLineup.coach_id || 0),
+    };
+  }
+
   const risk = document.getElementById("opt-risk-mode").value;
   const res = await fetch("/api/workstation/optimize/lineup", {
     method: "POST",
@@ -681,46 +748,286 @@ async function triggerOptimizeLineup() {
       }),
     });
     await loadDashboard();
+    const undoBtn = document.getElementById("btn-undo-optimizer");
+    if (undoBtn && previousLineupSnapshot) {
+      undoBtn.style.display = "inline-block";
+    }
   }
 }
 
-// Turn 1 -> Turn 2 Simulator
-async function runTurnSubSimulator() {
-  const t1Inputs = document.querySelectorAll(".t1-score-input");
-  const scores = {};
-  t1Inputs.forEach((inp) => {
-    const pid = inp.getAttribute("data-pid");
-    const val = parseFloat(inp.value);
-    if (!isNaN(val)) scores[pid] = val;
-  });
+async function undoLineupOptimization() {
+  if (!previousLineupSnapshot || !state.activeTeamId) return;
+  try {
+    const res = await fetch(`/api/teams/${state.activeTeamId}/lineup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(previousLineupSnapshot),
+    });
+    if (res.ok) {
+      previousLineupSnapshot = null;
+      const undoBtn = document.getElementById("btn-undo-optimizer");
+      if (undoBtn) undoBtn.style.display = "none";
+      await loadDashboard();
+    } else {
+      const err = await res.json();
+      alert("Failed to undo lineup optimization: " + (err.detail || "Server error"));
+    }
+  } catch (err) {
+    console.error("Undo lineup error:", err);
+  }
+}
 
-  const res = await fetch("/api/workstation/simulate/turn-sub", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      team_id: state.activeTeamId,
-      season: state.season,
-      round_number: state.roundNumber,
-      turn_1_scores: scores,
-    }),
-  });
+// Intra-Round Substitution Simulator (Turn 1 -> Turn 2 -> Turn 3)
+function renderIntraRoundSquadTable(lineup) {
+  const tbody = document.getElementById("intra-squad-tbody");
+  if (!tbody || !lineup) return;
+  tbody.innerHTML = "";
 
-  if (res.ok) {
-    const data = await res.json();
-    const resultBox = document.getElementById("turn-sub-results");
-    resultBox.style.display = "block";
-    resultBox.innerHTML = `
-      <div style="display:flex; justify-content:space-between; margin-bottom:0.75rem;">
-        <span>Baseline FP: <strong>${data.baseline_expected_fp}</strong></span>
-        <span>Updated FP: <strong>${data.updated_expected_fp}</strong></span>
-        <span class="badge ${data.net_gain >= 0 ? "badge-green" : "badge-red"}">Net Gain: ${data.net_gain >= 0 ? "+" : ""}${data.net_gain} FP</span>
+  const allPlayers = [
+    ...lineup.starters.map((p) => ({ ...p, current_role: p.player_id === lineup.captain_id ? "CAPTAIN" : "STARTER" })),
+    ...(lineup.sixth_man ? [{ ...lineup.sixth_man, current_role: "SIXTH_MAN" }] : []),
+    ...lineup.bench.map((p) => ({ ...p, current_role: "BENCH" })),
+    ...(lineup.coach ? [{ ...lineup.coach, current_role: "COACH" }] : []),
+  ];
+
+  allPlayers.forEach((p) => {
+    const tr = document.createElement("tr");
+    const pos = normalizePos(p.position);
+    const hasPlayed = !!(p.has_played && p.actual_fp !== null && p.actual_fp !== undefined);
+
+    let roleBadge = "";
+    if (p.current_role === "CAPTAIN") roleBadge = `<span class="role-badge captain">CAP 2x</span>`;
+    else if (p.current_role === "STARTER") roleBadge = `<span class="role-badge" style="background:var(--accent-blue);">START 1x</span>`;
+    else if (p.current_role === "SIXTH_MAN") roleBadge = `<span class="role-badge sixth-man">6TH 1x</span>`;
+    else if (p.current_role === "BENCH") roleBadge = `<span class="role-badge bench">BENCH 0.5x</span>`;
+    else if (p.current_role === "COACH") roleBadge = `<span class="role-badge coach">HC 1.0x</span>`;
+
+    let scoreStatus = "";
+    if (hasPlayed) {
+      scoreStatus = `<span class="player-fp fp-actual">${Number(p.actual_fp).toFixed(1)} FP</span> <span class="fp-type-badge badge-actual">PLAYED</span>`;
+    } else {
+      scoreStatus = `<span class="player-fp fp-expected">${Number(p.expected_fp || 0).toFixed(1)} FP</span> <span class="fp-type-badge badge-exp">EXP</span>`;
+    }
+
+    let subEligibility = "";
+    if (p.current_role === "COACH") {
+      subEligibility = `<span style="color:var(--text-muted);">Fixed (Not subbable)</span>`;
+    } else if (p.current_role === "BENCH") {
+      if (hasPlayed) {
+        subEligibility = `<span style="color:var(--accent-red); font-weight:700;">🔒 Locked on Bench (0.5x)</span>`;
+      } else {
+        subEligibility = `<span style="color:var(--accent-green); font-weight:700;">✓ Eligible to Sub In</span>`;
+      }
+    } else {
+      // Starter or Sixth Man
+      subEligibility = `<span style="color:var(--accent-blue); font-weight:600;">⇄ Eligible to Sub Out</span>`;
+    }
+
+    tr.innerHTML = `
+      <td>
+        <strong style="cursor:pointer;" onclick="openPlayerModal(${p.player_id})">${p.name}</strong>
+        <span class="player-pos-badge" style="margin-left:0.3rem;">${pos}</span>
+      </td>
+      <td>${roleBadge}</td>
+      <td>T${p.turn_number || 1} vs ${p.opponent_code || "OPP"}</td>
+      <td>${scoreStatus}</td>
+      <td>${subEligibility}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+let currentIntraSubResult = null;
+
+async function runIntraRoundSimulator() {
+  if (!state.activeTeamId) return;
+  const btn = document.getElementById("btn-run-intra-sub");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Calculating...";
+  }
+
+  try {
+    const res = await fetch("/api/workstation/simulate/intra-round", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        team_id: state.activeTeamId,
+        season: state.season,
+        round_number: state.roundNumber,
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      currentIntraSubResult = data;
+      renderIntraSubResults(data);
+    } else {
+      const err = await res.json();
+      alert("Intra-round simulation failed: " + (err.detail || "Server error"));
+    }
+  } catch (err) {
+    console.error("Intra-round simulation error:", err);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "⚡ Calculate Optimal Substitutions";
+    }
+  }
+}
+
+function renderIntraSubResults(data) {
+  const container = document.getElementById("intra-sub-results");
+  if (!container) return;
+  container.style.display = "block";
+
+  const isOptimalNow = data.net_gain <= 0.05 && (!data.captain_changed);
+  const netSign = data.net_gain >= 0 ? "+" : "";
+
+  let movesHtml = "";
+  if (data.recommended_substitutions && data.recommended_substitutions.length > 0) {
+    movesHtml = `
+      <div style="margin-top:0.75rem;">
+        <h4 style="font-size:0.85rem; margin-bottom:0.4rem; color:var(--text-main);">Recommended Bench Moves:</h4>
+        <div style="display:flex; flex-direction:column; gap:0.4rem;">
+          ${data.recommended_substitutions.map((sub) => {
+            const outName = sub.out_player ? sub.out_player.name : (sub.player_out_name || "Player");
+            const outScore = sub.out_player ? sub.out_player.score.toFixed(1) : (sub.out_score || 0);
+            const outPos = sub.out_player ? sub.out_player.position : (sub.out_role || "");
+            const inName = sub.in_player ? sub.in_player.name : (sub.player_in_name || "Player");
+            const inScore = sub.in_player ? sub.in_player.score.toFixed(1) : (sub.in_score || 0);
+            return `
+            <div class="intra-sub-card">
+              <div>
+                <span style="color:var(--accent-red); font-weight:700;">OUT:</span> <strong>${outName}</strong> (${outPos}, ${outScore} FP)
+              </div>
+              <div style="color:var(--text-muted); font-size:1.1rem;">➔</div>
+              <div>
+                <span style="color:var(--accent-green); font-weight:700;">IN:</span> <strong>${inName}</strong> (${inScore} FP)
+              </div>
+            </div>`;
+          }).join("")}
+        </div>
       </div>
-      <p style="font-size:0.85rem; color:var(--text-muted);">
-        Substitutions: Starters In: <strong>${data.substitutions.starters_in.join(", ") || "None"}</strong> | Starters Out: <strong>${data.substitutions.starters_out.join(", ") || "None"}</strong>
+    `;
+  }
+
+  let captainHtml = "";
+  if (data.captain_changed) {
+    const newCapName = data.captain_change_detail && data.captain_change_detail.new_captain ? data.captain_change_detail.new_captain.name : (data.optimal_captain_name || "New Captain");
+    captainHtml = `
+      <div class="intra-sub-card captain-switch" style="margin-top:0.5rem;">
+        <div>👑 <strong>Captaincy Switch:</strong> Reassign captaincy to <strong>${newCapName}</strong></div>
+      </div>
+    `;
+  }
+
+  let actionBtnHtml = "";
+  if (!isOptimalNow) {
+    actionBtnHtml = `
+      <div style="margin-top:1rem; display:flex; justify-content:flex-end;">
+        <button class="btn btn-primary" onclick="applyIntraRoundSubstitutions()" id="btn-apply-intra-sub">
+          ✓ Apply Optimal Substitutions & Log Decision
+        </button>
+      </div>
+    `;
+  } else {
+    actionBtnHtml = `
+      <p style="font-size:0.85rem; color:var(--accent-green); margin-top:0.75rem; font-weight:600;">
+        ✓ Your current lineup is already optimal for this matchday turn. No substitutions needed!
       </p>
     `;
   }
+
+  container.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem; border-bottom:1px solid var(--border-color); padding-bottom:0.75rem;">
+      <div>
+        <span style="color:var(--text-muted); font-size:0.8rem;">Baseline Projected Score:</span>
+        <div style="font-size:1.1rem; font-weight:700;">${data.baseline_score.toFixed(1)} FP</div>
+      </div>
+      <div>
+        <span style="color:var(--text-muted); font-size:0.8rem;">Optimal Post-Sub Score:</span>
+        <div style="font-size:1.1rem; font-weight:700; color:var(--accent-orange);">${data.optimal_score.toFixed(1)} FP</div>
+      </div>
+      <div>
+        <span style="color:var(--text-muted); font-size:0.8rem;">Expected Net Gain:</span>
+        <div><span class="badge ${data.net_gain > 0 ? "badge-green" : "badge-gold"}" style="font-size:0.9rem; font-weight:800;">${netSign}${data.net_gain.toFixed(1)} FP</span></div>
+      </div>
+    </div>
+    ${movesHtml}
+    ${captainHtml}
+    ${actionBtnHtml}
+  `;
 }
+
+async function applyIntraRoundSubstitutions() {
+  if (!state.activeTeamId) return;
+  const btn = document.getElementById("btn-apply-intra-sub");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Applying...";
+  }
+
+  try {
+    const res = await fetch("/api/workstation/apply/intra-round", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        team_id: state.activeTeamId,
+        season: state.season,
+        round_number: state.roundNumber,
+      }),
+    });
+
+    if (res.ok) {
+      alert("Optimal substitutions applied successfully and logged in decision history!");
+      const container = document.getElementById("intra-sub-results");
+      if (container) container.style.display = "none";
+      await loadDashboard();
+    } else {
+      const err = await res.json();
+      alert("Failed to apply substitutions: " + (err.detail || "Server error"));
+    }
+  } catch (err) {
+    console.error("Apply intra-round error:", err);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "✓ Apply Optimal Substitutions & Log Decision";
+    }
+  }
+}
+
+// Revert Team to Round Start Baseline
+async function confirmRevertRoundStart() {
+  if (!state.activeTeamId) return;
+  if (!confirm(`Are you sure you want to revert all transfers and substitutions for Round ${state.roundNumber}?\n\nThis will restore your team squad, bank credits, and remaining trades to the round start baseline.`)) {
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/teams/${state.activeTeamId}/revert-round-start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ season: state.season, round_number: state.roundNumber }),
+    });
+
+    if (res.ok) {
+      alert(`Team successfully reverted to Round ${state.roundNumber} baseline!`);
+      await loadTeams();
+      await loadDashboard();
+      if (state.activeTab === "trade-studio") {
+        await loadTradeStudio();
+      }
+    } else {
+      const err = await res.json();
+      alert("Failed to revert: " + (err.detail || "Server error"));
+    }
+  } catch (err) {
+    console.error("Revert round start error:", err);
+  }
+}
+
 
 // =========================================================================
 // Trade Studio & Transfer Manager (Phase G & H)
@@ -757,10 +1064,32 @@ function renderTradeStudioSquad() {
   if (!tbody) return;
   tbody.innerHTML = "";
 
+  const dashLineup = state.dashboard ? (state.dashboard.current_lineup || state.dashboard.optimal_lineup) : null;
+  const dashMap = {};
+  if (dashLineup) {
+    const all = [
+      ...dashLineup.starters,
+      ...(dashLineup.sixth_man ? [dashLineup.sixth_man] : []),
+      ...dashLineup.bench,
+      ...(dashLineup.coach ? [dashLineup.coach] : []),
+    ];
+    all.forEach((p) => { dashMap[p.player_id] = p; });
+  }
+
   tradeStudioState.currentSquad.forEach((unit) => {
     const isOut = tradeStudioState.transfersOut.some((x) => x.id === unit.player_id);
     const pos = normalizePos(unit.position);
     const tr = document.createElement("tr");
+
+    const dashUnit = dashMap[unit.player_id];
+    let fpCell = `<span style="color:var(--text-muted);">-</span>`;
+    if (dashUnit) {
+      if (dashUnit.has_played && dashUnit.actual_fp !== null && dashUnit.actual_fp !== undefined) {
+        fpCell = `<span class="fp-actual">${dashUnit.actual_fp.toFixed(1)} FP <span class="fp-type-badge badge-actual">ACTUAL</span></span>`;
+      } else {
+        fpCell = `<span class="fp-expected">${Number(dashUnit.expected_fp || 0).toFixed(1)} FP <span class="fp-type-badge badge-exp">EXP</span></span>`;
+      }
+    }
 
     tr.innerHTML = `
       <td>
@@ -769,7 +1098,7 @@ function renderTradeStudioSquad() {
       </td>
       <td><span class="player-pos-badge">${pos}</span></td>
       <td>${(unit.current_price_tenths / 10.0).toFixed(1)} cr</td>
-      <td style="color:var(--accent-orange); font-weight:700;">-</td>
+      <td>${fpCell}</td>
       <td>
         <button class="btn ${isOut ? "btn-secondary" : "btn-primary"}"
                 style="padding:0.2rem 0.5rem; font-size:0.75rem; ${isOut ? "border-color:var(--accent-red); color:var(--accent-red);" : ""}"
@@ -928,9 +1257,11 @@ async function triggerSuggestTransfers() {
 
     if (res.ok) {
       const data = await res.json();
-      const best = data.best_recommendation;
+      const recs = (data.recommendations && data.recommendations.length > 0)
+        ? data.recommendations
+        : (data.best_recommendation ? [data.best_recommendation] : []);
 
-      if (!best || !best.transfers_out_details || best.transfers_out_details.length === 0) {
+      if (recs.length === 0 || !recs[0].transfers_out_details || recs[0].transfers_out_details.length === 0) {
         if (banner) {
           banner.style.display = "block";
           banner.innerHTML = `<p style="margin:0; font-size:0.85rem; color:var(--text-muted);">Current squad is already optimal under current projections. No profitable trade found.</p>`;
@@ -938,24 +1269,45 @@ async function triggerSuggestTransfers() {
         return;
       }
 
-      const outNames = best.transfers_out_details.map((p) => `<strong>${p.name}</strong> (${p.credits} cr)`).join(", ");
-      const inNames = best.transfers_in_details.map((p) => `<strong>${p.name}</strong> (${p.credits} cr)`).join(", ");
-
       if (banner) {
         banner.style.display = "block";
-        banner.innerHTML = `
-          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
-            <div>
-              <strong style="color:var(--accent-orange);">⚡ Recommended Trade:</strong> Sell ${outNames} → Buy ${inNames}
-              <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.2rem;">
-                Net Gain: <strong style="color:var(--accent-green);">+${best.net_score_gain} FP</strong> | Projected Score: ${best.post_transfer_expected_score} FP | New Bank: ${best.remaining_bank_credits} cr
+        let html = `
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+            <strong style="color:var(--accent-orange); font-size:0.95rem;">⚡ Transfer Recommendations (${recs.length} option${recs.length > 1 ? "s" : ""})</strong>
+          </div>
+          <div class="trade-rec-container">
+        `;
+
+        recs.forEach((rec, idx) => {
+          const isOptimal = idx === 0;
+          const outNames = rec.transfers_out_details.map((p) => `<strong>${p.name}</strong> (${p.credits} cr)`).join(", ");
+          const inNames = rec.transfers_in_details.map((p) => `<strong>${p.name}</strong> (${p.credits} cr)`).join(", ");
+          const outsJson = JSON.stringify(rec.transfers_out_details).replace(/"/g, '&quot;');
+          const insJson = JSON.stringify(rec.transfers_in_details).replace(/"/g, '&quot;');
+
+          html += `
+            <div class="trade-rec-option ${isOptimal ? "optimal" : ""}">
+              <div style="flex:1; min-width:260px;">
+                <div class="trade-rec-header">
+                  <span class="trade-rec-badge ${isOptimal ? "optimal" : "alt"}">${isOptimal ? "★ Option 1 (Optimal)" : `Option ${idx + 1}`}</span>
+                  <span style="font-size:0.8rem; color:var(--accent-green); font-weight:700;">+${rec.net_score_gain.toFixed(1)} FP</span>
+                  <span style="font-size:0.75rem; color:var(--text-muted);">| Proj: ${rec.post_transfer_expected_score.toFixed(1)} FP | Bank: ${rec.remaining_bank_credits.toFixed(1)} cr</span>
+                </div>
+                <div style="font-size:0.85rem; margin-top:0.25rem;">
+                  <span style="color:var(--accent-red); font-weight:600;">Sell:</span> ${outNames} → <span style="color:var(--accent-green); font-weight:600;">Buy:</span> ${inNames}
+                </div>
+              </div>
+              <div>
+                <button class="btn ${isOptimal ? "btn-primary" : "btn-secondary"}" style="padding:0.35rem 0.8rem; font-size:0.8rem;" onclick="applySuggestedTrade(${outsJson}, ${insJson})">
+                  Apply to Studio
+                </button>
               </div>
             </div>
-            <button class="btn btn-primary" style="padding:0.3rem 0.7rem; font-size:0.8rem;" onclick="applySuggestedTrade(${JSON.stringify(best.transfers_out_details).replace(/"/g, '&quot;')}, ${JSON.stringify(best.transfers_in_details).replace(/"/g, '&quot;')})">
-              Apply to Studio
-            </button>
-          </div>
-        `;
+          `;
+        });
+
+        html += `</div>`;
+        banner.innerHTML = html;
       }
     } else {
       const err = await res.json();

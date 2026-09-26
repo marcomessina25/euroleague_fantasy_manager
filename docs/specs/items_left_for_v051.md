@@ -445,23 +445,25 @@ def test_transfer_optimizer_performance_budget():
 
 ## 📋 Merge Readiness Checklist
 
-- [ ] **BLOCKING #1:** Prediction model validation backtest (`test_v051_prediction_calibration_vs_v050`) passes. MAE regression within tolerance.
-- [ ] **BLOCKING #2:** Schema migration refactored with versioning, idempotence test passes.
-- [ ] **BLOCKING #3:** Intra-round captaincy guard implemented and tested. Edge case test passes.
-- [ ] **RECOMMENDED #4:** Round checkpoint fail-fast implemented and tested.
-- [ ] **RECOMMENDED #5:** Transfer multi-option ranking test passes.
-- [ ] **RECOMMENDED #6:** UI score breakdown consistency asserted in routes + JS tests pass.
-- [ ] All unit tests in `tests/test_v05_multi_team_and_gui.py` pass (including new V0.5.1 tests).
-- [ ] Integration tests: `test_workstation_simulate_and_apply_intra_round_routes()` passes.
-- [ ] No lint/format issues (`black`, `mypy`, `pylint` if configured).
-- [ ] `docs/roadmap.md` updated to reflect V0.5.1 completion status.
-- [ ] PR description links to this checklist and documents any deferred items.
+- [x] **BLOCKING #1:** Prediction model validation backtest (`test_v051_prediction_calibration_vs_v050`) passes. MAE regression within tolerance.
+- [x] **BLOCKING #2:** Schema migration refactored with versioning, idempotence test passes.
+- [x] **BLOCKING #3:** Intra-round captaincy guard implemented and tested. Edge case test passes.
+- [x] **RECOMMENDED #4:** Round checkpoint fail-fast implemented and tested.
+- [x] **RECOMMENDED #5:** Transfer multi-option ranking test passes.
+- [x] **RECOMMENDED #6:** UI score breakdown consistency asserted in routes + tests pass.
+- [x] **GOOD TO HAVE #7:** Performance benchmarking test passes (<1.5s).
+- [x] All unit tests in `tests/test_v05_multi_team_and_gui.py` pass (including new V0.5.1 tests).
+- [x] Integration tests: `test_workstation_simulate_and_apply_intra_round_routes()` passes.
+- [x] No lint/format issues (`black`, `mypy`, `pylint` if configured).
+- [x] `docs/roadmap.md` updated to reflect V0.5.1 completion status.
+- [x] PR description links to this checklist and documents all resolved items.
 
 ---
 
 ## 🔗 Related Documentation
 
 - [`docs/roadmap.md`](../roadmap.md) — Section 5.1: V0.5.1 scope
+- [`docs/v051_prediction_validation.md`](../v051_prediction_validation.md) — Backtest validation results
 - [`docs/architecture.md`](../architecture.md) — Layer responsibilities
 - `pyproject.toml` — Version bumped to 0.5.1
 
@@ -474,23 +476,22 @@ def test_transfer_optimizer_performance_budget():
 3. **Author**: Resolve review feedback. Mark items as DONE ✓.
 4. **Merge:** Once all BLOCKING + RECOMMENDED are ✓, PR is approved and merged.
 
-Any GOOD TO HAVE items may be deferred to a follow-up PR (V0.5.2 or later) with explicit ticket linkage.
-
 ---
 
 ## Status Tracking
 
 | Item | Status | Owner | Est. Effort | Notes |
 |------|--------|-------|-------------|-------|
-| #1 Prediction Validation | 🔴 Not Started | @marcomessina25 | 2–4h | Backtest required |
-| #2 Schema Migration | 🔴 Not Started | @marcomessina25 | 1–2h | Production safety |
-| #3 Captaincy Guard | 🔴 Not Started | @marcomessina25 | 1h | Correctness |
-| #4 Checkpoint Fail-Fast | 🟡 Deferred | @marcomessina25 | 45m | UX improvement |
-| #5 Transfer Ranking | 🟡 Deferred | @marcomessina25 | 1.5h | Quality check |
-| #6 UI Breakdown Tests | 🟡 Deferred | @marcomessina25 | 1h | Reliability |
-| #7 Performance Bench | 🟢 Deferred | — | 30m | Post-merge OK |
+| #1 Prediction Validation | 🟢 DONE ✓ | @marcomessina25 | 2–4h | Verified 10.6% MAE reduction vs baseline; backtest script + test in place |
+| #2 Schema Migration | 🟢 DONE ✓ | @marcomessina25 | 1–2h | Added `schema_version` table, PRAGMA column check, idempotent migrations |
+| #3 Captaincy Guard | 🟢 DONE ✓ | @marcomessina25 | 1h | Captain locked if already played; switchable only if unplayed |
+| #4 Checkpoint Fail-Fast | 🟢 DONE ✓ | @marcomessina25 | 45m | `get_round_checkpoint` raises `ValueError` on missing checkpoint |
+| #5 Transfer Ranking | 🟢 DONE ✓ | @marcomessina25 | 1.5h | Validated monotonic net transfer ranking and package uniqueness |
+| #6 UI Breakdown Tests | 🟢 DONE ✓ | @marcomessina25 | 1h | Runtime consistency assertion + tests across unplayed, mid-round, all-played |
+| #7 Performance Bench | 🟢 DONE ✓ | @marcomessina25 | 30m | 200-player market finishes in ~0.5s (<1.5s budget) |
 
 ---
 
 **Last Updated:** 2026-09-25  
-**Next Review:** After each item status change
+**Next Review:** Pre-merge signoff
+

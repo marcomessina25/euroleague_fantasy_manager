@@ -132,6 +132,10 @@ def get_dashboard(
     squad_details = []
     for unit in team.squad:
         c = proj_dict.get(unit.player_id)
+        has_played = getattr(c, "has_played", False) if c else False
+        actual_fp = getattr(c, "actual_fp", None) if c else None
+        exp_fp = round(c.expected_fp, 2) if c else 0.0
+
         squad_details.append({
             "player_id": unit.player_id,
             "name": unit.name or (c.player_name if c else f"Player {unit.player_id}"),
@@ -145,7 +149,9 @@ def get_dashboard(
             "is_bench": unit.is_bench,
             "is_coach": unit.is_coach,
             "turn_number": unit.turn_number,
-            "expected_fp": round(c.expected_fp, 2) if c else 0.0,
+            "expected_fp": exp_fp,
+            "actual_fp": round(actual_fp, 2) if actual_fp is not None else None,
+            "has_played": has_played,
             "probability_play": round(c.probability_play, 2) if c else 1.0,
             "uncertainty": round(c.uncertainty, 2) if c else 0.0,
             "opponent_code": c.opponent_code if c else "",
@@ -183,13 +189,20 @@ def get_dashboard(
             pos = c.position.short_code if hasattr(c.position, "short_code") else str(c.position)
         elif u.is_coach or pos == "HEAD_COACH":
             pos = "HC"
+
+        has_played = getattr(c, "has_played", False) if c else False
+        actual_fp = getattr(c, "actual_fp", None) if c else None
+        exp_fp = round(c.expected_fp, 2) if c else 0.0
+
         return {
             "player_id": u.player_id,
             "name": u.name or (c.player_name if c else f"Player {u.player_id}"),
             "position": pos,
             "team_code": u.team_code or (c.team_code if c else ""),
             "credits": round(u.current_price_tenths / 10.0, 1),
-            "expected_fp": round(c.expected_fp, 2) if c else 0.0,
+            "expected_fp": exp_fp,
+            "actual_fp": round(actual_fp, 2) if actual_fp is not None else None,
+            "has_played": has_played,
             "turn_number": u.turn_number or (c.turn_number if c else 1),
             "opponent_code": c.opponent_code if c else "",
             "is_home": c.is_home if c else True,
@@ -221,17 +234,51 @@ def get_dashboard(
     sixth_man_id = team.sixth_man_id or (sixth_man_formatted["player_id"] if sixth_man_formatted else 0)
     coach_id = team.coach_id or (coach_formatted["player_id"] if coach_formatted else 0)
 
-    # Compute total expected FP reflecting actual captain (2.0x), starters (1.0x), 6th man (1.0x), bench (0.5x), coach (1.0x)
-    tot_fp = 0.0
+    # Compute score breakdown: Realized points for played players + Expected points for unplayed players
+    tot_unplayed_expected_fp = 0.0
+    tot_realized_fp = 0.0
+    played_count = 0
+    unplayed_count = 0
+
     for p in starters_formatted:
         mult = 2.0 if p["player_id"] == captain_id else 1.0
-        tot_fp += p["expected_fp"] * mult
+        if p["has_played"] and p["actual_fp"] is not None:
+            tot_realized_fp += p["actual_fp"] * mult
+            played_count += 1
+        else:
+            tot_unplayed_expected_fp += p["expected_fp"] * mult
+            unplayed_count += 1
+
     if sixth_man_formatted:
-        tot_fp += sixth_man_formatted["expected_fp"] * 1.0
+        if sixth_man_formatted["has_played"] and sixth_man_formatted["actual_fp"] is not None:
+            tot_realized_fp += sixth_man_formatted["actual_fp"] * 1.0
+            played_count += 1
+        else:
+            tot_unplayed_expected_fp += sixth_man_formatted["expected_fp"] * 1.0
+            unplayed_count += 1
+
     for p in bench_formatted:
-        tot_fp += p["expected_fp"] * 0.5
+        if p["has_played"] and p["actual_fp"] is not None:
+            tot_realized_fp += p["actual_fp"] * 0.5
+            played_count += 1
+        else:
+            tot_unplayed_expected_fp += p["expected_fp"] * 0.5
+            unplayed_count += 1
+
     if coach_formatted:
-        tot_fp += coach_formatted["expected_fp"] * 1.0
+        if coach_formatted["has_played"] and coach_formatted["actual_fp"] is not None:
+            tot_realized_fp += coach_formatted["actual_fp"] * 1.0
+            played_count += 1
+        else:
+            tot_unplayed_expected_fp += coach_formatted["expected_fp"] * 1.0
+            unplayed_count += 1
+
+    tot_projected_fp = tot_realized_fp + tot_unplayed_expected_fp
+    assert abs((tot_realized_fp + tot_unplayed_expected_fp) - tot_projected_fp) < 0.01, (
+        f"Court score breakdown inconsistency: realized ({tot_realized_fp}) + "
+        f"unplayed_expected ({tot_unplayed_expected_fp}) != total ({tot_projected_fp})"
+    )
+    any_played = played_count > 0
 
     current_lineup = {
         "starters": starters_formatted,
@@ -242,7 +289,12 @@ def get_dashboard(
         "sixth_man_id": sixth_man_id,
         "coach_id": coach_id,
         "formation": formation_str,
-        "expected_total_fp": round(tot_fp, 2),
+        "expected_total_fp": round(tot_projected_fp, 2),
+        "realized_total_fp": round(tot_realized_fp, 2),
+        "unplayed_expected_fp": round(tot_unplayed_expected_fp, 2),
+        "played_count": played_count,
+        "unplayed_count": unplayed_count,
+        "any_played": any_played,
         "alternatives": opt_lineup.alternatives,
         "unpruned_oracle_match": opt_lineup.unpruned_oracle_match,
     }
@@ -255,6 +307,12 @@ def get_dashboard(
         "squad": squad_details,
         "current_lineup": current_lineup,
         "optimal_lineup": opt_lineup.to_dict(),
+        "realized_total_fp": round(tot_realized_fp, 2),
+        "unplayed_expected_fp": round(tot_unplayed_expected_fp, 2),
+        "total_fp": round(tot_projected_fp, 2),
+        "played_count": played_count,
+        "unplayed_count": unplayed_count,
+        "any_played": any_played,
         "provenance": {
             "prediction_model": "production_ridge_v03",
             "optimizer_version": "0.5.0",
@@ -344,12 +402,98 @@ def optimize_transfers_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+class SimulateIntraRoundRequest(BaseModel):
+    team_id: str
+    season: str = "2026/27"
+    round_number: int | None = None
+
+
+@router.post("/simulate/intra-round")
+def simulate_intra_round_endpoint(
+    req: SimulateIntraRoundRequest,
+    optimization_service: OptimizationService = Depends(get_optimization_service),
+) -> dict[str, Any]:
+    """Compute optimal legal intra-round bench-to-court substitutions (T1 -> T2 -> T3)."""
+    try:
+        res = optimization_service.optimize_intra_round(
+            team_id=req.team_id,
+            season=req.season,
+            round_number=req.round_number,
+        )
+        return res.to_dict()
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/apply/intra-round")
+def apply_intra_round_endpoint(
+    req: SimulateIntraRoundRequest,
+    optimization_service: OptimizationService = Depends(get_optimization_service),
+    team_service: TeamService = Depends(get_team_service),
+    decision_service: DecisionService = Depends(get_decision_service),
+) -> dict[str, Any]:
+    """Apply the optimal intra-round substitutions directly to the team lineup."""
+    try:
+        res = optimization_service.optimize_intra_round(
+            team_id=req.team_id,
+            season=req.season,
+            round_number=req.round_number,
+        )
+        updated_team = team_service.update_lineup(
+            team_id=req.team_id,
+            starter_ids=res.starter_ids,
+            captain_id=res.captain_id,
+            sixth_man_id=res.sixth_man_id,
+            bench_ids=res.bench_ids,
+            coach_id=res.coach_id,
+        )
+
+        # Log decision
+        try:
+            from euroleague_fantasy_manager.tracking.models import TurnSubPayload
+            sub_out = res.substitutions[0]["out_player"]["player_id"] if res.substitutions else None
+            sub_in = res.substitutions[0]["in_player"]["player_id"] if res.substitutions else None
+            cap_old = res.captain_change_detail["old_captain"]["player_id"] if res.captain_change_detail else None
+            cap_new = res.captain_change_detail["new_captain"]["player_id"] if res.captain_change_detail else None
+            payload = TurnSubPayload(
+                t1_actuals={},
+                substituted_out_id=sub_out,
+                substituted_in_id=sub_in,
+                old_captain_id=cap_old,
+                new_captain_id=cap_new,
+                realized_sub_gain=res.net_gain,
+            )
+            decision_service.log_turn_sub(
+                team_id=req.team_id,
+                season=req.season,
+                round_number=updated_team.round_number,
+                turn_number=updated_team.turn_number,
+                recommended_turn_sub=payload,
+                actual_turn_sub=payload,
+                notes=f"Applied intra-round substitution with +{res.net_gain} FP net gain",
+            )
+        except Exception:
+            pass
+
+        return {
+            "success": True,
+            "message": f"Applied {len(res.substitutions)} intra-round substitution(s) (+{res.net_gain} FP gain)",
+            "lineup": res.to_dict(),
+        }
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post("/simulate/turn-sub")
 def simulate_turn_sub_endpoint(
     req: SimulateTurnSubRequest,
     scenario_service: ScenarioService = Depends(get_scenario_service),
 ) -> dict[str, Any]:
-    """Simulate Turn 1 -> Turn 2 substitutions with observed Turn 1 scores (Phase F)."""
+    """Legacy Turn 1 -> Turn 2 simulation endpoint."""
     try:
         parsed_scores = {int(k): float(v) for k, v in req.turn_1_scores.items()}
         res = scenario_service.simulate(
@@ -535,6 +679,8 @@ def list_players_endpoint(
             "price_tenths": c.price_tenths,
             "credits": c.credits,
             "expected_fp": round(c.expected_fp, 2),
+            "actual_fp": round(c.actual_fp, 2) if getattr(c, "actual_fp", None) is not None else None,
+            "has_played": getattr(c, "has_played", False),
             "probability_play": round(c.probability_play, 2),
             "expected_minutes": round(c.expected_minutes, 1),
             "fp_per_credit": val.get("fp_per_credit", 0.0),
@@ -612,6 +758,8 @@ def get_player_details_endpoint(
         "turn_number": player_row.get("turn_number", contract.turn_number if contract else 1),
         "avg_fantasy_pts": player_row.get("avg_fantasy_pts", 0.0),
         "last_match_pts": player_row.get("last_match_pts", 0.0),
+        "has_played": getattr(contract, "has_played", False) if contract else bool(player_row.get("has_played", False)),
+        "actual_fp": round(getattr(contract, "actual_fp", 0.0), 2) if (contract and getattr(contract, "actual_fp", None) is not None) else (round(player_row.get("last_match_pts", 0.0), 2) if player_row.get("has_played") else None),
         "total_plus_tenths": player_row.get("total_plus_tenths", 0),
         "total_plus_credits": round((player_row.get("total_plus_tenths", 0)) / 10.0, 1),
         "popularity": player_row.get("popularity", 0.0),

@@ -129,3 +129,23 @@ def test_snapshot_store_and_import_squad_end_to_end(tmp_path: Path) -> None:
         ]
     )
     assert rc_trade == 0
+
+
+def test_schema_migration_idempotent(tmp_path: Path):
+    """Verify schema migrations are versioned and can run multiple times safely."""
+    db_file = tmp_path / "test_migration.sqlite3"
+
+    # Initialize store 1
+    store1 = SnapshotStore(database_path=db_file)
+    with store1._connect() as conn:
+        assert store1._get_schema_version(conn) == 2
+        info1 = conn.execute("PRAGMA table_info(players)").fetchall()
+        assert any(col[1] == "has_played" for col in info1)
+
+    # Initialize store 2 on same database (idempotent migration)
+    store2 = SnapshotStore(database_path=db_file)
+    with store2._connect() as conn:
+        assert store2._get_schema_version(conn) == 2
+        info2 = conn.execute("PRAGMA table_info(players)").fetchall()
+        assert any(col[1] == "has_played" for col in info2)
+

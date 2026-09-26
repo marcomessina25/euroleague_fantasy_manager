@@ -65,7 +65,18 @@ class TeamService:
             squad=list(squad or []),
             settings=parsed_settings,
         )
-        return self.store.create_team(team)
+        created = self.store.create_team(team)
+        if created.squad:
+            self.store.save_round_checkpoint(
+                team_id=team_id,
+                round_number=round_number,
+                season=season,
+                bank_tenths=bank_tenths,
+                transfers_remaining=4,
+                squad=created.squad,
+                overwrite=True,
+            )
+        return created
 
     def get_team(self, team_id: str) -> Team:
         """Retrieve team by ID, raising KeyError if not found."""
@@ -132,6 +143,16 @@ class TeamService:
             self._validate_roster(roster_units)
 
         self.store.save_squad(team_id, round_number, roster_units)
+        if roster_units:
+            self.store.save_round_checkpoint(
+                team_id=team_id,
+                round_number=round_number,
+                season=team.season,
+                bank_tenths=team.bank_tenths,
+                transfers_remaining=team.transfers_remaining,
+                squad=roster_units,
+                overwrite=False,
+            )
         team.round_number = round_number
         team.squad = list(roster_units)
         return self.store.update_team(team)
@@ -251,3 +272,16 @@ class TeamService:
                 raise ValueError(
                     f"Invalid squad: requires {req} {key}s, found {counts.get(key, 0)}."
                 )
+
+    def revert_to_round_start(
+        self,
+        team_id: str,
+        season: str = "2026/27",
+        round_number: int | None = None,
+    ) -> Team:
+        """Revert team squad, bank, and transfers remaining back to round start baseline."""
+        return self.store.revert_to_round_start(
+            team_id=team_id,
+            season=season,
+            round_number=round_number,
+        )

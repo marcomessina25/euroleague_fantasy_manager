@@ -400,3 +400,57 @@ def execute_transfers(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+
+class RevertRoundStartRequest(BaseModel):
+    season: str = "2026/27"
+    round_number: int | None = None
+
+
+@router.post("/{team_id}/revert-round-start")
+def revert_round_start(
+    team_id: str,
+    req: RevertRoundStartRequest | None = None,
+    service: TeamService = Depends(get_team_service),
+    decision_service: DecisionService = Depends(get_decision_service),
+) -> dict[str, Any]:
+    """Revert team transfers, substitutions, and budget back to the round start baseline."""
+    try:
+        season = req.season if req else "2026/27"
+        rnd = req.round_number if req else None
+        restored_team = service.revert_to_round_start(team_id=team_id, season=season, round_number=rnd)
+
+        # Log decision event
+        try:
+            from euroleague_fantasy_manager.tracking.models import LineupPayload
+            l_payload = LineupPayload(
+                formation="2-2-1",
+                starter_ids=tuple(u.player_id for u in restored_team.squad if u.is_starter),
+                captain_id=restored_team.captain_id or 0,
+                sixth_man_id=restored_team.sixth_man_id or 0,
+                bench_ids=tuple(u.player_id for u in restored_team.squad if u.is_bench),
+                head_coach_id=restored_team.coach_id or 0,
+            )
+            decision_service.log_lineup(
+                team_id=team_id,
+                season=season,
+                round_number=restored_team.round_number,
+                turn_number=restored_team.turn_number,
+                recommended_lineup=l_payload,
+                actual_lineup=l_payload,
+                notes=f"Reverted team state to Round {restored_team.round_number} start baseline",
+            )
+        except Exception:
+            pass
+
+        return {
+            "success": True,
+            "message": f"Successfully reverted team to Round {restored_team.round_number} start baseline.",
+            "team": restored_team.to_dict(),
+        }
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+

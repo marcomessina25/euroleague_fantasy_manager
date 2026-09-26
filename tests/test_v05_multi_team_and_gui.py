@@ -670,7 +670,8 @@ def test_snapshot_store_fallback_and_update_endpoint(tmp_path: Path):
     assert rob.player_name == "Justin Robinson"
     assert rob.position == Position.GUARD
     assert rob.credits == 12.2
-    assert rob.expected_fp == 12.2  # Price-derived prior when avg_fp is 0
+    assert rob.expected_fp == 14.66  # Quantitative decomposed prior (never equal to cost)
+    assert rob.expected_fp != rob.credits
     assert rob.opponent_code == "RMB"
     assert rob.is_home is True
 
@@ -1082,6 +1083,613 @@ def test_audit_failure_transactional_rollbacks(tmp_path: Path):
     persisted_pids = {u.player_id for u in persisted_team.squad}
     assert persisted_pids == orig_pids
     assert persisted_team.transfers_remaining == 4
+
+
+def test_live_scores_vs_expected_scores_never_equal_cost(tmp_path: Path):
+    """Verify that during an active round, played players show actual scores, unplayed show expected,
+
+    and expected score is calculated via decomposed model rather than equating to cost."""
+    import sqlite3
+    from euroleague_fantasy_manager.storage import SnapshotStore
+    from euroleague_fantasy_manager.services.prediction_service import PredictionService
+    from euroleague_fantasy_manager.web.app import create_app
+    from starlette.testclient import TestClient
+
+    db_file = tmp_path / "live_scores.sqlite3"
+    with sqlite3.connect(db_file) as conn:
+        conn.execute("""
+            CREATE TABLE snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                league_id INTEGER NOT NULL,
+                competition_code TEXT NOT NULL,
+                season_code TEXT NOT NULL,
+                matchday_id INTEGER,
+                round_number INTEGER NOT NULL,
+                num_turns INTEGER NOT NULL,
+                raw_archive_path TEXT
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE players (
+                snapshot_id INTEGER NOT NULL,
+                id INTEGER NOT NULL,
+                first_name TEXT,
+                last_name TEXT,
+                name TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                position_code TEXT NOT NULL,
+                team_id INTEGER NOT NULL,
+                team_code TEXT NOT NULL,
+                team_name TEXT NOT NULL,
+                price_tenths INTEGER NOT NULL,
+                status TEXT,
+                probability_of_playing REAL,
+                turn_number INTEGER,
+                last_match_pts REAL,
+                avg_fantasy_pts REAL,
+                total_plus_tenths INTEGER,
+                popularity REAL,
+                is_injured INTEGER,
+                is_on_fire INTEGER,
+                has_played INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE fixtures (
+                snapshot_id INTEGER NOT NULL,
+                id INTEGER NOT NULL,
+                round_number INTEGER NOT NULL,
+                turn_number INTEGER NOT NULL,
+                started_at TEXT,
+                status TEXT,
+                home_team_id INTEGER,
+                home_team_code TEXT,
+                away_team_id INTEGER,
+                away_team_code TEXT,
+                home_score INTEGER,
+                away_score INTEGER
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE teams (
+                snapshot_id INTEGER NOT NULL,
+                id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                short_name TEXT NOT NULL
+            );
+        """)
+
+        conn.execute("INSERT INTO snapshots VALUES (1, '2026-09-25T12:00:00Z', 10, 'E', 'E2026', 1, 1, 2, 'raw.json')")
+        # Player 1: Played Turn 1, scored 21.4 FP, price 13.0 cr (130 tenths)
+        conn.execute(
+            "INSERT INTO players VALUES (1, 101, 'Kendrick', 'Nunn', 'Kendrick Nunn', 1, 'G', 10, 'PAO', 'Panathinaikos', 130, 'starter', 1.0, 1, 21.4, 0.0, 0, 0.0, 0, 0, 1)"
+        )
+        # Player 2: Not yet played Turn 2, price 12.0 cr (120 tenths), avg_fantasy_pts 0.0
+        conn.execute(
+            "INSERT INTO players VALUES (1, 102, 'Shane', 'Larkin', 'Shane Larkin', 1, 'G', 20, 'EFS', 'Anadolu Efes', 120, 'starter', 1.0, 2, 0.0, 0.0, 0, 0.0, 0, 0, 0)"
+        )
+        conn.execute(
+            "INSERT INTO fixtures VALUES (1, 1, 1, 1, '2026-09-24T18:00:00Z', 'played', 10, 'PAO', 30, 'BER', 85, 70)"
+        )
+        conn.execute(
+            "INSERT INTO fixtures VALUES (1, 2, 1, 2, '2026-09-25T20:00:00Z', 'scheduled', 20, 'EFS', 40, 'MCO', NULL, NULL)"
+        )
+
+    ps = PredictionService(database_path=db_file)
+    projs = ps.get_projections("2026/27", 1)
+    p_played = next(p for p in projs if p.player_id == 101)
+    p_unplayed = next(p for p in projs if p.player_id == 102)
+
+    # Played player
+    assert p_played.has_played is True
+    assert p_played.actual_fp == 21.4
+    assert p_played.credits == 13.0
+
+    # Unplayed player: expected score must NOT equal credits/cost
+    assert p_unplayed.has_played is False
+    assert p_unplayed.actual_fp is None
+    assert p_unplayed.credits == 12.0
+    assert p_unplayed.expected_fp > 0.0
+    assert p_unplayed.expected_fp != p_unplayed.credits
+    assert p_unplayed.expected_fp == 14.42  # Decomposed quantitative model
+
+
+def test_transfer_optimizer_speed_and_multiple_recommendations():
+    """Verify that transfer optimization runs fast (<1.5s) and yields multiple distinct options."""
+    import time
+    from euroleague_fantasy_manager.optimization.transfers import TransferOptimizer
+    from tests.test_v04_optimization import make_standard_squad, make_test_player
+
+    squad = make_standard_squad()
+    # Market with diverse candidate tiers
+    market = [
+        make_test_player(901, Position.GUARD, expected_fp=25.0, price_tenths=130),
+        make_test_player(902, Position.GUARD, expected_fp=24.0, price_tenths=120),
+        make_test_player(903, Position.GUARD, expected_fp=22.0, price_tenths=110),
+        make_test_player(904, Position.FORWARD, expected_fp=26.0, price_tenths=140),
+        make_test_player(905, Position.FORWARD, expected_fp=25.0, price_tenths=135),
+        make_test_player(906, Position.FORWARD, expected_fp=23.0, price_tenths=115),
+        make_test_player(907, Position.CENTER, expected_fp=27.0, price_tenths=150),
+        make_test_player(908, Position.CENTER, expected_fp=24.0, price_tenths=125),
+    ]
+
+    opt = TransferOptimizer()
+
+    # 1. Limited transfers: 2 trades
+    t0 = time.perf_counter()
+    res_2 = opt.optimize_transfers(current_squad=squad, market=market, bank_tenths=300, max_trades=2, top_n=3)
+    duration_2 = time.perf_counter() - t0
+
+    assert duration_2 < 1.5  # Sub-second fast screening
+    assert len(res_2.recommendations) > 1  # Proposes multiple options
+    # Options must be sorted by net transfer value descending
+    assert res_2.recommendations[0].net_transfer_value >= res_2.recommendations[1].net_transfer_value
+
+    # 2. Unlimited mode: multiple diverse overhaul options
+    t0 = time.perf_counter()
+    res_unlimited = opt.optimize_transfers(current_squad=squad, market=market, bank_tenths=500, max_trades=None, unlimited=True, top_n=3)
+    duration_unlimited = time.perf_counter() - t0
+
+    assert duration_unlimited < 1.5
+    assert len(res_unlimited.recommendations) >= 1
+
+
+def test_intra_round_optimizer_locks_played_bench_units():
+    """Verify IntraRoundSubstitutionOptimizer strictly locks played bench players, preserves coach,
+
+    and finds optimal court/sixth/captain combinations."""
+    from euroleague_fantasy_manager.optimization.intra_round import (
+        IntraRoundSubstitutionOptimizer,
+        IntraRoundPlayerUnit,
+    )
+
+    # 10 players + 1 coach
+    # 4 Guards, 4 Forwards, 2 Centers, 1 Head Coach
+    # G1: starter, played T1, scored 4.0 FP (underperformed)
+    # G2: starter, unplayed T2, expected 15.0 FP
+    # F1: starter, played T1, scored 22.0 FP (captain candidate)
+    # F2: starter, unplayed T2, expected 12.0 FP
+    # C1: starter, played T1, scored 14.0 FP
+    # 6th man: F3, played T1, scored 10.0 FP
+    # Bench:
+    # G3: bench, played T1, scored 18.0 FP (HAS PLAYED ON BENCH -> LOCKED! Cannot enter!)
+    # G4: bench, unplayed T2, expected 16.0 FP (eligible to enter!)
+    # F4: bench, unplayed T2, expected 8.0 FP
+    # C2: bench, unplayed T2, expected 7.0 FP
+    # HC: Coach, unplayed T2, expected 10.0 FP
+    squad_units = [
+        IntraRoundPlayerUnit(1, "G1", "G", current_role="starter", has_played=True, actual_fp=4.0, expected_fp=14.0),
+        IntraRoundPlayerUnit(2, "G2", "G", current_role="starter", is_captain=True, has_played=False, actual_fp=None, expected_fp=15.0),
+        IntraRoundPlayerUnit(3, "F1", "F", current_role="starter", has_played=True, actual_fp=22.0, expected_fp=15.0),
+        IntraRoundPlayerUnit(4, "F2", "F", current_role="starter", has_played=False, actual_fp=None, expected_fp=12.0),
+        IntraRoundPlayerUnit(5, "C1", "C", current_role="starter", has_played=True, actual_fp=14.0, expected_fp=13.0),
+        IntraRoundPlayerUnit(6, "F3", "F", current_role="sixth_man", has_played=True, actual_fp=10.0, expected_fp=11.0),
+        IntraRoundPlayerUnit(7, "G3_PlayedBench", "G", current_role="bench", has_played=True, actual_fp=18.0, expected_fp=14.0),
+        IntraRoundPlayerUnit(8, "G4_UnplayedBench", "G", current_role="bench", has_played=False, actual_fp=None, expected_fp=16.0),
+        IntraRoundPlayerUnit(9, "F4", "F", current_role="bench", has_played=False, actual_fp=None, expected_fp=8.0),
+        IntraRoundPlayerUnit(10, "C2", "C", current_role="bench", has_played=False, actual_fp=None, expected_fp=7.0),
+        IntraRoundPlayerUnit(11, "Coach", "HC", current_role="coach", has_played=False, actual_fp=None, expected_fp=10.0),
+    ]
+
+    opt = IntraRoundSubstitutionOptimizer()
+    res = opt.optimize(squad_units=squad_units, captain_id=2)
+
+    # 1. G3_PlayedBench (player_id=7) was on bench and has played. It must NEVER enter starters or sixth man!
+    assert 7 not in res.starter_ids
+    assert res.sixth_man_id != 7
+    assert 7 in res.bench_ids
+
+    # 2. Optimal lineup must have promoted G4_UnplayedBench (player_id=8) or another unplayed bench player
+    assert 8 in res.starter_ids or res.sixth_man_id == 8
+
+    # 3. Captaincy: G2 is unplayed with 15.0 expected. G4 is unplayed with 16.0 expected.
+    # Player 3 has already played and cannot be selected as new captain mid-round.
+    # Captaincy switches to eligible unplayed starter G4_UnplayedBench (player_id=8)!
+    assert res.captain_id != 2
+    assert res.captain_id == 8
+
+    # 4. Formations and structural integrity
+    assert len(res.starter_ids) == 5
+    assert len(res.bench_ids) == 4
+    assert res.coach_id == 11
+    assert res.net_gain > 0.0
+
+
+def test_intra_round_optimizer_captaincy_rules():
+    """Verify captaincy rules: if captain played, cannot switch; if not played, can switch."""
+    from euroleague_fantasy_manager.optimization.intra_round import (
+        IntraRoundSubstitutionOptimizer,
+        IntraRoundPlayerUnit,
+    )
+
+    # Case 1: Current captain played T1 -> Must remain captain
+    squad_played_cap = [
+        IntraRoundPlayerUnit(1, "CaptPlayed", "G", current_role="starter", is_captain=True, has_played=True, actual_fp=8.0, expected_fp=14.0),
+        IntraRoundPlayerUnit(2, "G2", "G", current_role="starter", has_played=False, actual_fp=None, expected_fp=18.0),
+        IntraRoundPlayerUnit(3, "F1", "F", current_role="starter", has_played=False, actual_fp=None, expected_fp=15.0),
+        IntraRoundPlayerUnit(4, "F2", "F", current_role="starter", has_played=False, actual_fp=None, expected_fp=12.0),
+        IntraRoundPlayerUnit(5, "C1", "C", current_role="starter", has_played=False, actual_fp=None, expected_fp=13.0),
+        IntraRoundPlayerUnit(6, "F3", "F", current_role="sixth_man", has_played=False, actual_fp=None, expected_fp=11.0),
+        IntraRoundPlayerUnit(7, "G3", "G", current_role="bench", has_played=False, actual_fp=None, expected_fp=8.0),
+        IntraRoundPlayerUnit(8, "G4", "G", current_role="bench", has_played=False, actual_fp=None, expected_fp=7.0),
+        IntraRoundPlayerUnit(9, "F4", "F", current_role="bench", has_played=False, actual_fp=None, expected_fp=6.0),
+        IntraRoundPlayerUnit(10, "C2", "C", current_role="bench", has_played=False, actual_fp=None, expected_fp=5.0),
+        IntraRoundPlayerUnit(11, "Coach", "HC", current_role="coach", has_played=False, actual_fp=None, expected_fp=10.0),
+    ]
+    res1 = IntraRoundSubstitutionOptimizer().optimize(squad_played_cap, captain_id=1)
+    assert res1.captain_id == 1, "Played captain must be retained; cannot switch"
+
+    # Case 2: Current captain NOT played; unplayed alternative is better -> switches
+    squad_unplayed_cap = [
+        IntraRoundPlayerUnit(1, "CaptUnplayed", "G", current_role="starter", is_captain=True, has_played=False, actual_fp=None, expected_fp=10.0),
+        IntraRoundPlayerUnit(2, "G2", "G", current_role="starter", has_played=False, actual_fp=None, expected_fp=18.0),
+        IntraRoundPlayerUnit(3, "F1", "F", current_role="starter", has_played=False, actual_fp=None, expected_fp=15.0),
+        IntraRoundPlayerUnit(4, "F2", "F", current_role="starter", has_played=False, actual_fp=None, expected_fp=12.0),
+        IntraRoundPlayerUnit(5, "C1", "C", current_role="starter", has_played=False, actual_fp=None, expected_fp=13.0),
+        IntraRoundPlayerUnit(6, "F3", "F", current_role="sixth_man", has_played=False, actual_fp=None, expected_fp=11.0),
+        IntraRoundPlayerUnit(7, "G3", "G", current_role="bench", has_played=False, actual_fp=None, expected_fp=8.0),
+        IntraRoundPlayerUnit(8, "G4", "G", current_role="bench", has_played=False, actual_fp=None, expected_fp=7.0),
+        IntraRoundPlayerUnit(9, "F4", "F", current_role="bench", has_played=False, actual_fp=None, expected_fp=6.0),
+        IntraRoundPlayerUnit(10, "C2", "C", current_role="bench", has_played=False, actual_fp=None, expected_fp=5.0),
+        IntraRoundPlayerUnit(11, "Coach", "HC", current_role="coach", has_played=False, actual_fp=None, expected_fp=10.0),
+    ]
+    res2 = IntraRoundSubstitutionOptimizer().optimize(squad_unplayed_cap, captain_id=1)
+    assert res2.captain_id == 2, "Unplayed captain must switch to higher projected starter G2"
+
+
+def test_revert_round_start_checkpoint_lifecycle(tmp_path: Path):
+    """Verify team_round_checkpoints persistence and revert_to_round_start rollback."""
+    db_file = tmp_path / "teams_checkpoint.sqlite3"
+    ts = TeamService(db_path=db_file)
+
+    team = ts.create_team("checkpoint_team", "Checkpoint Team", season="2026/27", round_number=1, bank_tenths=150)
+    contracts = _build_test_squad_contracts()
+    units = _build_team_roster_units(contracts)
+    ts.set_squad(team.team_id, round_number=1, roster_units=units, validate=False)
+
+    initial_team = ts.get_team(team.team_id)
+    initial_pids = {u.player_id for u in initial_team.squad}
+    initial_bank = initial_team.bank_tenths
+    initial_transfers = initial_team.transfers_remaining
+
+    # Simulate changes during the round: transfer and squad alteration
+    ts.update_team(team.team_id, bank_tenths=50, transfers_remaining=2)
+    # Remove one player and add another
+    mod_units = list(initial_team.squad[:-1])
+    ts.set_squad(team.team_id, 1, mod_units, validate=False)
+
+    modified_team = ts.get_team(team.team_id)
+    assert modified_team.bank_tenths == 50
+    assert modified_team.transfers_remaining == 2
+    assert len(modified_team.squad) == 10
+
+    # Execute Revert
+    reverted_team = ts.revert_to_round_start(team.team_id, season="2026/27", round_number=1)
+
+    assert reverted_team.bank_tenths == initial_bank
+    assert reverted_team.transfers_remaining == initial_transfers
+    assert len(reverted_team.squad) == 11
+    reverted_pids = {u.player_id for u in reverted_team.squad}
+    assert reverted_pids == initial_pids
+
+
+def test_workstation_simulate_and_apply_intra_round_routes(tmp_path: Path):
+    """Verify workstation routes for intra-round simulation, application, and revert."""
+    db_file = tmp_path / "routes_test.sqlite3"
+    set_db_path(db_file)
+    app = create_app(db_path=db_file)
+    client = TestClient(app)
+
+    ts = TeamService(db_path=db_file)
+    ds = DecisionService(db_path=db_file)
+
+    team = ts.create_team("sub_team", "Sub Team", season="2026/27", round_number=1, bank_tenths=100)
+    contracts = _build_test_squad_contracts()
+    units = _build_team_roster_units(contracts)
+    ts.set_squad(team.team_id, round_number=1, roster_units=units, validate=False)
+
+    # 1. Simulate intra-round
+    sim_res = client.post("/api/workstation/simulate/intra-round", json={
+        "team_id": team.team_id,
+        "season": "2026/27",
+        "round_number": 1,
+    })
+    assert sim_res.status_code == 200
+    sim_data = sim_res.json()
+    assert "baseline_score" in sim_data
+    assert "optimal_score" in sim_data
+    assert "net_gain" in sim_data
+    assert "recommended_substitutions" in sim_data
+
+    # 2. Apply intra-round substitutions
+    apply_res = client.post("/api/workstation/apply/intra-round", json={
+        "team_id": team.team_id,
+        "season": "2026/27",
+        "round_number": 1,
+    })
+    assert apply_res.status_code == 200
+    apply_data = apply_res.json()
+    assert apply_data["success"] is True
+
+    # 3. Check decisions logged
+    decisions = ds.list_decisions(team.team_id)
+    assert any(d.decision_type == DecisionType.TURN_SUB for d in decisions)
+
+    # 4. Revert to round start
+    revert_res = client.post(f"/api/teams/{team.team_id}/revert-round-start", json={
+        "season": "2026/27",
+        "round_number": 1,
+    })
+    assert revert_res.status_code == 200
+    revert_data = revert_res.json()
+    assert revert_data["success"] is True
+
+
+def test_checkpoint_exact_match_or_raise(tmp_path: Path):
+    """Verify get_round_checkpoint raises ValueError if exact checkpoint is not found."""
+    db_file = tmp_path / "teams_failfast.sqlite3"
+    ts = TeamService(db_path=db_file)
+    team = ts.create_team("test_ff", "Test Team", season="2026/27", round_number=1)
+    contracts = _build_test_squad_contracts()
+    units = _build_team_roster_units(contracts)
+    ts.set_squad(team.team_id, round_number=1, roster_units=units, validate=False)
+
+    # Checkpoint exists for round 1
+    checkpoint = ts.store.get_round_checkpoint(team.team_id, 1, "2026/27")
+    assert checkpoint is not None
+    assert checkpoint["round_number"] == 1
+
+    # No checkpoint for round 2 -> must raise ValueError
+    with pytest.raises(ValueError, match="No checkpoint found"):
+        ts.store.get_round_checkpoint(team.team_id, 2, "2026/27")
+
+    # get_latest_checkpoint_before_round returns round 1 checkpoint for round 2 query
+    latest = ts.store.get_latest_checkpoint_before_round(team.team_id, 2, "2026/27")
+    assert latest is not None
+    assert latest["round_number"] == 1
+
+
+def test_transfer_optimizer_multi_option_ranking():
+    """Verify Stage 2 exact ranking matches expected order of recommendations."""
+    from euroleague_fantasy_manager.optimization.transfers import TransferOptimizer
+    from tests.test_v04_optimization import make_standard_squad, make_test_player
+
+    squad = make_standard_squad()
+
+    # Create market with 3 clear candidate guards of different expected values
+    g_a = make_test_player(801, Position.GUARD, expected_fp=25.0, price_tenths=120)
+    g_b = make_test_player(802, Position.GUARD, expected_fp=22.0, price_tenths=120)
+    g_c = make_test_player(803, Position.GUARD, expected_fp=19.0, price_tenths=120)
+    market = [g_a, g_b, g_c]
+
+    opt = TransferOptimizer()
+    res = opt.optimize_transfers(current_squad=squad, market=market, bank_tenths=300, max_trades=1, top_n=3)
+
+    assert len(res.recommendations) >= 3
+    # Net transfer values must be strictly non-increasing
+    for i in range(len(res.recommendations) - 1):
+        assert res.recommendations[i].net_transfer_value >= res.recommendations[i + 1].net_transfer_value
+
+    # Verify no duplicate transfer packages
+    packages = [
+        (tuple(sorted(p.player_id for p in r.out_players)), tuple(sorted(p.player_id for p in r.in_players)))
+        for r in res.recommendations
+    ]
+    assert len(packages) == len(set(packages))
+
+    # Verify all recommendations respect bank constraints and valid lineups
+    for r in res.recommendations:
+        assert r.remaining_bank_tenths >= 0
+        assert r.new_lineup.is_valid
+
+    # Best recommendation must recruit top player 801
+    assert res.recommendations[0].in_players[0].player_id == 801
+
+    # Verify unlimited transfers mode also returns multiple ranked, diverse options
+    res_unlim = opt.optimize_transfers(current_squad=squad, market=market, bank_tenths=300, unlimited=True, top_n=3)
+    assert len(res_unlim.recommendations) >= 1
+    for i in range(len(res_unlim.recommendations) - 1):
+        assert res_unlim.recommendations[i].net_transfer_value >= res_unlim.recommendations[i + 1].net_transfer_value
+    for r in res_unlim.recommendations:
+        assert r.remaining_bank_tenths >= 0
+        assert r.new_lineup.is_valid
+
+
+def test_court_score_breakdown_consistency(tmp_path: Path):
+    """Verify runtime mathematical score breakdown consistency across unplayed, mid-round, and all-played states."""
+    import sqlite3
+    from euroleague_fantasy_manager.services.team_service import TeamService
+    from euroleague_fantasy_manager.web.app import create_app
+    from euroleague_fantasy_manager.web.deps import get_prediction_service, set_db_path
+
+    db_file = tmp_path / "court_breakdown_test.sqlite3"
+    set_db_path(db_file)
+    app = create_app(db_path=db_file)
+    client = TestClient(app)
+
+    # 1. Create team and squad
+    ts = TeamService(db_path=db_file)
+    team = ts.create_team("cb_team", "Consistency Team", season="2026/27", round_number=1)
+    contracts = _build_test_squad_contracts()
+    units = _build_team_roster_units(contracts)
+    ts.set_squad(team.team_id, round_number=1, roster_units=units, validate=False)
+
+    # 2. Insert mock snapshot with players into db
+    from euroleague_fantasy_manager.storage import SnapshotStore
+    SnapshotStore(db_file)
+    with sqlite3.connect(db_file) as conn:
+        conn.execute(
+            "INSERT INTO snapshots (id, created_at, league_id, season_code, round_number, num_turns) "
+            "VALUES (1, '2026-10-01T00:00:00Z', 1, 'E2026', 1, 2)"
+        )
+        for c in contracts:
+            conn.execute(
+                """
+                INSERT INTO players (
+                    snapshot_id, id, first_name, last_name, name, position, position_code,
+                    team_id, team_code, team_name, price_tenths, status, probability_of_playing,
+                    turn_number, last_match_pts, avg_fantasy_pts, total_plus_tenths,
+                    popularity, is_injured, is_on_fire, has_played
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    1,
+                    c.player_id,
+                    "",
+                    "",
+                    c.player_name,
+                    int(c.position),
+                    c.position.short_code,
+                    c.team_id or 1,
+                    c.team_code,
+                    "Team",
+                    c.price_tenths,
+                    "starter",
+                    1.0,
+                    c.turn_number,
+                    0.0,
+                    12.0,
+                    0,
+                    0.5,
+                    0,
+                    0,
+                    0,
+                ),
+            )
+
+    # State 1: All unplayed (start of round)
+    resp = client.get("/api/workstation/dashboard?team_id=cb_team&round_number=1")
+    assert resp.status_code == 200
+    lineup = resp.json()["current_lineup"]
+    assert lineup["played_count"] == 0
+    assert lineup["unplayed_count"] == 11
+    assert lineup["realized_total_fp"] == 0.0
+    assert lineup["expected_total_fp"] > 0.0
+    assert abs(lineup["unplayed_expected_fp"] - lineup["expected_total_fp"]) < 0.01
+    assert abs((lineup["realized_total_fp"] + lineup["unplayed_expected_fp"]) - lineup["expected_total_fp"]) < 0.01
+
+    # State 2: Mid-round (4 players played)
+    with sqlite3.connect(db_file) as conn:
+        conn.execute("UPDATE players SET has_played = 1, last_match_pts = 16.5 WHERE id IN (101, 102, 105, 110)")
+
+    get_prediction_service().clear_cache()
+
+    resp = client.get("/api/workstation/dashboard?team_id=cb_team&round_number=1")
+    assert resp.status_code == 200
+    lineup = resp.json()["current_lineup"]
+    assert lineup["played_count"] == 4
+    assert lineup["unplayed_count"] == 7
+    assert lineup["realized_total_fp"] > 0.0
+    assert lineup["unplayed_expected_fp"] > 0.0
+    assert abs((lineup["realized_total_fp"] + lineup["unplayed_expected_fp"]) - lineup["expected_total_fp"]) < 0.01
+
+    # State 3: All played (end of round)
+    with sqlite3.connect(db_file) as conn:
+        conn.execute("UPDATE players SET has_played = 1, last_match_pts = 14.0")
+
+    get_prediction_service().clear_cache()
+
+    resp = client.get("/api/workstation/dashboard?team_id=cb_team&round_number=1")
+    assert resp.status_code == 200
+    lineup = resp.json()["current_lineup"]
+    assert lineup["played_count"] == 11
+    assert lineup["unplayed_count"] == 0
+    assert lineup["unplayed_expected_fp"] == 0.0
+    assert lineup["realized_total_fp"] > 0.0
+    assert abs(lineup["realized_total_fp"] - lineup["expected_total_fp"]) < 0.01
+    assert abs((lineup["realized_total_fp"] + lineup["unplayed_expected_fp"]) - lineup["expected_total_fp"]) < 0.01
+
+
+def test_transfer_optimizer_performance_budget():
+    """Verify transfer optimization on 200-player market finishes comfortably under 1.5s per trade count."""
+    import time
+    from euroleague_fantasy_manager.models import Position
+    from euroleague_fantasy_manager.optimization.transfers import TransferOptimizer
+    from tests.test_v04_optimization import make_standard_squad, make_test_player
+
+    squad = make_standard_squad()
+    market = [
+        make_test_player(
+            1000 + i,
+            [Position.GUARD, Position.FORWARD, Position.CENTER][i % 3],
+            expected_fp=5.0 + (i % 25),
+            price_tenths=40 + (i % 150),
+        )
+        for i in range(200)
+    ]
+
+    opt = TransferOptimizer()
+
+    # Trade counts 1, 2, 3 and unlimited
+    for trades in (1, 2, 3):
+        t0 = time.perf_counter()
+        res = opt.optimize_transfers(current_squad=squad, market=market, bank_tenths=100, max_trades=trades)
+        elapsed = time.perf_counter() - t0
+        assert elapsed < 1.5, f"Transfer optimization with max_trades={trades} took {elapsed:.2f}s (budget: 1.5s)"
+        assert len(res.recommendations) > 0
+
+    # Unlimited transfers mode
+    t0 = time.perf_counter()
+    res_unlim = opt.optimize_transfers(current_squad=squad, market=market, bank_tenths=100, unlimited=True)
+    elapsed_unlim = time.perf_counter() - t0
+    assert elapsed_unlim < 1.5, f"Transfer optimization unlimited took {elapsed_unlim:.2f}s (budget: 1.5s)"
+    assert len(res_unlim.recommendations) > 0
+
+
+def test_v051_prediction_calibration_vs_v050(tmp_path: Path):
+    """Compare V0.5.0 and V0.5.1 prediction accuracy on historical / hermetic dataset."""
+    import sqlite3
+    from euroleague_fantasy_manager.evaluation.backtest_v051_predictions import run_v051_prediction_backtest
+    from euroleague_fantasy_manager.fixtures import DATABASE_PATH
+
+    # 1. Hermetic dataset verification
+    hermetic_db = tmp_path / "hermetic_eval.sqlite3"
+    with sqlite3.connect(hermetic_db) as conn:
+        conn.execute("""
+            CREATE TABLE eval_player_games (
+                season TEXT, round INTEGER, game_id INTEGER, game_date TEXT, player_id INTEGER,
+                position TEXT, team_id INTEGER, opponent_team_id INTEGER, home_away TEXT,
+                turn_number INTEGER, starter INTEGER, minutes REAL, points REAL, rebounds REAL,
+                assists REAL, steals REAL, blocks REAL, turnovers REAL, fouls REAL, fouls_drawn REAL,
+                fg_attempted REAL, fg_made REAL, ft_attempted REAL, ft_made REAL, three_attempted REAL,
+                three_made REAL, pir REAL, fantasy_points REAL, player_status TEXT,
+                pre_round_quotation_tenths INTEGER, pre_round_status TEXT, price_provenance TEXT
+            )
+        """)
+        for i in range(1, 31):
+            pos = ["G", "F", "C"][i % 3]
+            price_tenths = 80 + (i * 4)
+            starter = 1 if i % 2 == 0 else 0
+            minutes = 22.0 + (i % 8)
+            cr = price_tenths / 10.0
+            fp = 6.0 + cr * 0.9 + (i % 5)
+            conn.execute(
+                "INSERT INTO eval_player_games (season, round, player_id, position, pre_round_quotation_tenths, "
+                "home_away, starter, minutes, fantasy_points) VALUES ('E2025', 1, ?, ?, ?, 'H', ?, ?, ?)",
+                (1000 + i, pos, price_tenths, starter, minutes, fp),
+            )
+
+    hermetic_res = run_v051_prediction_backtest(database_path=hermetic_db)
+    assert hermetic_res.total_samples == 30
+    assert hermetic_res.passed_regression_gate
+    assert hermetic_res.v051_mae <= hermetic_res.v050_mae + 0.05
+    assert hermetic_res.v051_xm_mae < 10.0
+
+    # 2. If main database exists locally, verify full backtest passes regression gate
+    if DATABASE_PATH.exists():
+        real_res = run_v051_prediction_backtest(database_path=DATABASE_PATH)
+        assert real_res.total_samples > 0
+        assert real_res.passed_regression_gate
+        assert real_res.v051_mae <= real_res.v050_mae + 0.05
+        assert real_res.v051_spearman >= real_res.v050_spearman - 0.02
+
+
+
+
+
+
+
 
 
 

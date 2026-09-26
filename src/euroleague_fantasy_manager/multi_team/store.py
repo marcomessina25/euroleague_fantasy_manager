@@ -72,6 +72,18 @@ class TeamStore:
 
                 CREATE INDEX IF NOT EXISTS idx_managed_team_squads_lookup 
                 ON managed_team_squads(team_id, round_number);
+
+                CREATE TABLE IF NOT EXISTS team_round_checkpoints (
+                    team_id TEXT NOT NULL,
+                    round_number INTEGER NOT NULL,
+                    season TEXT NOT NULL,
+                    bank_tenths INTEGER NOT NULL,
+                    transfers_remaining INTEGER NOT NULL,
+                    squad_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (team_id, round_number, season),
+                    FOREIGN KEY (team_id) REFERENCES managed_teams(team_id) ON DELETE CASCADE
+                );
                 """
             )
 
@@ -367,3 +379,122 @@ class TeamStore:
             )
             for row in rows
         ]
+
+    def save_round_checkpoint(
+        self,
+        team_id: str,
+        round_number: int,
+        season: str,
+        bank_tenths: int,
+        transfers_remaining: int,
+        squad: Sequence[TeamRosterUnit],
+        overwrite: bool = False,
+    ) -> None:
+        """Save a snapshot of the squad state at the start of a round."""
+        squad_data = [u.to_dict() for u in squad]
+        squad_json = json.dumps(squad_data)
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            if not overwrite:
+                exists = conn.execute(
+                    "SELECT 1 FROM team_round_checkpoints WHERE team_id = ? AND round_number = ? AND season = ?;",
+                    (team_id, round_number, season),
+                ).fetchone()
+                if exists:
+                    return
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO team_round_checkpoints (
+                    team_id, round_number, season, bank_tenths, transfers_remaining,
+                    squad_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?);
+                """,
+                (team_id, round_number, season, bank_tenths, transfers_remaining, squad_json, now),
+            )
+
+    def get_round_checkpoint(
+        self,
+        team_id: str,
+        round_number: int,
+        season: str,
+    ) -> dict[str, Any]:
+        """Get the exact round start checkpoint for a team. Raises ValueError if not found."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM team_round_checkpoints
+                WHERE team_id = ? AND round_number = ? AND season = ?;
+                """,
+                (team_id, round_number, season),
+            ).fetchone()
+            if not row:
+                raise ValueError(
+                    f"No checkpoint found for team '{team_id}' in Round {round_number}, season '{season}'."
+                )
+            return {
+                "team_id": row["team_id"],
+                "round_number": row["round_number"],
+                "season": row["season"],
+                "bank_tenths": row["bank_tenths"],
+                "transfers_remaining": row["transfers_remaining"],
+                "squad": [TeamRosterUnit.from_dict(d) for d in json.loads(row["squad_json"])],
+                "created_at": row["created_at"],
+            }
+
+    def get_latest_checkpoint_before_round(
+        self,
+        team_id: str,
+        round_number: int,
+        season: str,
+    ) -> dict[str, Any] | None:
+        """Get the latest checkpoint at or before round_number. Returns None if not found."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM team_round_checkpoints
+                WHERE team_id = ? AND season = ? AND round_number <= ?
+                ORDER BY round_number DESC LIMIT 1;
+                """,
+                (team_id, season, round_number),
+            ).fetchone()
+            if not row:
+                return None
+            return {
+                "team_id": row["team_id"],
+                "round_number": row["round_number"],
+                "season": row["season"],
+                "bank_tenths": row["bank_tenths"],
+                "transfers_remaining": row["transfers_remaining"],
+                "squad": [TeamRosterUnit.from_dict(d) for d in json.loads(row["squad_json"])],
+                "created_at": row["created_at"],
+            }
+
+    def revert_to_round_start(
+        self,
+        team_id: str,
+        season: str = "2026/27",
+        round_number: int | None = None,
+    ) -> Team:
+        """Revert team transfers and substitutions back to the round start baseline."""
+        team = self.get_team(team_id)
+        rnd = round_number or team.round_number
+        checkpoint = self.get_round_checkpoint(team_id, rnd, season)
+
+        restored_squad = checkpoint["squad"]
+        restored_bank = checkpoint["bank_tenths"]
+        restored_transfers = 4  # Standard fresh round transfers
+
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE managed_teams SET
+                    bank_tenths = ?,
+                    transfers_remaining = ?,
+                    updated_at = ?
+                WHERE team_id = ?;
+                """,
+                (restored_bank, restored_transfers, datetime.now(timezone.utc).isoformat(), team_id),
+            )
+            self._save_squad_conn(conn, team_id, rnd, restored_squad)
+
+        return self.get_team(team_id)

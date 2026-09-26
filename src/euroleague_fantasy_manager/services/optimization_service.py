@@ -21,6 +21,11 @@ from euroleague_fantasy_manager.optimization.initial_team import (
     optimize_initial_team,
     optimize_initial_team_detailed,
 )
+from euroleague_fantasy_manager.optimization.intra_round import (
+    IntraRoundPlayerUnit,
+    IntraRoundSubstitutionOptimizer,
+    IntraRoundSubstitutionResult,
+)
 from euroleague_fantasy_manager.optimization.lineup import (
     FixedSquadLineupOptimizer,
     OptimalLineupDecision,
@@ -83,6 +88,45 @@ class OptimizationService:
         self.lineup_optimizer = FixedSquadLineupOptimizer(constraints=self.constraints)
         self.transfer_optimizer = TransferOptimizer(constraints=self.constraints)
         self.multi_round_optimizer = MultiRoundOptimizer(constraints=self.constraints)
+        self.intra_round_optimizer = IntraRoundSubstitutionOptimizer()
+
+    def optimize_intra_round(
+        self,
+        team_id: str,
+        season: str = "2026/27",
+        round_number: int | None = None,
+    ) -> IntraRoundSubstitutionResult:
+        """Compute optimal legal intra-round bench-to-court substitutions."""
+        team = self.team_service.get_team(team_id)
+        rnd = round_number or team.round_number
+        proj_dict = self.prediction_service.get_projections_dict(season, rnd)
+
+        units: list[IntraRoundPlayerUnit] = []
+        for u in team.squad:
+            c = proj_dict.get(u.player_id)
+            has_played = bool(c.has_played if c else False)
+            actual_fp = c.actual_fp if c else None
+            expected_fp = float(c.expected_fp) if c else round(u.current_price_tenths / 10.0, 2)
+            turn_num = int(c.turn_number) if c else int(u.turn_number)
+
+            role = "starter" if u.is_starter else ("sixth_man" if u.is_sixth_man else ("coach" if u.is_coach else "bench"))
+            units.append(
+                IntraRoundPlayerUnit(
+                    player_id=u.player_id,
+                    name=u.name,
+                    position=u.position,
+                    team_code=u.team_code,
+                    credits=round(u.current_price_tenths / 10.0, 1),
+                    turn_number=turn_num,
+                    has_played=has_played,
+                    actual_fp=actual_fp,
+                    expected_fp=expected_fp,
+                    current_role=role,
+                    is_captain=u.is_captain,
+                )
+            )
+
+        return self.intra_round_optimizer.optimize(units, captain_id=team.captain_id)
 
     def optimize_lineup(
         self,
