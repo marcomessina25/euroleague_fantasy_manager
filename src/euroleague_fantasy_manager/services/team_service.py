@@ -33,6 +33,7 @@ class TeamService:
         self,
         team_id: str,
         name: str,
+        league: str = "euroleague",
         mode: str = "classic",
         season: str = "2026/27",
         round_number: int = 1,
@@ -41,7 +42,7 @@ class TeamService:
         settings: TeamSettings | dict[str, Any] | None = None,
         squad: Sequence[TeamRosterUnit] | None = None,
     ) -> Team:
-        """Create a new isolated team profile (max 3)."""
+        """Create a new isolated team profile (max 6)."""
         existing = self.store.get_team(team_id)
         if existing:
             raise ValueError(f"Team with ID '{team_id}' already exists.")
@@ -56,6 +57,7 @@ class TeamService:
         team = Team(
             team_id=team_id,
             name=name,
+            league=league,
             mode=mode,
             season=season,
             round_number=round_number,
@@ -156,6 +158,20 @@ class TeamService:
         team.round_number = round_number
         team.squad = list(roster_units)
         return self.store.update_team(team)
+
+    def update_team_squad(
+        self,
+        team_id: str,
+        squad: Sequence[TeamRosterUnit],
+    ) -> Team:
+        """Convenience method to update squad for the team's current round."""
+        team = self.get_team(team_id)
+        return self.set_squad(
+            team_id=team_id,
+            round_number=team.round_number,
+            roster_units=squad,
+            validate=False,
+        )
 
     def update_lineup(
         self,

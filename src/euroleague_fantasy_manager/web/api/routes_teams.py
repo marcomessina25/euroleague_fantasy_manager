@@ -32,6 +32,7 @@ router = APIRouter(prefix="/api/teams", tags=["teams"])
 class CreateTeamRequest(BaseModel):
     team_id: str | None = None
     name: str
+    league: str = "euroleague"
     mode: str = "classic"
     season: str = "2026/27"
     round_number: int = 1
@@ -126,6 +127,7 @@ def create_team(
         team = service.create_team(
             team_id=tid,
             name=req.name,
+            league=req.league,
             mode=req.mode,
             season=req.season,
             round_number=req.round_number,

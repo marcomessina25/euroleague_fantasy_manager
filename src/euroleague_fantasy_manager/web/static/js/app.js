@@ -34,6 +34,8 @@ function initNav() {
         if (state.dashboard) renderIntraRoundSquadTable(state.dashboard.current_lineup || state.dashboard.optimal_lineup);
       } else if (targetId === "evaluation") {
         loadEvaluation();
+      } else if (targetId === "intelligence") {
+        loadIntelligenceView();
       }
     });
   });
@@ -56,6 +58,7 @@ async function loadTeams() {
         body: JSON.stringify({
           team_id: "team_1",
           name: "Primary Squad",
+          league: "euroleague",
           season: state.season,
           round_number: 1,
           turn_number: 1,
@@ -77,7 +80,8 @@ async function loadTeams() {
 
       const btn = document.createElement("button");
       btn.className = `team-tab-btn ${t.team_id === state.activeTeamId ? "active" : ""}`;
-      btn.textContent = t.name;
+      const leagueCode = (t.league || "euroleague").toLowerCase() === "eurocup" ? "EC" : "EL";
+      btn.textContent = `[${leagueCode}] ${t.name}`;
       btn.onclick = () => switchTeam(t.team_id);
       tabWrap.appendChild(btn);
 
@@ -109,13 +113,13 @@ async function loadTeams() {
       container.appendChild(tabWrap);
     });
 
-    // Add Team Button (enforces 3 teams max limit)
+    // Add Team Button (enforces 6 teams max limit)
     const addBtn = document.createElement("button");
     addBtn.className = "btn-add-team";
-    if (state.teams.length >= 3) {
+    if (state.teams.length >= 6) {
       addBtn.disabled = true;
-      addBtn.textContent = "+ Add Team (Max 3)";
-      addBtn.title = "Maximum capacity of 3 teams reached";
+      addBtn.textContent = "+ Add Team (Max 6)";
+      addBtn.title = "Maximum capacity of 6 teams reached";
     } else {
       addBtn.textContent = "+ Add Team";
       addBtn.title = "Create a new fantasy team with initial squad builder";
@@ -1853,12 +1857,16 @@ async function submitCreateTeam() {
   btn.disabled = true;
   btn.textContent = "⏳ Creating Team...";
 
+  const leagueSelect = document.getElementById("tb-team-league");
+  const league = leagueSelect ? leagueSelect.value : "euroleague";
+
   try {
     const res = await fetch("/api/teams", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name: name,
+        league: league,
         season: state.season,
         player_ids: playerIds,
         recommended_player_ids: recIds,
@@ -1925,4 +1933,243 @@ async function triggerUpdateData() {
     if (icon) icon.style.display = 'inline';
     if (text) text.textContent = 'Update Data';
   }
+}
+
+
+// =========================================================================
+// Strategic Intelligence & LLM Copilot (V0.6)
+// =========================================================================
+let intelligenceState = {
+  dossier: null,
+  strategicAnalysis: null,
+  copilotAdvice: null,
+  providers: [],
+};
+
+async function loadIntelligenceView() {
+  if (!state.activeTeamId) return;
+
+  const currentTeam = state.teams.find((t) => t.team_id === state.activeTeamId);
+  const leagueStr = currentTeam && currentTeam.league ? currentTeam.league.toUpperCase() : "EUROLEAGUE";
+  const leagueBadge = document.getElementById("dossier-league-badge");
+  if (leagueBadge) leagueBadge.textContent = leagueStr;
+
+  // 1. Fetch available providers
+  try {
+    const provRes = await fetch("/api/workstation/copilot/providers");
+    if (provRes.ok) {
+      intelligenceState.providers = await provRes.json();
+      populateProvidersDropdown(intelligenceState.providers);
+    }
+  } catch (err) {
+    console.error("Failed to load copilot providers:", err);
+  }
+
+  // 2. Fetch dossier and strategic analysis
+  try {
+    const dossierRes = await fetch(`/api/workstation/dossier?team_id=${state.activeTeamId}&season=${encodeURIComponent(state.season)}`);
+    if (dossierRes.ok) {
+      intelligenceState.dossier = await dossierRes.json();
+      renderDossierView(intelligenceState.dossier);
+    }
+
+    const stratRes = await fetch(`/api/workstation/strategic-analysis?team_id=${state.activeTeamId}&season=${encodeURIComponent(state.season)}`);
+    if (stratRes.ok) {
+      intelligenceState.strategicAnalysis = await stratRes.json();
+      renderStrategicAnalysisView(intelligenceState.strategicAnalysis);
+    }
+  } catch (err) {
+    console.error("Failed to load intelligence data:", err);
+  }
+}
+
+function populateProvidersDropdown(providers) {
+  const sel = document.getElementById("copilot-provider");
+  if (!sel || !providers || providers.length === 0) return;
+  sel.innerHTML = "";
+  providers.forEach((p) => {
+    const opt = document.createElement("option");
+    opt.value = p.provider_name;
+    const availMark = p.available ? "✓" : "⚠️";
+    opt.textContent = `${availMark} ${p.display_name} (${p.default_model})`;
+    sel.appendChild(opt);
+  });
+}
+
+function onProviderSelected() {
+  // Provider selection change hook
+}
+
+function renderDossierView(dossier) {
+  const provBadge = document.getElementById("dossier-provenance-badge");
+  if (provBadge && dossier.provenance) {
+    provBadge.textContent = `Dossier: ${dossier.provenance.config_hash}`;
+  }
+  const rawEl = document.getElementById("dossier-raw-json");
+  if (rawEl) {
+    rawEl.textContent = JSON.stringify(dossier, null, 2);
+  }
+}
+
+function renderStrategicAnalysisView(strat) {
+  // 1. Assumptions
+  const asmContainer = document.getElementById("strat-assumptions-list");
+  if (asmContainer && strat.assumptions) {
+    asmContainer.innerHTML = "";
+    strat.assumptions.forEach((asm) => {
+      const card = document.createElement("div");
+      card.style = "background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; padding:0.75rem; font-size:0.85rem;";
+      const sensColor = asm.sensitivity_label === "high" ? "var(--accent-red)" : (asm.sensitivity_label === "medium" ? "var(--accent-gold)" : "var(--accent-green)");
+      card.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.25rem;">
+          <strong style="text-transform:uppercase; font-size:0.75rem; color:var(--text-muted);">${asm.category}</strong>
+          <span style="color:${sensColor}; font-weight:700; font-size:0.75rem;">Sensitivity: ${asm.sensitivity_label.toUpperCase()}</span>
+        </div>
+        <div>${asm.statement}</div>
+      `;
+      asmContainer.appendChild(card);
+    });
+  }
+
+  // 2. Sensitivities
+  const sensContainer = document.getElementById("strat-sensitivities-list");
+  if (sensContainer && strat.sensitivities) {
+    sensContainer.innerHTML = "";
+    strat.sensitivities.forEach((s) => {
+      const card = document.createElement("div");
+      card.style = "background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; padding:0.75rem; font-size:0.85rem;";
+      const swingStr = s.score_swing_fp >= 0 ? `+${s.score_swing_fp.toFixed(2)}` : `${s.score_swing_fp.toFixed(2)}`;
+      const changesRec = s.recommendation_changes ? "<span class='badge badge-red'>REC SHIFT</span>" : "<span class='badge badge-green'>STABLE</span>";
+      card.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.25rem;">
+          <strong style="color:var(--text-main); font-size:0.85rem;">${s.perturbation_name}</strong>
+          <div style="display:flex; gap:0.4rem; align-items:center;">
+            <span style="color:var(--accent-orange); font-weight:700;">${swingStr} FP</span>
+            ${changesRec}
+          </div>
+        </div>
+        <div style="color:var(--text-muted);">${s.summary}</div>
+      `;
+      sensContainer.appendChild(card);
+    });
+  }
+
+  // 3. Devil's Advocate Checklist
+  const checkTbody = document.getElementById("strat-checklist-tbody");
+  if (checkTbody && strat.devils_advocate_checklist) {
+    checkTbody.innerHTML = "";
+    strat.devils_advocate_checklist.forEach((item) => {
+      const tr = document.createElement("tr");
+      const markBadge = item.passed ? "<span class='badge badge-green'>PASS</span>" : "<span class='badge badge-red'>FLAG</span>";
+      tr.innerHTML = `
+        <td style="width:70px;">${markBadge}</td>
+        <td style="font-weight:600; font-size:0.85rem; width:160px;">${item.check_name}</td>
+        <td style="font-size:0.85rem; color:var(--text-muted);">${item.detail}</td>
+      `;
+      checkTbody.appendChild(tr);
+    });
+  }
+}
+
+async function triggerCopilotAdvise() {
+  if (!state.activeTeamId) return;
+
+  const btn = document.getElementById("btn-run-intelligence");
+  const spinner = document.getElementById("intel-spinner");
+  const icon = document.getElementById("intel-icon");
+  const btnText = document.getElementById("intel-btn-text");
+  const persona = document.getElementById("copilot-persona").value;
+  const provider = document.getElementById("copilot-provider").value;
+  const tier = document.getElementById("copilot-tier").value;
+
+  if (btn) btn.disabled = true;
+  if (spinner) spinner.style.display = "inline";
+  if (icon) icon.style.display = "none";
+  if (btnText) btnText.textContent = "Analyzing...";
+
+  try {
+    const res = await fetch("/api/workstation/copilot/advise", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        team_id: state.activeTeamId,
+        season: state.season,
+        persona: persona,
+        provider: provider,
+        tier: tier,
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      intelligenceState.copilotAdvice = data;
+
+      // Render Narrative text
+      const textBox = document.getElementById("copilot-advice-text");
+      if (textBox) {
+        textBox.textContent = data.analysis_text;
+      }
+
+      // Meta badge
+      const metaBadge = document.getElementById("copilot-meta-badge");
+      if (metaBadge) {
+        metaBadge.textContent = `${data.provider.toUpperCase()} (${data.model})`;
+      }
+
+      // Fallback banner
+      const fbBanner = document.getElementById("copilot-fallback-banner");
+      const fbReason = document.getElementById("copilot-fallback-reason");
+      if (fbBanner && fbReason) {
+        if (data.is_fallback) {
+          fbReason.textContent = data.fallback_reason || "Provider unavailable; offline heuristic analysis active.";
+          fbBanner.style.display = "block";
+        } else {
+          fbBanner.style.display = "none";
+        }
+      }
+
+      // Consistency status
+      const cStatus = document.getElementById("copilot-consistency-status");
+      if (cStatus && data.consistency) {
+        if (data.consistency.is_consistent) {
+          cStatus.textContent = "✓ Consistency: 100% Grounded in Dossier";
+          cStatus.style.color = "var(--accent-green)";
+        } else {
+          const issues = data.consistency.rule_violations.concat(data.consistency.hallucinations).slice(0, 2);
+          cStatus.textContent = `⚠️ Flagged Consistency: ${issues.join("; ")}`;
+          cStatus.style.color = "var(--accent-gold)";
+        }
+      }
+
+      // Latency
+      const latEl = document.getElementById("copilot-latency");
+      if (latEl) {
+        latEl.textContent = `Latency: ${data.latency_ms.toFixed(0)} ms`;
+      }
+
+      // Also reload deterministic analysis views
+      await loadIntelligenceView();
+    } else {
+      const err = await res.json();
+      alert(`Copilot advise error: ${err.detail || "Server error"}`);
+    }
+  } catch (err) {
+    console.error("Copilot advice request failed:", err);
+    alert(`Copilot advice request failed: ${err.message}`);
+  } finally {
+    if (btn) btn.disabled = false;
+    if (spinner) spinner.style.display = "none";
+    if (icon) icon.style.display = "inline";
+    if (btnText) btnText.textContent = "Generate Intelligence";
+  }
+}
+
+function copyCopilotAdvice() {
+  const textBox = document.getElementById("copilot-advice-text");
+  if (!textBox) return;
+  navigator.clipboard.writeText(textBox.textContent).then(() => {
+    alert("Copilot advice copied to clipboard!");
+  }).catch((err) => {
+    console.error("Failed to copy advice:", err);
+  });
 }

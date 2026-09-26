@@ -518,7 +518,7 @@ def build_parser() -> argparse.ArgumentParser:
     gui_parser.add_argument("--port", type=int, default=8000, help="Port (default: 8000).")
     gui_parser.add_argument("--open-browser", action="store_true", help="Open workstation in browser on launch.")
 
-    team_parser = subparsers.add_parser("team", help="Manage multi-team profiles (up to 3 teams).")
+    team_parser = subparsers.add_parser("team", help="Manage multi-team profiles (up to 6 teams).")
     team_sub = team_parser.add_subparsers(dest="team_command", required=True)
 
     team_sub.add_parser("list", help="List all managed teams.")
@@ -526,6 +526,7 @@ def build_parser() -> argparse.ArgumentParser:
     t_create = team_sub.add_parser("create", help="Create a new team.")
     t_create.add_argument("--id", required=True, type=str, help="Team ID (e.g. team_1).")
     t_create.add_argument("--name", required=True, type=str, help="Team name.")
+    t_create.add_argument("--league", type=str, default="euroleague", choices=["euroleague", "eurocup"], help="League (euroleague or eurocup, default: euroleague).")
     t_create.add_argument("--season", type=str, default="2026/27", help="Season.")
     t_create.add_argument("--bank", type=int, default=0, help="Bank in tenths.")
 
@@ -537,6 +538,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     t_del = team_sub.add_parser("delete", help="Delete a team.")
     t_del.add_argument("--id", required=True, type=str, help="Team ID to delete.")
+
+    # V0.6 Strategic Intelligence & Copilot
+    advise_parser = subparsers.add_parser(
+        "advise",
+        help="V0.6 Strategic Intelligence Copilot: Manager Dossier, Strategic Analysis, and Copilot Advice.",
+    )
+    advise_parser.add_argument("--team", type=str, default=None, help="Target team ID (default: active managed team).")
+    advise_parser.add_argument("--squad", type=Path, default=DEFAULT_SQUAD_PATH, help="Path to current_squad.json (if squad file preferred).")
+    advise_parser.add_argument("--season", type=str, default="2026", help="Season code (default: 2026).")
+    advise_parser.add_argument("--round", "-r", type=int, default=1, help="Round number (default: 1).")
+    advise_parser.add_argument("--persona", type=str, default="briefing", choices=["briefing", "devil_advocate", "tactical_analyst", "strategic_planner"], help="Copilot persona (default: briefing).")
+    advise_parser.add_argument("--provider", type=str, default="heuristic", choices=["heuristic", "gemini", "openai", "claude", "openrouter", "local"], help="LLM Provider (default: heuristic).")
+    advise_parser.add_argument("--tier", type=str, default="standard", choices=["fast", "standard", "extended"], help="Analysis tier (default: standard).")
+    advise_parser.add_argument("--llm-model", type=str, default=None, help="Specific LLM model identifier (optional override).")
+    advise_parser.add_argument("--json", action="store_true", help="Output full JSON payload.")
+    advise_parser.add_argument("--output", "-o", type=Path, default=None, help="Export advice report to file.")
 
     return parser
 
@@ -1052,12 +1069,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 0
             active = ts.get_active_team()
             active_id = active.team_id if active else None
-            print(f"{'ID':<12} {'Name':<25} {'Season':<10} {'Round':<6} {'Bank':<8} {'Active':<6}")
-            print("-" * 70)
+            print(f"{'ID':<12} {'Name':<22} {'League':<12} {'Season':<10} {'Round':<6} {'Bank':<8} {'Active':<6}")
+            print("-" * 80)
             for t in teams:
                 is_act = "✓" if t.team_id == active_id else ""
                 bank_cr = f"{t.bank_tenths / 10.0:.1f} cr"
-                print(f"{t.team_id:<12} {t.name:<25} {t.season:<10} {t.round_number:<6} {bank_cr:<8} {is_act:<6}")
+                league_str = getattr(t, "league", "euroleague") or "euroleague"
+                print(f"{t.team_id:<12} {t.name:<22} {league_str:<12} {t.season:<10} {t.round_number:<6} {bank_cr:<8} {is_act:<6}")
             return 0
 
         if args.team_command == "create":
@@ -1067,8 +1085,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     name=args.name,
                     season=args.season,
                     bank_tenths=args.bank,
+                    league=getattr(args, "league", "euroleague"),
                 )
-                print(f"Created team '{team.team_id}' ({team.name})")
+                print(f"Created team '{team.team_id}' ({team.name}) [{team.league}]")
                 return 0
             except ValueError as e:
                 print(f"Error: {e}")
@@ -1087,7 +1106,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             except KeyError:
                 print(f"Team '{target_id}' not found.")
                 return 1
-            print(f"Team: {team.name} [{team.team_id}]")
+            print(f"Team: {team.name} [{team.team_id}] (League: {getattr(team, 'league', 'euroleague').upper()})")
             print(f"Season: {team.season} | Round: {team.round_number} | Turn: {team.turn_number}")
             print(f"Bank: {team.bank_tenths / 10.0:.1f} cr | Squad Value: {team.total_squad_value_tenths / 10.0:.1f} cr")
             print(f"Roster ({len(team.squad)} units):")
@@ -1118,6 +1137,112 @@ def main(argv: Sequence[str] | None = None) -> int:
             else:
                 print(f"Team '{args.id}' not found.")
             return 0
+
+    if args.command == "advise":
+        from .intelligence.copilot import generate_copilot_advice
+        from .intelligence.dossier import generate_manager_dossier
+        from .intelligence.strategic_analysis import analyze_dossier
+        from .multi_team.store import TeamStore
+        from .services.team_service import TeamService
+
+        store = TeamStore(db_path=args.db)
+        ts = TeamService(store=store)
+
+        target_team_id = args.team
+        if target_team_id:
+            try:
+                team = ts.get_team(target_team_id)
+            except KeyError:
+                team = None
+            if not team:
+                print(
+                    f"Error: Team '{target_team_id}' not found. "
+                    "Create a team first with 'elf team create --id <id> --name <name> [--league euroleague|eurocup]' "
+                    "or specify an existing team with '--team <id>'."
+                )
+                return 1
+        else:
+            active = ts.get_active_team()
+            if active:
+                target_team_id = active.team_id
+            else:
+                teams = ts.list_teams()
+                if teams:
+                    target_team_id = teams[0].team_id
+
+        if not target_team_id:
+            print(
+                "Error: No fantasy team found. "
+                "Create a team first with 'elf team create --id <id> --name <name> [--league euroleague|eurocup]' "
+                "or specify an existing team with '--team <id>'."
+            )
+            return 1
+
+        dossier = generate_manager_dossier(
+            team_id=target_team_id,
+            season=args.season,
+            round_number=args.round,
+            team_service=ts,
+            database_path=args.db,
+        )
+
+        strat = analyze_dossier(dossier)
+        copilot_res = generate_copilot_advice(
+            dossier=dossier,
+            persona=args.persona,
+            provider_name=args.provider,
+            model=args.llm_model,
+            database_path=args.db,
+        )
+
+        output_payload = {
+            "dossier": dossier.to_dict(),
+            "strategic_analysis": strat.to_dict(),
+            "copilot": copilot_res.to_dict(),
+        }
+
+        if args.json:
+            out_str = json.dumps(output_payload, indent=2, ensure_ascii=False)
+            if args.output:
+                args.output.write_text(out_str, encoding="utf-8")
+                print(f"Advice written to {args.output}")
+            else:
+                print(out_str)
+            return 0
+
+        # Formatted terminal output
+        lines = []
+        lines.append("=" * 80)
+        lines.append(f"{'V0.6 STRATEGIC INTELLIGENCE & COPILOT ADVICE':^80}")
+        lines.append("=" * 80)
+        lines.append(f"Team:     {dossier.team_name} [{dossier.team_id}]  (League: {dossier.league.upper()})")
+        lines.append(f"Round:    {dossier.season} Round {dossier.round_number}  (Turn {dossier.turn_number})")
+        lines.append(f"Bank:     {dossier.bank_credits:.1f} Cr  |  Transfers Rem: {dossier.transfers_remaining}")
+        lines.append(f"Persona:  {copilot_res.persona.upper()}  |  Provider: {copilot_res.provider} ({copilot_res.model})")
+        if copilot_res.is_fallback:
+            lines.append(f"Notice:   [OFFLINE HEURISTIC FALLBACK] Reason: {copilot_res.fallback_reason}")
+        lines.append("-" * 80)
+        lines.append("")
+        lines.append("--- COPILOT STRATEGIC BRIEFING ---")
+        lines.append(copilot_res.analysis_text)
+        lines.append("")
+        lines.append("--- KEY ASSUMPTIONS & SENSITIVITY ---")
+        for asm in strat.assumptions[:4]:
+            lines.append(f"• [{asm.category.upper()}] {asm.description} (Risk: {asm.risk_level})")
+        lines.append("")
+        lines.append("--- DEVIL'S ADVOCATE RISK CHECKLIST ---")
+        for item in strat.checklist:
+            mark = item.status
+            lines.append(f"[{mark:<7}] {item.check_name}: {item.details}")
+        lines.append("=" * 80)
+
+        out_str = "\n".join(lines)
+        if args.output:
+            args.output.write_text(out_str, encoding="utf-8")
+            print(f"Advice report written to {args.output}")
+        else:
+            print(out_str)
+        return 0
 
     return 0
 

@@ -100,7 +100,7 @@ def _build_team_roster_units(contracts: list[PlayerProjectionContract]) -> list[
 
 
 # 1. Multi-Team Model & SQLite Storage Isolation Tests
-def test_multi_team_crud_and_max_three_teams_limit(tmp_path: Path):
+def test_multi_team_crud_and_max_six_teams_limit(tmp_path: Path):
     db_file = tmp_path / "teams_test.sqlite3"
     store = TeamStore(db_path=db_file)
 
@@ -113,15 +113,17 @@ def test_multi_team_crud_and_max_three_teams_limit(tmp_path: Path):
     team_b = store.create_team(Team(team_id="team_b", name="Olympiacos Master", bank_tenths=200))
     assert team_b.team_id == "team_b"
 
-    # Create Team C
-    team_c = store.create_team(Team(team_id="team_c", name="Real Madrid Stars", bank_tenths=50))
-    assert team_c.team_id == "team_c"
+    # Create Team C, D, E, F (testing capacity up to 6 teams)
+    store.create_team(Team(team_id="team_c", name="Real Madrid Stars", bank_tenths=50))
+    store.create_team(Team(team_id="team_d", name="Fenerbahce Ultra", bank_tenths=60))
+    store.create_team(Team(team_id="team_e", name="Monaco Elite", bank_tenths=70))
+    store.create_team(Team(team_id="team_f", name="Virtus Pride", bank_tenths=80))
 
-    assert len(store.list_teams()) == 3
+    assert len(store.list_teams()) == 6
 
-    # Attempt to create 4th team -> Must raise ValueError
-    with pytest.raises(ValueError, match="Maximum limit of 3 teams reached"):
-        store.create_team(Team(team_id="team_d", name="Fenerbahce Ultra"))
+    # Attempt to create 7th team -> Must raise ValueError
+    with pytest.raises(ValueError, match="Maximum limit of 6 teams reached"):
+        store.create_team(Team(team_id="team_g", name="Excess Squad"))
 
     # Switch active team
     store.set_active_team("team_b")
