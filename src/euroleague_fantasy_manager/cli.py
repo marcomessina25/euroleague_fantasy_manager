@@ -1149,7 +1149,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         ts = TeamService(store=store)
 
         target_team_id = args.team
-        if not target_team_id:
+        if target_team_id:
+            try:
+                team = ts.get_team(target_team_id)
+            except KeyError:
+                team = None
+            if not team:
+                print(
+                    f"Error: Team '{target_team_id}' not found. "
+                    "Create a team first with 'elf team create --id <id> --name <name> [--league euroleague|eurocup]' "
+                    "or specify an existing team with '--team <id>'."
+                )
+                return 1
+        else:
             active = ts.get_active_team()
             if active:
                 target_team_id = active.team_id
@@ -1159,17 +1171,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     target_team_id = teams[0].team_id
 
         if not target_team_id:
-            # Create a default team
-            team = ts.create_team(
-                team_id="default_team",
-                name="Default Team",
-                season=args.season,
-                bank_tenths=0,
-                league=args.league,
+            print(
+                "Error: No fantasy team found. "
+                "Create a team first with 'elf team create --id <id> --name <name> [--league euroleague|eurocup]' "
+                "or specify an existing team with '--team <id>'."
             )
-            target_team_id = team.team_id
-            if args.squad and Path(args.squad).exists():
-                ts.import_squad_from_file(target_team_id, Path(args.squad))
+            return 1
 
         dossier = generate_manager_dossier(
             team_id=target_team_id,

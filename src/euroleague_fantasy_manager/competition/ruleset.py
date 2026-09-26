@@ -17,12 +17,19 @@ class League(str, Enum):
     def from_str(cls, value: str | League | None) -> League:
         if isinstance(value, cls):
             return value
-        if not value:
+        if value is None or str(value).strip() == "":
+            raise ValueError("League identifier cannot be empty or None.")
+
+        norm = str(value).strip().lower().replace("_", "").replace("-", "").replace(" ", "")
+        if norm in ("euroleague", "el", "e", "10", "euroleaguefantasy"):
             return cls.EUROLEAGUE
-        norm = str(value).strip().lower().replace("_", "").replace("-", "")
-        if "cup" in norm or norm in ("u", "eurocup"):
+        if norm in ("eurocup", "ec", "u", "11", "eurocupfantasy"):
             return cls.EUROCUP
-        return cls.EUROLEAGUE
+
+        raise ValueError(
+            f"Unsupported or unknown league: '{value}'. "
+            f"Supported leagues are 'euroleague' (aliases: el, 10) and 'eurocup' (aliases: ec, 11)."
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,7 +111,7 @@ _RULESETS: dict[League, CompetitionRuleset] = {
 }
 
 
-def get_league_ruleset(league: League | str | None) -> CompetitionRuleset:
-    """Retrieve active ruleset for a given league."""
-    l_enum = League.from_str(league)
+def get_league_ruleset(league: League | str | None = None) -> CompetitionRuleset:
+    """Retrieve active ruleset for a given league (defaults to EuroLeague if None)."""
+    l_enum = League.EUROLEAGUE if league is None else League.from_str(league)
     return _RULESETS[l_enum]

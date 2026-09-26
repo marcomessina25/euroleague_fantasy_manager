@@ -50,7 +50,7 @@ These are the small correctness/hardening items to resolve before merging the cu
 
 ## 2.1 Strict league parsing
 
-**Status:** ⬜
+**Status:** ✅ Completed
 
 Review `League.from_str()` and related parsing.
 
@@ -77,7 +77,7 @@ Do not add support for additional competitions.
 
 ## 2.2 `elf advise` must be read-only
 
-**Status:** ⬜
+**Status:** ✅ Completed
 
 Review the CLI `elf advise` path.
 
@@ -98,7 +98,7 @@ Add a regression test proving that `elf advise` with no valid team does not crea
 
 ## 2.3 Strong zero-mutation invariant
 
-**Status:** ⬜
+**Status:** ✅ Completed
 
 Add an integration-level test for the central V0.6 safety property:
 
@@ -146,7 +146,7 @@ Run it with at least:
 
 ## 3.1 Shared engine / adapter boundary
 
-**Status:** ⬜ Verify
+**Status:** ✅ Verified
 
 Confirm that the architecture is:
 
@@ -178,7 +178,7 @@ Only competition-specific rules/data semantics should live in league adapters/ru
 
 ## 3.2 Ruleset semantics
 
-**Status:** ⬜ Verify / document
+**Status:** ✅ Verified
 
 If EuroLeague and EuroCup currently have identical values for some rules, that is acceptable for V0.6.
 
@@ -197,7 +197,7 @@ Add or improve tests where necessary.
 
 ## 3.3 League persistence
 
-**Status:** ⬜ Verify
+**Status:** ✅ Verified
 
 Confirm that:
 
@@ -213,7 +213,7 @@ Confirm that:
 
 ## 4.1 Six-team capacity
 
-**Status:** ⬜ Verify
+**Status:** ✅ Verified
 
 Confirm maximum capacity is six managed teams.
 
@@ -234,7 +234,7 @@ and verify that creation, persistence, selection and deletion/management remain 
 
 ## 4.2 Mixed-league isolation
 
-**Status:** ⬜ Verify
+**Status:** ✅ Verified
 
 Test a realistic mixed setup such as:
 
@@ -261,7 +261,7 @@ Verify:
 
 ## 5.1 Dossier completeness
 
-**Status:** ⬜ Verify
+**Status:** ✅ Verified
 
 Confirm the dossier exposes the quantitative information required by V0.6:
 
@@ -294,7 +294,7 @@ Do not add new prediction functionality just to populate a field.
 
 ## 5.2 Determinism
 
-**Status:** ⬜ Verify
+**Status:** ✅ Verified
 
 For identical:
 
@@ -312,7 +312,7 @@ Verify that timestamps or other intentionally dynamic metadata do not accidental
 
 ## 5.3 Provenance
 
-**Status:** ⬜ Verify
+**Status:** ✅ Verified
 
 Confirm that quantitative facts can be traced back to:
 
@@ -331,7 +331,7 @@ Never store secrets/API keys.
 
 ## 6.1 Assumption Breakdown
 
-**Status:** ⬜ Verify
+**Status:** ✅ Verified
 
 Confirm that the system identifies high-impact assumptions using deterministic inputs.
 
@@ -350,7 +350,7 @@ The output must explain the quantitative basis rather than inventing assumptions
 
 ## 6.2 Sensitivity Analysis
 
-**Status:** ⬜ Verify
+**Status:** ✅ Verified
 
 Confirm one-way perturbation behavior is:
 
@@ -364,7 +364,7 @@ Confirm one-way perturbation behavior is:
 
 ## 6.3 Devil's Advocate Checklist
 
-**Status:** ⬜ Verify
+**Status:** ✅ Verified
 
 Confirm deterministic checks for:
 
@@ -382,7 +382,7 @@ The checklist must remain fully usable with LLM functionality disabled.
 
 ## 7.1 Provider abstraction
 
-**Status:** ⬜ Verify
+**Status:** ✅ Verified
 
 Confirm provider implementations share a common interface.
 
@@ -401,7 +401,7 @@ Do not introduce provider orchestration/routing in V0.6.
 
 ## 7.2 Failure isolation
 
-**Status:** ⬜ Verify
+**Status:** ✅ Verified
 
 Test:
 
@@ -426,7 +426,7 @@ No provider failure may corrupt persistent state.
 
 ## 7.3 Numerical grounding
 
-**Status:** ⬜ Verify
+**Status:** ✅ Verified
 
 LLM numerical claims must be checkable against dossier facts.
 
@@ -446,7 +446,7 @@ Do not attempt to make the LLM independently authoritative.
 
 ## 8.1 No autonomous mutation
 
-**Status:** ⬜ Verify
+**Status:** ✅ Verified
 
 Confirm that Copilot cannot:
 
@@ -464,7 +464,7 @@ All state-changing workflows require explicit human action through the normal ap
 
 ## 8.2 Read-only analysis
 
-**Status:** ⬜ Verify
+**Status:** ✅ Verified
 
 Confirm that:
 
@@ -485,7 +485,7 @@ This is a core V0.6 invariant.
 
 ## 9.1 Intelligence tab
 
-**Status:** ⬜ Verify
+**Status:** ✅ Verified
 
 Confirm the GUI exposes:
 
@@ -501,7 +501,7 @@ Confirm the GUI exposes:
 
 ## 9.2 Team selection
 
-**Status:** ⬜ Verify
+**Status:** ✅ Verified
 
 Confirm the intelligence UI always operates on the currently selected team and therefore the correct:
 
@@ -520,7 +520,7 @@ Test switching between EuroLeague and EuroCup teams.
 
 ## 10.1 `elf advise`
 
-**Status:** ⬜ Verify
+**Status:** ✅ Verified
 
 Confirm:
 
@@ -537,7 +537,7 @@ Confirm:
 
 ## 10.2 `elf team create --league`
 
-**Status:** ⬜ Verify
+**Status:** ✅ Verified
 
 Confirm:
 
@@ -553,7 +553,7 @@ Confirm:
 
 ## 11.1 V0.6 specification
 
-**Status:** ⬜
+**Status:** ✅ Completed
 
 Ensure `docs/specs/v06.md` clearly states:
 
@@ -573,7 +573,7 @@ Ensure `docs/specs/v06.md` clearly states:
 
 ## 11.2 Roadmap
 
-**Status:** ⬜
+**Status:** ✅ Completed
 
 Ensure `docs/roadmap.md` reflects:
 
@@ -592,7 +592,7 @@ Do not describe V0.9 as the introduction of EuroCup.
 
 ## 11.3 V1.0 specification
 
-**Status:** ⬜
+**Status:** ✅ Completed
 
 Ensure `docs/specs/v10.md` treats these as V1.0 maturity requirements:
 
@@ -611,7 +611,7 @@ Ensure `docs/specs/v10.md` treats these as V1.0 maturity requirements:
 
 Before declaring V0.6 complete:
 
-**Status:** ⬜
+**Status:** ✅ Passed (114 passed, 0 failures, 0 regressions in 33.39s)
 
 Run the complete repository test suite.
 
@@ -625,11 +625,14 @@ Required:
 
 Record the exact command and result in the release/PR documentation.
 
-Target:
+Command executed:
+```powershell
+$env:PYTHONPATH="src"; C:\Users\mom\.conda\envs\elf\python.exe -m pytest tests/
+```
 
+Result:
 ```text
-0 failures
-0 regressions
+114 passed, 1 warning in 33.39s (0 failures, 0 regressions)
 ```
 
 ---
@@ -638,25 +641,25 @@ Target:
 
 All must be checked before tagging/releasing V0.6:
 
-- [ ] strict league parsing
-- [ ] read-only `elf advise`
-- [ ] zero-mutation invariant test
-- [ ] six-team support verified
-- [ ] mixed EuroLeague/EuroCup isolation verified
-- [ ] league metadata persistence verified
-- [ ] shared engine / ruleset boundary verified
-- [ ] Manager Dossier complete
-- [ ] dossier deterministic
-- [ ] provenance complete
-- [ ] deterministic strategic analysis works offline
-- [ ] Copilot provider abstraction verified
-- [ ] provider failure isolation verified
-- [ ] numerical/rule grounding verified
-- [ ] human-control boundary verified
-- [ ] GUI intelligence workflow verified
-- [ ] CLI workflow verified
-- [ ] documentation synchronized
-- [ ] complete regression suite green
+- [x] strict league parsing
+- [x] read-only `elf advise`
+- [x] zero-mutation invariant test
+- [x] six-team support verified
+- [x] mixed EuroLeague/EuroCup isolation verified
+- [x] league metadata persistence verified
+- [x] shared engine / ruleset boundary verified
+- [x] Manager Dossier complete
+- [x] dossier deterministic
+- [x] provenance complete
+- [x] deterministic strategic analysis works offline
+- [x] Copilot provider abstraction verified
+- [x] provider failure isolation verified
+- [x] numerical/rule grounding verified
+- [x] human-control boundary verified
+- [x] GUI intelligence workflow verified
+- [x] CLI workflow verified
+- [x] documentation synchronized
+- [x] complete regression suite green
 
 ---
 
