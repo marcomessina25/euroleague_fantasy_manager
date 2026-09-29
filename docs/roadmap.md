@@ -1,8 +1,8 @@
 # EuroLeague Fantasy Manager — Roadmap
 
-> **Current planning baseline:** 2026-09-26  
-> **Current release:** V0.5.1 implemented; PR #7 pending merge  
-> **Next release:** V0.6 — Strategic Intelligence, Manager Dossier & Multi-League Foundation
+> **Current planning baseline:** 2026-09-29  
+> **Current baseline:** V0.6 is completed, validated, and ready for PR merge (branch `v06`).  
+> **Next releases:** V0.6.5 (Release Hardening & EuroCup Ingestion Pipeline) & V0.7 (Sequential Historical Decision Replay & Multi-Season Prediction Backtesting).
 
 ## 1. Vision
 
@@ -178,7 +178,7 @@ Connected recommendations to human decisions and actual outcomes through decisio
 Introduced the local workstation, service layer, multi-team management, initial-team workflow, T1/T2 simulation, Trade Studio, multi-round planning and evaluation hub.
 
 ## V0.5.1 — Stabilization & Production Readiness
-**Status: Implemented; pending PR #7 merge**
+**Status: Completed (Merged via PR #7)**
 
 Focus:
 
@@ -193,391 +193,279 @@ Focus:
 - schema hardening
 - performance benchmarking
 
-V0.5.1 is a stabilization boundary. Feature creep should stop here.
+V0.5.1 established a hardened, benchmarked decision engine foundation.
 
 ---
 
 # 5. V0.6 — Strategic Intelligence, Manager Dossier & Multi-League Foundation
 
-**Status: Next major release**
+**Status: Completed / PR-Ready (v0.6.0 on branch `v06`)**
 
-V0.6 establishes the architecture that connects the deterministic engine to human strategic reasoning.
+V0.6 establishes the architecture that connects the deterministic engine to human strategic reasoning while providing first-class multi-league support.
 
 ## Core deliverables
 
-1. Deterministic Manager Dossier
-2. Deterministic strategic checklist
-3. League-aware team model
-4. Shared engine + league adapter architecture
-5. Six-team workstation capacity
-6. Optional LLM Copilot
-7. Provider abstraction
-8. Provenance
-9. Failure isolation
-10. Numerical/rule consistency checks
-
-### Manager Dossier
-
-The dossier is the structured boundary between the deterministic engine and strategic interpretation.
-
-It contains:
-
-- team state
-- league metadata
-- projections
-- uncertainty
-- valuations
-- optimizer recommendations
-- transfer alternatives
-- intra-round alternatives
-- multi-round candidates
-- schedule/context
-- provenance
-
-### AI philosophy
-
-V0.6 is not "add an LLM and hope it improves performance."
-
-It is:
-
-```text
-deterministic dossier
-       ↓
-deterministic analysis
-       ↓
-optional AI interpretation
-       ↓
-human decision
-```
-
-### EuroCup
-
-EuroCup is **architecturally supported in V0.6**, but complete feature parity remains a later milestone.
-
-The shared engine and contracts must not require a EuroLeague-only implementation.
+1. **Deterministic Manager Dossier** (`intelligence/dossier.py`):
+   - Standardized quantitative fact sheet aggregating Starters, Captain ($2.0\times$), Sixth Man ($1.0\times$), Bench ($0.5\times$), Head Coach ($1.0\times$), transfer alternatives, T1 $\to$ T2 substitutions, and market player valuations.
+   - Cryptographic SHA-256 provenance hashes (`content_hash`, `config_hash`) guaranteeing deterministic reproducibility.
+2. **Deterministic Strategic Analysis** (`intelligence/strategic_analysis.py`):
+   - 100% offline analysis with zero external API dependencies: Ranked Assumption Breakdown, Sensitivity Stress Testing (Captaincy $-25\%$, starter floor bust), and Devil's Advocate Checklist.
+3. **Multi-League Foundation** (`competition/ruleset.py`):
+   - `League` enum (`EUROLEAGUE`, `EUROCUP`) and ruleset contracts (`CompetitionRuleset`, `EuroLeagueRuleset`, `EuroCupRuleset`).
+   - Dynamic parameterization of scoring multipliers, valid formations, squad size (11 units), and club quota constraints.
+4. **Expanded Multi-Team Capacity** (`multi_team/`):
+   - Capacity increased from 3 to 6 isolated teams per workstation.
+   - Full persistence round-trip for `managed_teams.league` in SQLite, allowing mixed EuroLeague and EuroCup teams to coexist with zero state leakage.
+5. **Grounded LLM Copilot & Failure Isolation** (`intelligence/copilot.py`, `providers.py`):
+   - Specialized personas (`manager_briefing`, `devils_advocate`, `tactical_analyst`, `strategic_planner`).
+   - Multiple providers (`heuristic`, `gemini`, `openai`, `anthropic`, `openrouter`, `local`).
+   - Strict failure isolation: timeouts or invalid keys seamlessly fall back to offline heuristics.
+6. **Strict Zero-Mutation Invariant & Consistency Checks** (`intelligence/consistency.py`):
+   - Verifies that Copilot cannot mutate persistent team state without explicit human workflow.
+   - Detects hallucinated player names outside the dossier pool and flags illegal fantasy chips (e.g., Free Hit, Triple Captain) that do not exist in basketball fantasy rules.
+7. **Workstation GUI & CLI Workspaces**:
+   - Web workstation "🧠 Intelligence & Copilot" tab with split dashboard and raw dossier JSON inspection.
+   - CLI `elf advise` with `--tier`, `--persona`, `--provider`, `--json`, and read-only enforcement.
+   - CLI `elf team create --league euroleague|eurocup`.
 
 ---
 
-# 6. V0.7 — Sequential Historical Decision Replay
+# 6. V0.6.5 — Release Hardening, Bug Audits & EuroCup Ingestion Pipeline
+
+**Status: Planned (Next Active Milestone)**
+
+Following the release hardening pattern established in `fpl-manager`, V0.6.5 focuses on bug audits, edge-case hardening, and operationalizing the EuroCup live data pipeline.
+
+## Core deliverables
+
+1. **EuroCup Live Ingestion Pipeline**:
+   - Enable `elf update --league eurocup` (using Dunkest league_id=11, competition_code="U", season_code="U2026").
+   - Partition SQLite snapshots by league (`snapshots.league` column and indexed retrieval).
+   - Ingest official EuroCup clubs (20 clubs across Group A and Group B) from IncrowdSports feeds.
+2. **CLI & Service Multi-League Auto-Detection**:
+   - `elf report`, `elf squad`, `elf players`, and `elf lineup` automatically resolve the active team's league.
+   - Add explicit `--league` overrides to CLI data inspection commands.
+3. **EuroCup Squad Import Workflow**:
+   - Extend `import-squad` to support EuroCup rosters (`players.txt` or JSON with EuroCup player IDs).
+4. **Edge-Case & Potential Bugs Audit**:
+   - Systematically audit corner cases in T1/T2 turn substitutions (e.g., games postponed mid-round, coaches fired mid-week).
+   - Audit budget calculations for 0.0-credit bank boundaries.
+5. **Workstation GUI Multi-League Filter**:
+   - Court view and team tabs visually distinguish EuroLeague (`[EL]`) and EuroCup (`[EC]`) teams with filtered player market search.
+
+---
+
+# 7. V0.7 — Sequential Historical Decision Replay & Multi-Season Prediction Backtesting
 
 **Status: Planned**
 
-Move from evaluating individual predictions to reconstructing the decision process over time.
+Aligning with `fpl-manager` V0.7, move from evaluating static point-in-time predictions to reconstructing the sequential decision process over multi-season historical datasets for both EuroLeague and EuroCup.
 
-Focus:
+## Core deliverables
 
-- historical decision drill-down
-- point-in-time state reconstruction
-- sequential lineup decisions
-- sequential transfer decisions
-- T1/T2/T3 historical replay
-- multi-round decision replay
-- model-version comparison
-- human-vs-model decision comparison
-- historical regret attribution
-
-V0.7 answers:
-
-> "Given only what the manager could have known at that moment, what decision did the system recommend, what did the manager choose, and what happened?"
-
-This should precede major new predictive complexity.
+1. **Multi-Season Historical Datasets**:
+   - Curate and ingest historical round snapshots across seasons (2022-23, 2023-24, 2024-25, 2025-26) for EuroLeague and EuroCup.
+2. **Point-in-Time State Reconstruction**:
+   - Reconstruct squad valuation, bank balance, injury status, and price changes at every historical round boundary.
+3. **Sequential Decision Simulation**:
+   - Simulate sequential lineup, captaincy, sixth man, T1 $\to$ T2 turn substitution, and transfer decisions across full seasons.
+4. **Model-Version Comparison Ledgers**:
+   - Standardized evaluation ledgers comparing decision versions (e.g. Heuristic vs Decomposed vs Closed-Loop) against actual human decisions and hindsight oracles.
+5. **Historical Regret Attribution**:
+   - Decompose total season regret into Captain Regret, Sixth Man Regret, Bench Regret, Turn Substitution Regret, and Transfer Regret.
 
 ---
 
-# 7. V0.8 — Advanced Prediction & Context
+# 8. V0.8 — Basketball Context Modeling, Participation & Rotation Dynamics, Rank-Aware Decisions & Risk Profiling
 
 **Status: Planned**
 
-Improve prediction only where V0.7 evidence identifies meaningful decision errors or systematic blind spots.
+Aligning with `fpl-manager` V0.8, introduce basketball-specific contextual factors and rank-aware portfolio risk modeling driven by empirical evidence from V0.7.
 
-Potential areas:
+## Core deliverables
 
-- participation modeling
-- expected minutes
-- role/state changes
-- schedule congestion
-- rest
-- teammate effects
-- injury replacement effects
-- rotation patterns
-- ownership/context features
-- price elasticity
-- uncertainty improvements
-
-V0.8 is evidence-driven.
-
-It should not become a collection of predictive features added because they appear interesting.
+1. **Basketball Participation & Rotation Modeling**:
+   - Starting 5 probability vs bench unit probability.
+   - Expected minutes distribution conditioned on game script, foul trouble risk, and blowout risk (garbage time minutes dilution).
+   - Domestic league schedule congestion: Model fatigue and rest patterns resulting from weekend domestic leagues (ACB, BSL, Greek Basket League, Lega Basket, ABA League) preceding midweek EuroLeague/EuroCup fixtures.
+2. **Injury Replacement Dynamics**:
+   - Model usage rate and minutes surges for backup players when a primary starter or high-usage ball-handler is injured.
+3. **Rank-Aware Decisions & Ownership Profiling**:
+   - Ingest player popularity/ownership metrics from official fantasy feeds.
+   - Classify players into Core (high ownership, high floor), Shield (defensive rank protection), and Sword (differential ceiling plays).
+4. **Intra-Round Turn Real-Option Modeling**:
+   - Quantify the mathematical value of scheduling flexibility: holding T2 bench assets to insure against T1 underperformance.
 
 ---
 
-# 8. V0.9 — Competition Parity, Cross-League Validation & Advanced Strategy
+# 9. V0.9 — Learned Availability Models, EuroCup Full Operational Parity & Cross-League Validation
 
 **Status: Planned**
 
-V0.9 is **not the point at which EuroCup is introduced**.
+Aligning with `fpl-manager` V0.9, replace heuristic adjustments with learned parameters and validate complete operational parity between EuroLeague and EuroCup.
 
-The architecture already supports EuroCup from V0.6.
+## Core deliverables
 
-V0.9 completes and validates competition support.
-
-Focus:
-
-- EuroCup feature parity
-- competition-specific rules validation
-- cross-league dataset validation
-- shared-engine deduplication
-- cross-league regression suite
-- competition-specific adapter hardening
-- strategy behavior across competitions
-- advanced strategic workflows where justified by V0.7/V0.8 evidence
-
-Acceptance criterion:
-
-> EuroLeague and EuroCup use the same core engine and contracts while correctly applying their respective competition rules and data semantics.
+1. **Learned Availability & Minutes Models**:
+   - Machine-learned models predicting player playing probability and minutes distributions without target leakage.
+2. **Transfer Penalty & Turnover Calibration**:
+   - Optimize trade weight penalties and opportunity costs across regular rounds vs double-round weeks.
+3. **EuroCup Full Operational Parity**:
+   - Comprehensive modeling of EuroCup's 2-group structure (Group A and Group B, 10 teams each, 18 rounds).
+   - Playoff bracket transition: Single-elimination Eighth-finals, Quarterfinals, Semifinals (best-of-3), and Finals (best-of-3).
+4. **Cross-League Validation Suite**:
+   - End-to-end regression test suite verifying that EuroLeague and EuroCup share 100% of core engine contracts while correctly respecting competition-specific schedules, clubs, and formats.
+5. **Error Attribution & Closed-Loop Hardening**:
+   - Quantify model error vs execution error vs aleatoric variance across both leagues.
 
 ---
 
-# 9. V1.0 — Mature Multi-League Fantasy Decision Platform
+# 10. V1.0 — Mature Multi-League Fantasy Decision Platform
 
-**Status: Long-term target**
+**Status: Major Milestone Target**
 
-V1.0 is a maturity milestone, not a feature-count milestone.
+V1.0 is the production maturity milestone establishing a stable, auditable, and reproducible decision platform across EuroLeague and EuroCup.
 
-The system should be:
+## Core capabilities
 
-- deterministic where it needs to be deterministic
-- reproducible
-- auditable
-- explainable
-- testable
-- modular
-- observable
-- usable by a technically competent human
+- **Shared Engine Contract**: 100% deduplicated core engine (data, rules, predictions, valuations, optimization, closed-loop logging, workstation) serving both competitions via dynamic ruleset adapters.
+- **6-Team Workstation**: Multi-team browser workstation managing up to 6 isolated profiles across EuroLeague and EuroCup with zero cross-team state leakage.
+- **Closed-Loop Auditability**: Complete separation and attribution between Statistical Prediction, Optimizer Recommendation, Strategic Briefing, Human Decision, and Realized Outcome.
+- **Deterministic Authoritativeness**: Strict zero-mutation invariants and offline operation; LLMs remain optional, grounded copilots.
 
-## V1.0 architecture
+---
+
+# 11. V1.1 — Strategic Squad Construction, Unlimited Window Optimizer & End-to-End Multi-Season Evaluation
+
+**Status: Planned**
+
+Following the breakthrough in `fpl-manager` V1.1, expand from in-season maintenance to optimal whole-squad construction.
+
+## Core deliverables
+
+1. **Strategic Initial Squad Construction (Round 1 Solver)**:
+   - Mixed-Integer Programming (MIP) / branch-and-bound solver to construct the optimal 11-unit roster from scratch within the 100.0 credit budget and club quota constraints.
+2. **Unlimited Trade Window Optimizer**:
+   - Dedicated solver for overhaul windows (prior to Round 1, mid-season unlimited transfer windows, or playoff restarts).
+3. **Studio GUI Squad Builder**:
+   - Interactive workstation interface for locking/excluding players, testing formation presets, and visualizing budget allocation across positions (`G`, `F`, `C`, `HC`).
+4. **End-to-End Multi-Season ML Evaluation**:
+   - Full-season autonomous walk-forward evaluation pipeline measuring net fantasy points across multiple historical seasons.
+
+---
+
+# 12. V1.1.5 — Mid-Season Player Departures, Seasonal Trade Strategy Calibration & Multi-Version Benchmark Ledgers
+
+**Status: Planned**
+
+Following `fpl-manager` V1.1.5, harden the engine against real-world roster churn and establish audited multi-version performance benchmarks.
+
+## Core deliverables
+
+1. **In-Season Player Departure Lifecycle**:
+   - Detect and handle mid-season player departures: NBA buyouts, EuroLeague-to-domestic transfers, contract terminations, and mid-season waivers.
+   - Immediate dead-capital liquidation flags to purge departed assets before trade deadlines.
+2. **Seasonal Trade Strategy Calibration**:
+   - Historically calibrate the expenditure of the 3 free trades per round across the season: preserving trade flexibility for double-round weeks and injury crises.
+3. **Multi-Version Benchmark Ledgers**:
+   - Comprehensive multi-season performance benchmark comparing all engine iterations (V0.7 vs V0.9 vs V1.0 vs V1.1 vs V1.1.5) across historical seasons.
+
+---
+
+# 13. V1.2 — Strategic Squad Balancing (Asymmetric Starters vs Bench Weighting) & Long-Term Unavailability Modeling
+
+**Status: Planned**
+
+Directly incorporating the empirical findings from `fpl-manager` V1.2 to resolve objective function pathology and dead capital trapping.
+
+## Core deliverables
+
+1. **Asymmetric Starting 5 vs Bench Squad Balancing**:
+   - **The Scoring Asymmetry**: In EuroLeague/EuroCup Fantasy, starters score $1.0\times$ (Captain $2.0\times$, Sixth Man $1.0\times$) while bench units score only $0.5\times$.
+   - **Objective Formulation**: Squad construction and transfer planning must score candidate rosters asymmetrically:
+     $$\text{Objective}(S) = \sum_{p \in \text{Starters}(S)} \text{Value}(p) + 1.0 \times \text{Value}(\text{Captain}(S)) + \text{Value}(\text{SixthMan}(S)) + w_{\text{bench}} \times \sum_{p \in \text{Bench}(S)} \text{Value}(p)$$
+     where $w_{\text{bench}} \in [0.40, 0.55]$ (calibrated default: $0.50$, reflecting the official $0.5\times$ multiplier).
+   - **Budget Concentration**: Prevents the optimizer from over-investing in deep bench assets at the expense of premium starters and captains.
+2. **Long-Term Unavailability Tracker**:
+   - Verified registry of multi-week and multi-month player absences (ACL tears, meniscus surgeries, prolonged suspensions, contract disputes).
+   - Automatic dead capital penalty: assets flagged as long-term unavailable receive zero projected points across the multi-round horizon and are prioritized for immediate liquidation.
+   - Strict exclusion from candidate purchase pools in transfer and squad solvers.
+3. **Lineup-Aware Transfer Planning**:
+   - Transfer moves evaluated by net gain on expected starting lineup points ($\Delta \text{LineupXP}$) rather than raw 11-player squad sums, preventing waste of the 3 free trades on sideways bench upgrades.
+
+---
+
+# 14. V1.3 — Multi-Provider LLM Expansion & Extended Strategic Advisory
+
+**Status: Planned**
+
+Aligning with `fpl-manager` V1.3:
+
+## Core deliverables
+
+1. **Multi-Provider Parallel Advisory**:
+   - Concurrently query and synthesize strategic perspectives from multiple LLM providers (e.g. Gemini Pro + Claude Sonnet + GPT-4o).
+2. **Extended Strategic Personas**:
+   - Adversarial Debate persona, Risk Arbiter, and Long-Term Horizon Planner.
+3. **Human-in-the-Loop Experimentation**:
+   - A/B testing framework to evaluate whether human managers following LLM advisory outperform managers using pure deterministic recommendations.
+
+---
+
+# 15. Release Sequence & Roadmap Summary
 
 ```text
-Official data
-     ↓
-Point-in-time snapshots
-     ↓
-League-aware deterministic rules
-     ↓
-Prediction layer
-     ↓
-Valuation
-     ↓
-Optimization
-     ↓
-Decision log
-     ↓
-Actual outcome
-     ↓
-Evaluation / backtesting
-     ↓
-Manager Dossier
-     ↓
-Strategic analysis
-     ↓
-Optional LLM
-     ↓
-Human decision
+V0.1     Data & Deterministic Rules Foundation                       [Completed]
+  ↓
+V0.2     Deterministic Decision Support                              [Completed]
+  ↓
+V0.2.5   Historical Evaluation Laboratory                            [Completed]
+  ↓
+V0.3     Validated Predictive Projection Layer                       [Completed]
+  ↓
+V0.4     Decision & Optimization Engine                              [Completed]
+  ↓
+V0.45    Closed-Loop Decision Logging                                [Completed]
+  ↓
+V0.5     Multi-Team Workstation (FastAPI Web GUI)                    [Completed]
+  ↓
+V0.5.1   Stabilization & Production Readiness                        [Completed - Merged]
+  ↓
+V0.6     Strategic Intelligence, Manager Dossier & Multi-League      [Completed / PR-Ready]
+  ↓
+V0.6.5   Release Hardening, Bug Audits & EuroCup Ingestion Pipeline  [Planned]
+  ↓
+V0.7     Sequential Historical Replay & Multi-Season Backtesting     [Planned]
+  ↓
+V0.8     Basketball Context, Participation & Strategic Risk          [Planned]
+  ↓
+V0.9     Learned Models, EuroCup Full Parity & Cross-League Testing  [Planned]
+  ↓
+V1.0     Mature Multi-League Decision Platform (Production Release)  [Target]
+  ↓
+V1.1     Strategic Squad Construction & Unlimited Window Optimizer   [Planned]
+  ↓
+V1.1.5   Departures Lifecycle, Trade Calibration & Multi-Version     [Planned]
+  ↓
+V1.2     Asymmetric Squad Balancing (1.0x vs 0.5x) & Unavailability  [Planned]
+  ↓
+V1.3     Multi-Provider Advisory & Human-in-the-Loop AI Research     [Planned]
 ```
-
-## V1.0 competition scope
-
-- EuroLeague
-- EuroCup
-- shared engine
-- explicit league adapters
-- no competition-specific application forks
-
-## V1.0 team scope
-
-- up to 6 isolated teams per user
-- mixed competitions allowed
-- independent state and decision histories
-- shared engine primitives
-
-## V1.0 prediction scope
-
-- point-in-time prediction
-- calibrated availability/minutes/production components
-- uncertainty
-- cold-start handling
-- leakage protection
-- model provenance
-- reproducible evaluation
-
-## V1.0 decision scope
-
-- initial team
-- lineup
-- captain
-- sixth
-- bench
-- transfers
-- unlimited windows
-- T1/T2/T3 intra-round decisions
-- multi-round planning
-- documented risk assumptions
-
-## V1.0 closed-loop scope
-
-The system must distinguish:
-
-```text
-prediction
-recommendation
-human decision
-actual outcome
-```
-
-and quantify the relevant differences.
-
-## V1.0 AI scope
-
-LLM is optional.
-
-It may:
-
-- explain
-- challenge
-- compare
-- summarize
-- interpret uncertainty
-- identify changes
-
-It may not:
-
-- become the source of truth
-- silently change deterministic results
-- mutate team state
-- execute management actions autonomously
 
 ---
 
-# 10. What V1.0 Explicitly Does Not Mean
-
-V1.0 does not require:
-
-- autonomous management
-- automatic transfers
-- cloud SaaS
-- mobile application
-- perfect prediction
-- perfect historical reconstruction
-- universal strategy
-- LLM-controlled decisions
-- guaranteed fantasy performance improvement
-- an oracle that always knows the optimal future
-
-The target is a trustworthy decision-support system, not an autonomous fantasy manager.
-
----
-
-# 11. Documentation Structure
-
-Recommended long-term structure:
-
-```text
-docs/
-├── roadmap.md
-├── architecture.md
-├── rules.md
-├── data_model.md
-├── prediction.md
-├── optimization.md
-├── evaluation.md
-├── gui.md
-├── strategy.md
-│
-├── specs/
-│   ├── v01.md
-│   ├── v02.md
-│   ├── v025.md
-│   ├── v03.md
-│   ├── v04.md
-│   ├── v045.md
-│   ├── v05.md
-│   ├── v051.md
-│   ├── v06.md
-│   ├── v07.md
-│   ├── v08.md
-│   ├── v09.md
-│   └── v10.md
-│
-└── research/
-```
-
-The roadmap should remain the high-level contract. Version specifications contain implementation-level detail.
-
----
-
-# 12. Release Sequence
-
-```text
-V0.1   Data / Rules
-  ↓
-V0.2   Decision Support
-  ↓
-V0.2.5 Historical Evaluation
-  ↓
-V0.3   Prediction
-  ↓
-V0.4   Optimization
-  ↓
-V0.45  Closed Loop
-  ↓
-V0.5   Workstation
-  ↓
-V0.5.1 Stabilization
-  ↓
-V0.6   Dossier + Intelligence + Multi-League Foundation
-  ↓
-V0.7   Sequential Replay
-  ↓
-V0.8   Prediction / Context
-  ↓
-V0.9   EuroCup Parity + Cross-League Validation
-  ↓
-V1.0   Mature Multi-League Platform
-```
-
-This sequence intentionally separates:
-
-- predicting
-- deciding
-- measuring
-- using
-- interpreting
-- replaying
-- improving
-- generalizing
-- maturing
-
----
-
-# 13. Final Architectural Test
+# 16. Final Architectural Test
 
 Before V1.0, a technically competent human should be able to answer:
 
-> What did the system know?
-
-> What did the deterministic engine predict?
-
-> What did the optimizer recommend?
-
-> What alternatives existed?
-
-> What did the strategic layer assume?
-
-> What did the human decide?
-
-> What actually happened?
-
-> Which parts are rules, statistics, optimization, or interpretation?
-
+> What did the system know?  
+> What did the deterministic engine predict?  
+> What did the optimizer recommend?  
+> What alternatives existed?  
+> What did the strategic layer assume?  
+> What did the human decide?  
+> What actually happened?  
+> Which parts are rules, statistics, optimization, or interpretation?  
 > Can the result be reproduced from the recorded inputs and configuration?
 
-If those questions can be answered reliably, the platform has reached its intended maturity bar.
+If those questions can be answered reliably across both **EuroLeague** and **EuroCup**, the platform has reached its intended maturity bar.
