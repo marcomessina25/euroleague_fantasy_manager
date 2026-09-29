@@ -85,8 +85,9 @@ class ScenarioService:
         )
 
         # 2. Build base projection contracts
+        league = getattr(team, "league", None) or "euroleague"
         base_contracts = self.optimization_service._resolve_squad_contracts(
-            team.squad, season, rnd
+            team.squad, season, rnd, league=league
         )
         contract_dict = {c.player_id: c for c in base_contracts}
 
@@ -100,7 +101,7 @@ class ScenarioService:
                 contract_dict.pop(pid, None)
 
             # Add transferred in from market
-            market_dict = self.prediction_service.get_projections_dict(season, rnd)
+            market_dict = self.prediction_service.get_projections_dict(season, rnd, league=league)
             for pid in in_list:
                 in_c = market_dict.get(pid)
                 if in_c:

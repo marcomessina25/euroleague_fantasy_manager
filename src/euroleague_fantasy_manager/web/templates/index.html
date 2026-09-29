@@ -48,7 +48,7 @@
       </div>
 
       <!-- Live API Update Button -->
-      <button class="btn btn-secondary" id="btn-update-data" onclick="triggerUpdateData()" title="Query EuroLeague Fantasy API to update live snapshot and player values" style="padding:0.4rem 0.8rem; font-size:0.8rem; white-space:nowrap; display:flex; align-items:center; gap:0.4rem;">
+      <button class="btn btn-secondary" id="btn-update-data" onclick="triggerUpdateData()" title="Query the Fantasy API to update the live snapshot and player values for the active team's league" style="padding:0.4rem 0.8rem; font-size:0.8rem; white-space:nowrap; display:flex; align-items:center; gap:0.4rem;">
         <span id="update-spinner" style="display:none;">⏳</span>
         <span id="update-icon">🔄</span>
         <span id="update-text">Update Data</span>
@@ -546,7 +546,7 @@ All advice is grounded strictly in the deterministic Manager Dossier with guaran
 
             <!-- Consistency Verification Footer -->
             <div style="margin-top:1rem; padding-top:0.75rem; border-top:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center; font-size:0.8rem; color:var(--text-muted);">
-              <span id="copilot-consistency-status">Consistency: Verified Grounded</span>
+              <span id="copilot-consistency-status">Consistency: Not checked</span>
               <span id="copilot-latency">Latency: -- ms</span>
             </div>
           </div>
@@ -580,7 +580,7 @@ All advice is grounded strictly in the deterministic Manager Dossier with guaran
           </div>
           <div class="form-group">
             <label for="tb-team-league">Competition League</label>
-            <select id="tb-team-league" style="padding:0.45rem 0.5rem; font-size:0.85rem;">
+            <select id="tb-team-league" onchange="onTeamBuilderLeagueChange()" style="padding:0.45rem 0.5rem; font-size:0.85rem;">
               <option value="euroleague">EuroLeague [EL]</option>
               <option value="eurocup">EuroCup [EC]</option>
             </select>

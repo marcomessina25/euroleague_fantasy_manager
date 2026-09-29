@@ -100,6 +100,7 @@ class SuggestInitialTeamRequest(BaseModel):
     budget_credits: float = 100.0
     risk_mode: str = "expected"
     locked_player_ids: list[int] = Field(default_factory=list)
+    league: str = "euroleague"
 
 
 # Endpoints
@@ -128,7 +129,7 @@ def get_dashboard(
     )
 
     # Squad units with projections
-    proj_dict = prediction_service.get_projections_dict(season, rnd)
+    proj_dict = prediction_service.get_projections_dict(season, rnd, league=team.league or "euroleague")
     squad_details = []
     for unit in team.squad:
         c = proj_dict.get(unit.player_id)
@@ -641,12 +642,13 @@ def list_players_endpoint(
     search: str | None = None,
     min_price: float | None = None,
     max_price: float | None = None,
+    league: str = "euroleague",
     limit: int = 50,
     prediction_service: PredictionService = Depends(get_prediction_service),
 ) -> list[dict[str, Any]]:
     """Player browser for Trade Studio with valuation metrics (Phase G)."""
-    contracts = prediction_service.get_projections(season, round_number)
-    valuations = prediction_service.get_player_valuations(season, round_number)
+    contracts = prediction_service.get_projections(season, round_number, league=league)
+    valuations = prediction_service.get_player_valuations(season, round_number, league=league)
 
     target_pos_code = None
     if position:
@@ -699,6 +701,7 @@ def get_player_details_endpoint(
     player_id: int,
     season: str = "2026/27",
     round_number: int = 1,
+    league: str = "euroleague",
     prediction_service: PredictionService = Depends(get_prediction_service),
 ) -> dict[str, Any]:
     """Retrieve complete player statistics, projections, and metadata for player window modal."""
@@ -707,8 +710,8 @@ def get_player_details_endpoint(
     db_path = prediction_service.database_path
 
     # Projection contract & valuation
-    contract = prediction_service.get_player_projection(season, round_number, player_id)
-    valuations = prediction_service.get_player_valuations(season, round_number)
+    contract = prediction_service.get_player_projection(season, round_number, player_id, league=league)
+    valuations = prediction_service.get_player_valuations(season, round_number, league=league)
     val = valuations.get(player_id, {})
 
     # Detailed snapshot database row
@@ -788,6 +791,7 @@ def suggest_initial_team_endpoint(
             budget_credits=req.budget_credits,
             risk_mode=req.risk_mode,
             locked_player_ids=req.locked_player_ids,
+            league=req.league,
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

@@ -58,6 +58,50 @@ PERSONA_PROMPTS = {
 
 
 @dataclass(frozen=True, slots=True)
+class TierSettings:
+    timeout_seconds: float
+    max_output_tokens: int
+    sensitivity_count: int
+    transfer_count: int
+    depth_instruction: str
+
+
+TIER_SETTINGS: dict[str, TierSettings] = {
+    "fast": TierSettings(
+        timeout_seconds=10.0,
+        max_output_tokens=600,
+        sensitivity_count=1,
+        transfer_count=1,
+        depth_instruction="Keep the answer brief: at most 150 words, focused on the single most important action.",
+    ),
+    "standard": TierSettings(
+        timeout_seconds=15.0,
+        max_output_tokens=1500,
+        sensitivity_count=2,
+        transfer_count=3,
+        depth_instruction="Provide your structured advice in markdown.",
+    ),
+    "extended": TierSettings(
+        timeout_seconds=45.0,
+        max_output_tokens=4000,
+        sensitivity_count=10,
+        transfer_count=5,
+        depth_instruction=(
+            "Provide a thorough structured analysis in markdown. Reason explicitly through every sensitivity "
+            "scenario and each transfer option before giving a final recommendation."
+        ),
+    ),
+}
+
+
+def resolve_tier(tier: str | None) -> str:
+    norm = (tier or "standard").strip().lower()
+    if norm not in TIER_SETTINGS:
+        raise ValueError(f"Unknown analysis tier '{tier}'. Supported tiers: {', '.join(TIER_SETTINGS)}.")
+    return norm
+
+
+@dataclass(frozen=True, slots=True)
 class CopilotAdviceResult:
     dossier_id: str
     team_id: str
@@ -72,6 +116,7 @@ class CopilotAdviceResult:
     fallback_reason: str | None
     latency_ms: float
     timestamp: str
+    tier: str = "standard"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -82,6 +127,7 @@ class CopilotAdviceResult:
             "persona": self.persona,
             "provider": self.provider,
             "model": self.model,
+            "tier": self.tier,
             "analysis_text": self.analysis_text,
             "consistency": self.consistency.to_dict(),
             "is_fallback": self.is_fallback,
@@ -102,8 +148,12 @@ def generate_copilot_advice(
     model: str | None = None,
     temperature: float = 0.2,
     database_path: Any | None = None,
+    tier: str = "standard",
 ) -> CopilotAdviceResult:
     """Generate intelligent strategic advice grounded in deterministic facts with zero state mutation."""
+    norm_tier = resolve_tier(tier)
+    tier_cfg = TIER_SETTINGS[norm_tier]
+
     # 1. Obtain or generate Manager Dossier
     if dossier is None:
         if not team_id:
@@ -126,7 +176,9 @@ def generate_copilot_advice(
         "1. Never attempt to execute or apply changes; you are purely an advisory challenger.\n"
         "2. Do not invent player names, points, or prices outside the dossier.\n"
         "3. Official scoring rules: Captain scores 2.0x, Sixth Man scores 1.0x, Starters score 1.0x, Bench scores 0.5x, Head Coach scores 1.0x.\n"
-        "4. Turn rules: Bench players who already played are locked at 0.5x and cannot sub onto the court."
+        "4. Turn rules: Bench players who already played are locked at 0.5x and cannot sub onto the court.\n"
+        "5. Captaincy can be moved between turns, even after the current captain has played, "
+        "but only to a starter who has NOT played yet."
     )
 
     # 4. Construct grounded analysis prompt
@@ -159,7 +211,7 @@ def generate_copilot_advice(
                 "net_value": tx.net_transfer_value,
                 "remaining_bank": tx.remaining_bank_credits,
             }
-            for tx in dossier.transfer_recommendations[:3]
+            for tx in dossier.transfer_recommendations[: tier_cfg.transfer_count]
         ],
         "intra_round_subs": {
             "can_sub": dossier.intra_round_recommendations.can_sub,
@@ -173,14 +225,14 @@ def generate_copilot_advice(
         ],
         "sensitivities": [
             {"scenario": s.shock_description, "delta": s.delta_fp, "reversal": s.decision_reversal}
-            for s in strat_result.sensitivities[:2]
+            for s in strat_result.sensitivities[: tier_cfg.sensitivity_count]
         ],
     }
 
     user_prompt = (
         f"Review the following quantitative Manager Dossier and provide your strategic analysis:\n\n"
         f"```json\n{json.dumps(dossier_summary, indent=2)}\n```\n\n"
-        f"Provide your structured advice in markdown."
+        f"{tier_cfg.depth_instruction}"
     )
 
     # 5. Execute Provider call with safe fallback
@@ -190,6 +242,8 @@ def generate_copilot_advice(
         system_prompt=system_prompt,
         model=model,
         temperature=temperature,
+        timeout_seconds=tier_cfg.timeout_seconds,
+        max_output_tokens=tier_cfg.max_output_tokens,
     )
 
     is_fallback = False
@@ -230,4 +284,5 @@ def generate_copilot_advice(
         fallback_reason=fallback_reason,
         latency_ms=latency,
         timestamp=now_iso,
+        tier=norm_tier,
     )

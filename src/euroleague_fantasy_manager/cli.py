@@ -528,7 +528,7 @@ def build_parser() -> argparse.ArgumentParser:
     t_create.add_argument("--name", required=True, type=str, help="Team name.")
     t_create.add_argument("--league", type=str, default="euroleague", choices=["euroleague", "eurocup"], help="League (euroleague or eurocup, default: euroleague).")
     t_create.add_argument("--season", type=str, default="2026/27", help="Season.")
-    t_create.add_argument("--bank", type=int, default=0, help="Bank in tenths.")
+    t_create.add_argument("--bank", type=int, default=0, help="Bank in tenths of a credit (e.g. 150 = 15.0 credits).")
 
     t_show = team_sub.add_parser("show", help="Show team details and squad.")
     t_show.add_argument("--id", type=str, default=None, help="Team ID (default: active team).")
@@ -545,7 +545,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="V0.6 Strategic Intelligence Copilot: Manager Dossier, Strategic Analysis, and Copilot Advice.",
     )
     advise_parser.add_argument("--team", type=str, default=None, help="Target team ID (default: active managed team).")
-    advise_parser.add_argument("--squad", type=Path, default=DEFAULT_SQUAD_PATH, help="Path to current_squad.json (if squad file preferred).")
     advise_parser.add_argument("--season", type=str, default="2026", help="Season code (default: 2026).")
     advise_parser.add_argument("--round", "-r", type=int, default=1, help="Round number (default: 1).")
     advise_parser.add_argument("--persona", type=str, default="briefing", choices=["briefing", "devil_advocate", "tactical_analyst", "strategic_planner"], help="Copilot persona (default: briefing).")
@@ -1193,6 +1192,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             provider_name=args.provider,
             model=args.llm_model,
             database_path=args.db,
+            tier=args.tier,
         )
 
         output_payload = {
@@ -1218,7 +1218,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         lines.append(f"Team:     {dossier.team_name} [{dossier.team_id}]  (League: {dossier.league.upper()})")
         lines.append(f"Round:    {dossier.season} Round {dossier.round_number}  (Turn {dossier.turn_number})")
         lines.append(f"Bank:     {dossier.bank_credits:.1f} Cr  |  Transfers Rem: {dossier.transfers_remaining}")
-        lines.append(f"Persona:  {copilot_res.persona.upper()}  |  Provider: {copilot_res.provider} ({copilot_res.model})")
+        lines.append(f"Persona:  {copilot_res.persona.upper()}  |  Provider: {copilot_res.provider} ({copilot_res.model})  |  Tier: {copilot_res.tier}")
         if copilot_res.is_fallback:
             lines.append(f"Notice:   [OFFLINE HEURISTIC FALLBACK] Reason: {copilot_res.fallback_reason}")
         lines.append("-" * 80)

@@ -520,8 +520,8 @@ def test_initial_team_builder_optimization_and_api(tmp_path: Path):
     # 3. Web Workstation Endpoint: /api/workstation/initial-team/suggest
     from euroleague_fantasy_manager.web.deps import get_prediction_service
     app.dependency_overrides[get_prediction_service] = lambda: ps
-    ps.get_projections = lambda s, r: market_pool
-    ps.get_projections_dict = lambda s, r: {c.player_id: c for c in market_pool}
+    ps.get_projections = lambda s, r, **kw: market_pool
+    ps.get_projections_dict = lambda s, r, **kw: {c.player_id: c for c in market_pool}
 
     resp_sug = client.post("/api/workstation/initial-team/suggest", json={
         "season": "2026/27",
@@ -744,10 +744,10 @@ def test_workstation_player_details_rename_transfers_and_multiround(tmp_path: Pa
     app = create_app(db_path=db_file)
     from euroleague_fantasy_manager.web.deps import get_prediction_service
     app.dependency_overrides[get_prediction_service] = lambda: ps
-    ps.get_projections = lambda s, r: market
-    ps.get_projections_dict = lambda s, r: {c.player_id: c for c in market}
-    ps.get_player_projection = lambda s, r, pid: next((c for c in market if c.player_id == pid), None)
-    ps.get_player_valuations = lambda s, r: {
+    ps.get_projections = lambda s, r, **kw: market
+    ps.get_projections_dict = lambda s, r, **kw: {c.player_id: c for c in market}
+    ps.get_player_projection = lambda s, r, pid, **kw: next((c for c in market if c.player_id == pid), None)
+    ps.get_player_valuations = lambda s, r, **kw: {
         c.player_id: {"fp_per_credit": round(c.expected_fp / c.credits, 2), "points_above_replacement": 2.5}
         for c in market
     }
@@ -1010,9 +1010,9 @@ def test_audit_failure_transactional_rollbacks(tmp_path: Path):
     contracts_dict = {c.player_id: c for c in contracts}
 
     mock_ps = PredictionService(database_path=db_path)
-    mock_ps.get_projections = lambda s, r: contracts
-    mock_ps.get_projections_dict = lambda s, r: contracts_dict
-    mock_ps.get_player_projection = lambda s, r, pid: next((c for c in contracts if c.player_id == pid), None)
+    mock_ps.get_projections = lambda s, r, **kw: contracts
+    mock_ps.get_projections_dict = lambda s, r, **kw: contracts_dict
+    mock_ps.get_player_projection = lambda s, r, pid, **kw: next((c for c in contracts if c.player_id == pid), None)
     app.dependency_overrides[get_prediction_service] = lambda: mock_ps
 
     mock_ds = DecisionService(store=DecisionStore(db_path))
@@ -1061,9 +1061,9 @@ def test_audit_failure_transactional_rollbacks(tmp_path: Path):
         price_tenths=40,
         expected_fp=10.0,
     )
-    mock_ps.get_projections = lambda s, r: contracts + [cheap_g]
-    mock_ps.get_projections_dict = lambda s, r: {**contracts_dict, 888: cheap_g}
-    mock_ps.get_player_projection = lambda s, r, pid: next((c for c in (contracts + [cheap_g]) if c.player_id == pid), None)
+    mock_ps.get_projections = lambda s, r, **kw: contracts + [cheap_g]
+    mock_ps.get_projections_dict = lambda s, r, **kw: {**contracts_dict, 888: cheap_g}
+    mock_ps.get_player_projection = lambda s, r, pid, **kw: next((c for c in (contracts + [cheap_g]) if c.player_id == pid), None)
 
     def _fail_tx(*args, **kwargs):
         raise RuntimeError("Audit write error")
@@ -1299,13 +1299,13 @@ def test_intra_round_optimizer_locks_played_bench_units():
 
 
 def test_intra_round_optimizer_captaincy_rules():
-    """Verify captaincy rules: if captain played, cannot switch; if not played, can switch."""
+    """Verify captaincy rules: the armband may move (even after the captain played) only to an unplayed starter."""
     from euroleague_fantasy_manager.optimization.intra_round import (
         IntraRoundSubstitutionOptimizer,
         IntraRoundPlayerUnit,
     )
 
-    # Case 1: Current captain played T1 -> Must remain captain
+    # Case 1: Current captain played T1 with a poor score -> armband moves to the best unplayed starter
     squad_played_cap = [
         IntraRoundPlayerUnit(1, "CaptPlayed", "G", current_role="starter", is_captain=True, has_played=True, actual_fp=8.0, expected_fp=14.0),
         IntraRoundPlayerUnit(2, "G2", "G", current_role="starter", has_played=False, actual_fp=None, expected_fp=18.0),
@@ -1320,7 +1320,26 @@ def test_intra_round_optimizer_captaincy_rules():
         IntraRoundPlayerUnit(11, "Coach", "HC", current_role="coach", has_played=False, actual_fp=None, expected_fp=10.0),
     ]
     res1 = IntraRoundSubstitutionOptimizer().optimize(squad_played_cap, captain_id=1)
-    assert res1.captain_id == 1, "Played captain must be retained; cannot switch"
+    assert res1.captain_id == 2, "Played captain may hand the armband to a better unplayed starter"
+    assert res1.captain_changed
+
+    # Case 1b: Played captain scored well -> keeping the armband beats every unplayed alternative
+    squad_played_cap_good = [
+        IntraRoundPlayerUnit(1, "CaptPlayed", "G", current_role="starter", is_captain=True, has_played=True, actual_fp=30.0, expected_fp=14.0),
+        *squad_played_cap[1:],
+    ]
+    res1b = IntraRoundSubstitutionOptimizer().optimize(squad_played_cap_good, captain_id=1)
+    assert res1b.captain_id == 1
+
+    # Case 1c: A player who has already played can never become the new captain, however high his score
+    squad_played_other = [
+        IntraRoundPlayerUnit(1, "Capt", "G", current_role="starter", is_captain=True, has_played=False, actual_fp=None, expected_fp=10.0),
+        IntraRoundPlayerUnit(2, "G2Played", "G", current_role="starter", has_played=True, actual_fp=35.0, expected_fp=18.0),
+        *squad_played_cap[2:],
+    ]
+    res1c = IntraRoundSubstitutionOptimizer().optimize(squad_played_other, captain_id=1)
+    assert res1c.captain_id != 2
+    assert res1c.captain_id == 3, "Best unplayed starter (F1, 15.0) takes the armband; played G2 is ineligible"
 
     # Case 2: Current captain NOT played; unplayed alternative is better -> switches
     squad_unplayed_cap = [
@@ -1523,7 +1542,7 @@ def test_court_score_breakdown_consistency(tmp_path: Path):
     with sqlite3.connect(db_file) as conn:
         conn.execute(
             "INSERT INTO snapshots (id, created_at, league_id, season_code, round_number, num_turns) "
-            "VALUES (1, '2026-10-01T00:00:00Z', 1, 'E2026', 1, 2)"
+            "VALUES (1, '2026-10-01T00:00:00Z', 10, 'E2026', 1, 2)"
         )
         for c in contracts:
             conn.execute(

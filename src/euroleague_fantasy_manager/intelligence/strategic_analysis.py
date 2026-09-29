@@ -221,20 +221,61 @@ def analyze_dossier(dossier: ManagerDossier) -> StrategicAnalysisResult:
 
     # Case A: Captain underperformance (-25% shock)
     if cap:
-        shock_cap_fp = round(cap.expected_fp * 0.75, 2)
-        delta = round(-0.5 * cap.expected_fp, 2)  # Loss of 25% doubled = -50% of 1x
-        new_total = round(base_total + delta, 2)
-        sensitivities.append(
-            SensitivityCase(
-                parameter=f"{cap.name} Captaincy Shock (-25%)",
-                shock_description=f"Captain scores {shock_cap_fp:.1f} FP instead of projected {cap.expected_fp:.1f} FP.",
-                baseline_outcome_fp=base_total,
-                shocked_outcome_fp=new_total,
-                delta_fp=delta,
-                decision_reversal=False,
-                mitigation=f"Vice-captain / Turn substitution if {cap.name} plays Turn 1.",
+        if not cap.has_played:
+            shock_cap_fp = round(cap.expected_fp * 0.75, 2)
+            delta = round(-0.5 * cap.expected_fp, 2)  # Loss of 25% doubled = -50% of 1x
+            new_total = round(base_total + delta, 2)
+            sensitivities.append(
+                SensitivityCase(
+                    parameter=f"{cap.name} Captaincy Shock (-25%)",
+                    shock_description=f"Captain scores {shock_cap_fp:.1f} FP instead of projected {cap.expected_fp:.1f} FP.",
+                    baseline_outcome_fp=base_total,
+                    shocked_outcome_fp=new_total,
+                    delta_fp=delta,
+                    decision_reversal=False,
+                    mitigation=f"Vice-captain / Turn substitution if {cap.name} plays Turn 1.",
+                )
             )
-        )
+        else:
+            # A captain who has played can still hand the armband to a starter who has NOT played yet.
+            realized = cap.actual_fp if cap.actual_fp is not None else cap.expected_fp
+            switch_targets = [s for s in ln.starters if not s.has_played and s.player_id != cap.player_id]
+            if switch_targets:
+                alt_cap = max(switch_targets, key=lambda s: s.expected_fp)
+                # Moving the 2.0x multiplier trades the captain's realized bonus for the new captain's expected bonus.
+                delta = round(alt_cap.expected_fp - realized, 2)
+                sensitivities.append(
+                    SensitivityCase(
+                        parameter=f"Captaincy Switch to {alt_cap.name}",
+                        shock_description=(
+                            f"{cap.name} already scored {realized:.1f} FP as captain. Moving the armband to "
+                            f"unplayed starter {alt_cap.name} (projected {alt_cap.expected_fp:.1f} FP) changes the total by {delta:+.1f} FP."
+                        ),
+                        baseline_outcome_fp=base_total,
+                        shocked_outcome_fp=round(base_total + delta, 2),
+                        delta_fp=delta,
+                        decision_reversal=delta > 0,
+                        mitigation=(
+                            f"Switch only if you expect {alt_cap.name} to beat {realized:.1f} FP; "
+                            f"a switch gives up {cap.name}'s realized captain bonus."
+                        ),
+                    )
+                )
+            else:
+                sensitivities.append(
+                    SensitivityCase(
+                        parameter=f"{cap.name} Captaincy Final ({realized:.1f} FP)",
+                        shock_description=(
+                            f"{cap.name} already scored {realized:.1f} FP ({realized * 2.0:.1f} with captain bonus) "
+                            "and every other starter has played, so no switch is possible."
+                        ),
+                        baseline_outcome_fp=base_total,
+                        shocked_outcome_fp=base_total,
+                        delta_fp=0.0,
+                        decision_reversal=False,
+                        mitigation="No eligible (unplayed) starter remains to take the captaincy.",
+                    )
+                )
 
     # Case B: Top transfer minutes reduction (plays 15m instead of 25m)
     if dossier.transfer_recommendations and dossier.transfer_recommendations[0].in_players:
@@ -253,21 +294,51 @@ def analyze_dossier(dossier: ManagerDossier) -> StrategicAnalysisResult:
             )
         )
 
-    # Case C: Turn 1 starter floor bust (< 6 FP)
-    if t1_starters:
-        bust_p = t1_starters[0]
+    # Case C: Turn starter floor bust (< 6 FP)
+    unplayed_t1 = [p for p in t1_starters if not p.has_played and p.expected_fp > 4.0]
+    if unplayed_t1:
+        bust_p = unplayed_t1[0]
         sub_cover = t2_bench[0].name if t2_bench else "None"
+        loss = round(bust_p.expected_fp - 4.0, 2)
         sensitivities.append(
             SensitivityCase(
                 parameter=f"Turn 1 Starter Floor Bust ({bust_p.name})",
-                shock_description=f"{bust_p.name} scores only 4.0 FP in Turn 1.",
+                shock_description=f"{bust_p.name} scores only 4.0 FP in Turn 1 (down from {bust_p.expected_fp:.1f} FP).",
                 baseline_outcome_fp=base_total,
-                shocked_outcome_fp=round(base_total - (bust_p.expected_fp - 4.0), 2),
-                delta_fp=round(-(bust_p.expected_fp - 4.0), 2),
+                shocked_outcome_fp=round(base_total - loss, 2),
+                delta_fp=-loss,
                 decision_reversal=True,
                 mitigation=f"Trigger Intra-Round Substitution: sub in {sub_cover} for Turn 2.",
             )
         )
+    else:
+        unplayed_starters = [p for p in ln.starters if not p.has_played and p.expected_fp > 4.0]
+        if unplayed_starters:
+            bust_p = unplayed_starters[0]
+            loss = round(bust_p.expected_fp - 4.0, 2)
+            sensitivities.append(
+                SensitivityCase(
+                    parameter=f"Starter Floor Bust ({bust_p.name})",
+                    shock_description=f"Unplayed starter {bust_p.name} scores only 4.0 FP (down from {bust_p.expected_fp:.1f} FP).",
+                    baseline_outcome_fp=base_total,
+                    shocked_outcome_fp=round(base_total - loss, 2),
+                    delta_fp=-loss,
+                    decision_reversal=False,
+                    mitigation="Review minutes projection and opponent defensive rating before round deadline.",
+                )
+            )
+        elif t1_starters and all(p.has_played for p in t1_starters):
+            sensitivities.append(
+                SensitivityCase(
+                    parameter="Turn 1 Starters Realized",
+                    shock_description="All Turn 1 starters have already played. Actual scores are reflected in the baseline.",
+                    baseline_outcome_fp=base_total,
+                    shocked_outcome_fp=base_total,
+                    delta_fp=0.0,
+                    decision_reversal=False,
+                    mitigation="Inspect Turn 2 bench substitution options to optimize active court score.",
+                )
+            )
 
     # 3. Devil's Advocate Checklist
     # Check 1: Rule Check
@@ -300,7 +371,8 @@ def analyze_dossier(dossier: ManagerDossier) -> StrategicAnalysisResult:
     alts = ln.alternatives
     alt_status = "PASS"
     if alts:
-        top_alt_diff = round(ln.expected_total_fp - float(alts[0].get("objective_value", ln.expected_total_fp)), 2)
+        # Gap is measured on the optimizer's own scale (optimal vs alternative expected score).
+        top_alt_diff = round(float(alts[0].get("gap_to_optimal_fp", 0.0)), 2)
         if top_alt_diff < 0.8:
             alt_status = "WARNING"
             details = f"Top alternative formation ({alts[0].get('formation', '')}) is within {top_alt_diff:.2f} FP of optimal."

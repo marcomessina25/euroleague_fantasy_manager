@@ -14,6 +14,7 @@ import os
 import time
 from typing import Any
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -42,6 +43,7 @@ class ProviderRequest:
     model: str | None = None
     temperature: float = 0.2
     timeout_seconds: float = 15.0
+    max_output_tokens: int | None = None
     extra_headers: dict[str, str] = field(default_factory=dict)
 
 
@@ -137,7 +139,8 @@ class GeminiProvider(BaseLLMProvider):
             raise ProviderAuthError("Gemini API key not configured. Set GEMINI_API_KEY or GOOGLE_API_KEY.")
 
         model = request.model or self.default_model or "gemini-2.0-flash"
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
+        # Key goes in a header, not the URL, so it cannot leak into proxy/access logs.
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{urllib.parse.quote(model, safe='')}:generateContent"
 
         body = {
             "contents": [
@@ -149,6 +152,7 @@ class GeminiProvider(BaseLLMProvider):
             ],
             "generationConfig": {
                 "temperature": request.temperature,
+                **({"maxOutputTokens": request.max_output_tokens} if request.max_output_tokens else {}),
             },
         }
 
@@ -156,7 +160,7 @@ class GeminiProvider(BaseLLMProvider):
         req = urllib.request.Request(
             url,
             data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "x-goog-api-key": self.api_key},
             method="POST",
         )
 
@@ -213,6 +217,8 @@ class OpenAIProvider(BaseLLMProvider):
             "messages": messages,
             "temperature": request.temperature,
         }
+        if request.max_output_tokens:
+            body["max_tokens"] = request.max_output_tokens
 
         t0 = time.perf_counter()
         req = urllib.request.Request(
@@ -269,7 +275,7 @@ class AnthropicClaudeProvider(BaseLLMProvider):
 
         body: dict[str, Any] = {
             "model": model,
-            "max_tokens": 1500,
+            "max_tokens": request.max_output_tokens or 1500,
             "temperature": request.temperature,
             "messages": [{"role": "user", "content": request.prompt}],
         }
@@ -342,6 +348,8 @@ class OpenRouterProvider(BaseLLMProvider):
             "messages": messages,
             "temperature": request.temperature,
         }
+        if request.max_output_tokens:
+            body["max_tokens"] = request.max_output_tokens
 
         t0 = time.perf_counter()
         req = urllib.request.Request(
@@ -403,6 +411,8 @@ class LocalProvider(BaseLLMProvider):
             "messages": messages,
             "temperature": request.temperature,
         }
+        if request.max_output_tokens:
+            body["max_tokens"] = request.max_output_tokens
 
         t0 = time.perf_counter()
         req = urllib.request.Request(

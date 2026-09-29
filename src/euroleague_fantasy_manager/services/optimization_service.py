@@ -44,6 +44,10 @@ from euroleague_fantasy_manager.services.prediction_service import PredictionSer
 from euroleague_fantasy_manager.services.team_service import TeamService
 
 
+def _team_league(team: Any) -> str:
+    return getattr(team, "league", None) or "euroleague"
+
+
 @dataclass
 class LineupDecisionView:
     """Serializable view of an optimal lineup decision for GUI and API clients."""
@@ -99,7 +103,7 @@ class OptimizationService:
         """Compute optimal legal intra-round bench-to-court substitutions."""
         team = self.team_service.get_team(team_id)
         rnd = round_number or team.round_number
-        proj_dict = self.prediction_service.get_projections_dict(season, rnd)
+        proj_dict = self.prediction_service.get_projections_dict(season, rnd, league=_team_league(team))
 
         units: list[IntraRoundPlayerUnit] = []
         for u in team.squad:
@@ -145,7 +149,7 @@ class OptimizationService:
         squad_contracts = (
             list(contracts_override)
             if contracts_override is not None
-            else self._resolve_squad_contracts(team.squad, season, rnd)
+            else self._resolve_squad_contracts(team.squad, season, rnd, league=_team_league(team))
         )
 
         r_mode = RiskMode.from_str(risk_mode)
@@ -253,11 +257,12 @@ class OptimizationService:
         team = self.team_service.get_team(team_id)
         rnd = round_number or team.round_number
 
-        squad_contracts = self._resolve_squad_contracts(team.squad, season, rnd)
+        league = _team_league(team)
+        squad_contracts = self._resolve_squad_contracts(team.squad, season, rnd, league=league)
         market = (
             list(candidate_pool)
             if candidate_pool is not None
-            else self.prediction_service.get_projections(season, rnd)
+            else self.prediction_service.get_projections(season, rnd, league=league)
         )
 
         return self.transfer_optimizer.optimize_transfers(
@@ -283,11 +288,12 @@ class OptimizationService:
         team = self.team_service.get_team(team_id)
         s_rnd = start_round or team.round_number
 
+        league = _team_league(team)
         pool_by_round: dict[int, list[PlayerProjectionContract]] = {}
         for r in range(s_rnd, s_rnd + horizon):
-            pool_by_round[r] = self.prediction_service.get_projections(season, r)
+            pool_by_round[r] = self.prediction_service.get_projections(season, r, league=league)
 
-        squad_contracts = self._resolve_squad_contracts(team.squad, season, s_rnd)
+        squad_contracts = self._resolve_squad_contracts(team.squad, season, s_rnd, league=league)
 
         self.multi_round_optimizer.discount_factor = gamma
         self.multi_round_optimizer.branching_factor = beam_width
@@ -307,9 +313,10 @@ class OptimizationService:
         risk_mode: str = "expected",
         pool: Sequence[PlayerProjectionContract] | None = None,
         locked_player_ids: Sequence[int] | None = None,
+        league: str | None = None,
     ) -> list[PlayerProjectionContract]:
         """Optimal initial squad draft recommendation from scratch or completing locked players."""
-        market = list(pool or self.prediction_service.get_projections(season, 1))
+        market = list(pool or self.prediction_service.get_projections(season, 1, league=league))
         if not market:
             return []
         try:
@@ -329,10 +336,11 @@ class OptimizationService:
         risk_mode: str = "expected",
         locked_player_ids: Sequence[int] | None = None,
         pool: Sequence[PlayerProjectionContract] | None = None,
+        league: str | None = None,
     ) -> dict[str, Any]:
         """Suggest optimal 11-player squad with breakdown and validation for GUI."""
         locked_set = set(locked_player_ids or [])
-        market = list(pool or self.prediction_service.get_projections(season, 1))
+        market = list(pool or self.prediction_service.get_projections(season, 1, league=league))
         budget_limit_tenths = int(round(budget_credits * 10))
 
         if not market:
@@ -414,9 +422,10 @@ class OptimizationService:
         squad_units: Sequence[TeamRosterUnit],
         season: str,
         round_number: int,
+        league: str | None = None,
     ) -> list[PlayerProjectionContract]:
         """Convert TeamRosterUnits into valid PlayerProjectionContracts."""
-        projections_dict = self.prediction_service.get_projections_dict(season, round_number)
+        projections_dict = self.prediction_service.get_projections_dict(season, round_number, league=league)
         contracts: list[PlayerProjectionContract] = []
 
         for unit in squad_units:

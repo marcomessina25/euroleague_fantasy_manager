@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from euroleague_fantasy_manager.competition.ruleset import League
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit, TeamSettings
 from euroleague_fantasy_manager.optimization.constraints import (
@@ -75,6 +76,8 @@ def create_team(
     decision_service: DecisionService = Depends(get_decision_service),
 ) -> dict[str, Any]:
     try:
+        league = League.from_str(req.league).value
+
         # Generate clean team_id if not provided
         tid = req.team_id
         if not tid:
@@ -86,8 +89,14 @@ def create_team(
         bank_tenths = req.bank_tenths if req.bank_tenths is not None else 1000
 
         if req.player_ids:
-            proj_dict = prediction_service.get_projections_dict(req.season, req.round_number)
-            contracts = [proj_dict[pid] for pid in req.player_ids if pid in proj_dict]
+            proj_dict = prediction_service.get_projections_dict(req.season, req.round_number, league=league)
+            missing = [pid for pid in req.player_ids if pid not in proj_dict]
+            if missing:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Player IDs {missing} do not belong to the selected league '{league}' player pool.",
+                )
+            contracts = [proj_dict[pid] for pid in req.player_ids]
 
             # Validate squad
             val = validate_squad_constraints(contracts, budget_tenths=1000)
@@ -127,7 +136,7 @@ def create_team(
         team = service.create_team(
             team_id=tid,
             name=req.name,
-            league=req.league,
+            league=league,
             mode=req.mode,
             season=req.season,
             round_number=req.round_number,
@@ -271,7 +280,7 @@ def execute_transfers(
             raise HTTPException(status_code=400, detail=f"Players {missing} are not in current squad.")
 
         # Resolve projection contracts for market
-        proj_dict = prediction_service.get_projections_dict(req.season, team.round_number)
+        proj_dict = prediction_service.get_projections_dict(req.season, team.round_number, league=team.league or "euroleague")
 
         # Calculate sale value
         sell_value_tenths = sum(u.current_price_tenths for u in team.squad if u.player_id in out_ids)

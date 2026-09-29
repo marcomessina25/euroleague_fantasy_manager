@@ -179,6 +179,7 @@ for pid in s_ids:
 
 **Acceptance Criteria:**
 - Captaincy rule: If current captain has already played, **captaincy CANNOT switch** (preserve their doubled score). Only unplayed starters can become new captain.
+  - **Superseded (v0.6):** the official rule allows switching the armband even after the current captain has played; the new captain must be a starter who has not played yet. See `optimization/intra_round.py`.
 - Add guard clause: raise `ValueError` if rule is violated
 - Unit test: `test_intra_round_optimizer_captaincy_rules()`
 - Deliverable: Updated `intra_round.py` with guard + passing test
@@ -484,7 +485,7 @@ def test_transfer_optimizer_performance_budget():
 |------|--------|-------|-------------|-------|
 | #1 Prediction Validation | 🟢 DONE ✓ | @marcomessina25 | 2–4h | Verified 10.6% MAE reduction vs baseline; backtest script + test in place |
 | #2 Schema Migration | 🟢 DONE ✓ | @marcomessina25 | 1–2h | Added `schema_version` table, PRAGMA column check, idempotent migrations |
-| #3 Captaincy Guard | 🟢 DONE ✓ | @marcomessina25 | 1h | Captain locked if already played; switchable only if unplayed |
+| #3 Captaincy Guard | 🟢 DONE ✓ | @marcomessina25 | 1h | Superseded in v0.6: captaincy may move after the captain played, only to an unplayed starter |
 | #4 Checkpoint Fail-Fast | 🟢 DONE ✓ | @marcomessina25 | 45m | `get_round_checkpoint` raises `ValueError` on missing checkpoint |
 | #5 Transfer Ranking | 🟢 DONE ✓ | @marcomessina25 | 1.5h | Validated monotonic net transfer ranking and package uniqueness |
 | #6 UI Breakdown Tests | 🟢 DONE ✓ | @marcomessina25 | 1h | Runtime consistency assertion + tests across unplayed, mid-round, all-played |

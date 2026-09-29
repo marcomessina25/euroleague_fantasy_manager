@@ -403,10 +403,19 @@ class SnapshotStore:
                 fixture_count=fixture_count,
             )
 
-    def load_latest_players(self) -> list[Player]:
+    @staticmethod
+    def _latest_snapshot_row(conn: sqlite3.Connection, league_id: int | None) -> sqlite3.Row | None:
+        """Latest snapshot, restricted to ``league_id`` when given (never falls back to another league)."""
+        if league_id is None:
+            return conn.execute("SELECT id FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
+        return conn.execute(
+            "SELECT id FROM snapshots WHERE league_id = ? ORDER BY id DESC LIMIT 1", (int(league_id),)
+        ).fetchone()
+
+    def load_latest_players(self, league_id: int | None = None) -> list[Player]:
         """Return all players and head coaches from the latest snapshot as Player domain models."""
         with self._connect() as conn:
-            row = conn.execute("SELECT id FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
+            row = self._latest_snapshot_row(conn, league_id)
             if row is None:
                 return []
             sid = int(row["id"])
@@ -439,9 +448,9 @@ class SnapshotStore:
                 for r in rows
             ]
 
-    def search_latest_players(self, query: str, position: str | None = None) -> list[dict[str, Any]]:
+    def search_latest_players(self, query: str, position: str | None = None, league_id: int | None = None) -> list[dict[str, Any]]:
         """Case-insensitive search across player/coach names and team abbreviations."""
-        players = self.load_latest_players()
+        players = self.load_latest_players(league_id=league_id)
         norm_q = query.strip().lower()
         pos_filter = Position.from_raw(position) if position else None
         results: list[dict[str, Any]] = []
@@ -464,10 +473,10 @@ class SnapshotStore:
                 )
         return results
 
-    def load_latest_teams(self) -> dict[int, dict[str, str]]:
+    def load_latest_teams(self, league_id: int | None = None) -> dict[int, dict[str, str]]:
         """Return mapping of team_id -> {'name': ..., 'short_name': ...} for the latest snapshot."""
         with self._connect() as conn:
-            row = conn.execute("SELECT id FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
+            row = self._latest_snapshot_row(conn, league_id)
             if row is None:
                 return {}
             sid = int(row["id"])
@@ -480,10 +489,10 @@ class SnapshotStore:
                 for r in rows
             }
 
-    def load_latest_fixtures(self, round_numbers: list[int] | None = None) -> list[dict[str, Any]]:
+    def load_latest_fixtures(self, round_numbers: list[int] | None = None, league_id: int | None = None) -> list[dict[str, Any]]:
         """Return fixtures from the latest snapshot, optionally filtered by round_numbers."""
         with self._connect() as conn:
-            row = conn.execute("SELECT id FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
+            row = self._latest_snapshot_row(conn, league_id)
             if row is None:
                 return []
             sid = int(row["id"])
