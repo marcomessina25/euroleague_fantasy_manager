@@ -2,32 +2,33 @@
 
 A deterministic, local-first **EuroLeague Fantasy Challenge (Classic Mode)** decision engine for the 2026/27 season (`E2026`), architected to share its core engine with **EuroCup Fantasy Challenge** (`U2026`).
 
-![Version](https://img.shields.io/badge/Version-0.5.1-purple) ![Python](https://img.shields.io/badge/Python-3.12-blue) ![License](https://img.shields.io/badge/License-MIT-green)
+![Version](https://img.shields.io/badge/Version-0.6.0-purple) ![Python](https://img.shields.io/badge/Python-3.12-blue) ![License](https://img.shields.io/badge/License-MIT-green)
 
 ---
 
 The project deliberately separates deterministic facts and rule checks from strategic judgement:
 
 ```text
-EuroLeague Fantasy & Feeds APIs -> local SQLite snapshots -> rules + validation -> reports -> human / LLM analysis
+EuroLeague/EuroCup APIs -> local SQLite snapshots -> rules + validation -> reports -> Manager Dossier -> human / LLM copilot
 ```
 
 ## Data attribution
 
-This project uses official EuroLeague fantasy data and related public competition data. Any reuse of that data must comply with the applicable terms and conditions of the data provider.
+This project uses official EuroLeague/EuroCup fantasy data and related public competition data. Any reuse of that data must comply with the applicable terms and conditions of the data provider.
 
 
 ## Living roadmap
 
 - [`docs/architecture.md`](docs/architecture.md) defines the purpose, architectural boundaries, and responsibilities of each layer.
-- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1`, `V0.2`, `V0.2.5`, `V0.3`, `V0.4`, `0.4.5`, `V0.5`, and `V0.5.1` completed; `V0.6` is next).
+- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1`, `V0.2`, `V0.2.5`, `V0.3`, `V0.4`, `0.4.5`, `V0.5`, `V0.5.1`, and `V0.6` completed; `V0.6.5` / `V0.7` next).
 - [`docs/specs/v02.md`](docs/specs/v02.md) and [`docs/specs/items_left_for_v02.md`](docs/specs/items_left_for_v02.md) define the **V0.2** heuristic decision-support baseline specification and pre-merge checklist.
 - [`docs/specs/v025.md`](docs/specs/v025.md) and [`docs/specs/v025_cleanup.md`](docs/specs/v025_cleanup.md) define the **V0.2.5** historical evaluation foundation.
 - [`docs/specs/v03.md`](docs/specs/v03.md) and [`docs/specs/items_left_for_v03.md`](docs/specs/items_left_for_v03.md) define the **V0.3** validated predictive projection layer (`0.3.0`) and merge checklist.
 - [`docs/specs/v04.md`](docs/specs/v04.md), [`docs/specs/v04_items_left.md`](docs/specs/v04_items_left.md), and [`docs/specs/items_left_for_v04.md`](docs/specs/items_left_for_v04.md) define the **V0.4** decision and optimization layer (`0.4.0`).
 - [`docs/specs/v045.md`](docs/specs/v045.md) defines **0.4.5** closed-loop evaluation and live decision state (`0.4.5`).
 - [`docs/specs/v05.md`](docs/specs/v05.md) and [`docs/specs/items_left_for_v05.md`](docs/specs/items_left_for_v05.md) define the **V0.5** multi-team management, application services, and local Web GUI workstation (`0.5.0`).
-- [`docs/roadmap.md`](docs/roadmap.md) documents **V0.5.1** live score presentation, quantitative decomposed prediction priors, and high-speed transfer optimization (`0.5.1`).
+- [`docs/specs/items_left_for_v051.md`](docs/specs/items_left_for_v051.md) documents **V0.5.1** live score presentation, quantitative decomposed prediction priors, and high-speed transfer optimization (`0.5.1`).
+- [`docs/specs/v06.md`](docs/specs/v06.md) and [`docs/specs/items_left_for_v06.md`](docs/specs/items_left_for_v06.md) define **V0.6** Strategic Intelligence, Manager Dossier, Multi-League Foundation, and Grounded Copilot (`0.6.0`).
 
 Both human contributors and AI agents must read the relevant living documents before making material changes and update them whenever architecture, scope, priorities, or delivery status changes.
 
@@ -236,18 +237,21 @@ elf evaluate-decisions --team my_team --csv reports/decisions/summary.csv
 
 ## V0.5 Multi-Team Management & Local Web GUI Workstation (`elf gui`, `elf team`)
 
-Manage up to 3 isolated EuroLeague Fantasy Classic teams and operate with a unified, local-first interactive browser workstation built on FastAPI:
+Manage up to 6 isolated EuroLeague and EuroCup Fantasy Classic teams and operate with a unified, local-first interactive browser workstation built on FastAPI:
 
 ### 1. Multi-Team CLI Management
 
-Create, list, inspect, select active profiles, and import squads for up to 3 isolated teams:
+Create, list, inspect, select active profiles, and import squads for up to 6 isolated teams across competitions:
 
 ```powershell
 # List existing teams
 elf team list
 
-# Create a new team profile
-elf team create --id team_alpha --name "Alpha Contender" --season 2026/27 --bank 15.0
+# Create a new EuroLeague team profile
+elf team create --id team_alpha --name "Alpha Contender" --league euroleague --season 2026/27 --bank 15.0
+
+# Create a new EuroCup team profile
+elf team create --id team_eurocup --name "EuroCup Challenger" --league eurocup --season 2026/27 --bank 10.0
 
 # Set active context
 elf team select team_alpha
@@ -274,6 +278,56 @@ elf gui --host 127.0.0.1 --port 8080 --open-browser
 - **Multi-Round Strategic Beam Search**: Inspect multi-round planning roadmaps over horizons $N=2..4$ rounds with customizable discount factor ($\gamma$).
 - **Evaluation Hub & Regret Analysis**: Retrospective performance reporting human vs model vs hindsight oracle, component regrets (captain, sixth man, bench, formation), and rolling prediction accuracy.
 - **Disposable What-If Scenario Sandbox**: Ephemeral simulation sandbox to rule out injured players or test aggressive risk modes without altering persistent team state.
+
+## V0.6 Strategic Intelligence, Manager Dossier & Grounded Copilot (`elf advise`)
+
+V0.6 layers strategic interpretation around the deterministic engine with strict **zero-mutation invariants** (analysis cannot modify persistent team state without explicit human workflow) and complete **offline deterministic fallback**:
+
+### 1. Manager Dossier (`--tier dossier`)
+
+Generates a standardized quantitative fact sheet with cryptographic SHA-256 provenance hashes (`content_hash` and `config_hash`), starting five, captaincy, sixth man, bench units, head coach, multi-option transfer packages, T1 $\to$ T2 turn substitutions, and market player valuations:
+
+```powershell
+# Generate complete deterministic Manager Dossier in Markdown
+elf advise --tier dossier
+
+# Output dossier as structured JSON for automation or inspection
+elf advise --tier dossier --json
+```
+
+### 2. Deterministic Strategic Analysis (`--tier strategic`)
+
+Operates 100% offline with zero external API dependencies or network access:
+- **Assumption Breakdown**: Ranked top strategic assumptions by fantasy point impact.
+- **Sensitivity Stress Testing**: Evaluates one-way shocks (Captaincy $-25\%$, starter rotation floor bust).
+- **Devil's Advocate Checklist**: Quantitative sanity check verifying rule legality, projection plausibility, alternative completeness, downside variance regret, and bank liquidity flexibility.
+
+```powershell
+elf advise --tier strategic
+```
+
+### 3. Grounded LLM Copilot (`--tier full`)
+
+Invokes specialized strategic personas grounded in deterministic dossier facts:
+- **Personas**: `manager_briefing` (executive summary), `devils_advocate` (contrarian stress-tester), `tactical_analyst` (matchup & T1/T2 specialist), `strategic_planner` (multi-round horizon).
+- **Supported Providers**: `heuristic` (offline fallback), `gemini` (Google Gemini), `openai` (GPT-4o), `anthropic` (Claude 3.5), `openrouter`, and `local` (Ollama/vLLM).
+- **Consistency Verification**: Automatically scans LLM responses to verify numerical consistency, detect hallucinated player names outside the dossier pool, and reject illegal fantasy chips (e.g., Free Hit, Triple Captain) that do not exist in basketball rules.
+- **Failure Isolation**: Provider timeouts or missing API keys automatically fall back to the offline heuristic advisor without throwing unhandled exceptions or corrupting team state.
+
+```powershell
+# Offline heuristic copilot advice
+elf advise --persona manager_briefing --provider heuristic
+
+# Claude / Gemini strategic analysis
+elf advise --persona devils_advocate --provider gemini
+elf advise --persona tactical_analyst --provider anthropic
+```
+
+### 4. Web Workstation "🧠 Intelligence & Copilot" Tab
+
+The workstation features a dedicated strategic dashboard:
+- **Split Dashboard**: Deterministic Strategic Assumptions, Sensitivities, and Devil's Advocate Checklist on the left; Grounded Copilot narrative, provider metadata badges, latency timer, and consistency verification on the right.
+- **Raw Dossier JSON Inspector**: Collapsible full JSON payload inspector for auditability and verification.
 
 ## License
 
