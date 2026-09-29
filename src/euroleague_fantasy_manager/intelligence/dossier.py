@@ -439,16 +439,25 @@ def generate_manager_dossier(
     # 5. Provenance & Hashes
     dossier_id = str(uuid.uuid4())
     now_iso = datetime.now(timezone.utc).isoformat()
-    raw_facts = f"{team_id}:{rnd}:{tot_proj_fp}:{len(transfer_options)}"
-    content_hash = hashlib.sha256(raw_facts.encode("utf-8")).hexdigest()[:16]
+    canonical_data = {
+        "league": league_val,
+        "round_number": rnd,
+        "ruleset": ruleset.name,
+        "current_lineup": current_lineup.to_dict(),
+        "transfer_recommendations": [t.to_dict() for t in transfer_options],
+        "intra_round_recommendations": intra_round.to_dict(),
+        "player_valuations": list(valuations_map.values())[:30],
+    }
+    canonical_bytes = json.dumps(canonical_data, sort_keys=True, default=str).encode("utf-8")
+    content_hash = hashlib.sha256(canonical_bytes).hexdigest()[:16]
 
     provenance = DossierProvenance(
         dossier_id=dossier_id,
         generated_at=now_iso,
         ruleset_name=ruleset.name,
         competition_code=ruleset.competition_code,
-        prediction_model="decomposed_v051",
-        optimizer_engine="bounded_milp_v051",
+        prediction_model="fp_decomposed_v03",
+        optimizer_engine=f"bounded_milp_{team.settings.risk_mode}",
         risk_mode=team.settings.risk_mode,
         content_hash=content_hash,
     )

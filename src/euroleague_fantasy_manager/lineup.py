@@ -334,15 +334,60 @@ def generate_lineup_report(
     database_path: Path = DATABASE_PATH,
     round_number: int | None = None,
     report_path: Path | None = LINEUP_REPORT_PATH,
+    league_id: int | None = None,
 ) -> dict[str, Any]:
     """Load current squad, compute projections, optimize Starting 5 + 6th Man + Captain, and persist JSON report."""
     state = load_current_squad(squad_path)
     store = SnapshotStore(database_path)
-    target_round = round_number if round_number is not None else (state.round_number or get_current_round(store))
+    eff_league_id = league_id if league_id is not None else getattr(state, "league_id", None)
+    target_round = round_number if round_number is not None else (state.round_number or get_current_round(store, league_id=eff_league_id))
 
-    players_by_id = {p.id: p for p in store.load_latest_players()}
-    squad_players = [players_by_id[pid] for pid in state.player_ids if pid in players_by_id]
-    projections = project_all_players(database_path=database_path, round_number=target_round)
+    players_by_id = {p.id: p for p in store.load_latest_players(league_id=eff_league_id)}
+    projections = project_all_players(database_path=database_path, round_number=target_round, league_id=eff_league_id)
+
+    squad_players: list[Player] = []
+    for pid in state.player_ids:
+        if pid in players_by_id:
+            squad_players.append(players_by_id[pid])
+        else:
+            # BUG-EDGE-002: unit missing / departed -> keep unit, project 0, flag unavailable
+            p_dep = Player(
+                id=pid,
+                first_name="Departed",
+                last_name=f"Unit {pid}",
+                name=f"Unit {pid} (Departed)",
+                position=Position.GUARD,
+                team_id=0,
+                team_code="OUT",
+                team_name="Unavailable",
+                price_tenths=state.purchase_prices_tenths.get(pid, 50),
+                status="unavailable - sell candidate",
+                probability_of_playing=0.0,
+                turn_number=1,
+            )
+            players_by_id[pid] = p_dep
+            squad_players.append(p_dep)
+            if pid not in projections:
+                projections[pid] = PlayerProjection(
+                    player_id=pid,
+                    name=p_dep.name,
+                    position=p_dep.position,
+                    team_id=0,
+                    team_code="OUT",
+                    price_tenths=p_dep.price_tenths,
+                    credits=p_dep.credits,
+                    status=p_dep.status,
+                    turn_number=1,
+                    opponent_code="TBD",
+                    is_home=True,
+                    fdr=5,
+                    win_probability=0.0,
+                    expected_margin=0.0,
+                    availability_factor=0.0,
+                    base_pir=0.0,
+                    expected_pdk=0.0,
+                    sigma_pdk=0.0,
+                )
 
     recommendation = optimize_court_lineup(
         squad=squad_players,

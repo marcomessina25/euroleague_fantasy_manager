@@ -39,9 +39,24 @@ Georgios Bartzokas
 
 ## How It Works
 
-1. Queries the latest local SQLite snapshot (`data/euroleague.sqlite3`) saved by `elf update`.
-2. Matches each line against full names or unique substrings across players and Head Coaches.
+1. Queries the latest local SQLite snapshot (`data/euroleague.sqlite3`) saved by `elf update`, scoped strictly to the target league (`--league eurocup` [id=11] or `--league euroleague` [id=10], defaulting to active team's league or EuroLeague).
+2. Matches each line against full names or unique substrings across players and Head Coaches within that league's snapshot only (never cross-matching across competitions).
 3. Prints status declarations for each entry:
-   - `importing id <id> player <name> pos <position> team <team> price <credits>Cr`
-   - `failed importing player <query>` (if no match or ambiguous match)
-4. Writes the resolved IDs and current `price_tenths` (`quotation * 10`) into `config/current_squad.json`.
+   - `importing id <id> player <name> pos <position> team <team> price <credits>Cr (league <league_id>)`
+   - `failed importing player <query> (league <league_id>)` (if no match or ambiguous match)
+4. Writes the resolved IDs, current `price_tenths` (`quotation * 10`), and `league_id` into `config/current_squad.json`.
+5. Validates against cross-league imports: attempting to import against an existing squad file from a different league raises an explicit league mismatch error.
+
+## EuroCup Import Example
+
+To import a EuroCup squad into `current_squad.json`:
+
+```powershell
+elf import-squad --league eurocup --file eurocup_players.txt --squad config/current_squad_ec.json
+```
+
+Or when an active EuroCup team is selected (`elf team select --id my_ec_team`), simply run:
+
+```powershell
+elf import-squad
+```

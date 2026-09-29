@@ -56,9 +56,48 @@ def fetch_player_profile(player_id: int, league_id: int = EUROLEAGUE_LEAGUE_ID) 
     return payload.get("data", payload)
 
 
-def fetch_official_clubs(competition_code: str = "E", season_code: str = "E2026") -> list[dict[str, Any]]:
+import re
+
+
+def resolve_season_code(
+    config: dict[str, Any],
+    competition_code: str,
+    override: str | None = None,
+) -> tuple[str, str]:
+    """Resolve season code from explicit override or config payload, returning (season_code, source)."""
+    if override:
+        return override.strip(), "override"
+
+    if config.get("season_code"):
+        return str(config["season_code"]).strip(), "config"
+    if config.get("season"):
+        raw_s = str(config["season"]).strip()
+        year_match = re.search(r"20\d{2}", raw_s)
+        if year_match:
+            return f"{competition_code}{year_match.group(0)}", "config"
+
+    cur_round = config.get("current_round", {})
+    if isinstance(cur_round, dict):
+        started_at = str(cur_round.get("started_at", ""))
+        year_match = re.search(r"20\d{2}", started_at)
+        if year_match:
+            return f"{competition_code}{year_match.group(0)}", "config"
+
+    for md in config.get("matchdays", []):
+        for rnd in md.get("rounds", []):
+            started_at = str(rnd.get("started_at", ""))
+            year_match = re.search(r"20\d{2}", started_at)
+            if year_match:
+                return f"{competition_code}{year_match.group(0)}", "config"
+
+    # Documented fallback if no season/timestamp could be extracted from feed
+    return f"{competition_code}2026", "fallback"
+
+
+def fetch_official_clubs(competition_code: str = "E", season_code: str | None = None) -> list[dict[str, Any]]:
     """Fetch official EuroLeague ('E') or EuroCup ('U') clubs from IncrowdSports v2 feeds."""
-    url = f"{EUROLEAGUE_FEEDS_BASE_URL}/competitions/{competition_code}/seasons/{season_code}/clubs"
+    code = season_code or f"{competition_code}2026"
+    url = f"{EUROLEAGUE_FEEDS_BASE_URL}/competitions/{competition_code}/seasons/{code}/clubs"
     try:
         payload = get_json(url)
         return payload.get("data", []) if isinstance(payload, dict) else []
@@ -69,11 +108,12 @@ def fetch_official_clubs(competition_code: str = "E", season_code: str = "E2026"
 def fetch_current_data(
     league_id: int = EUROLEAGUE_LEAGUE_ID,
     competition_code: str = "E",
-    season_code: str = "E2026",
+    season_code: str | None = None,
     upcoming_rounds: int = 6,
 ) -> dict[str, Any]:
     """Fetch a complete point-in-time snapshot of config, multi-round schedules, match lineups, and official clubs."""
     config = fetch_league_config(league_id=league_id)
+    resolved_season_code, season_code_source = resolve_season_code(config, competition_code, override=season_code)
     schedule_id = int(config["current_schedule_id"])
     current_md = config["current_matchday"]
     matchday_id = int(current_md["id"])
@@ -124,15 +164,17 @@ def fetch_current_data(
             lineups_by_match[mid] = match_data
 
     ordered_match_lineups = [lineups_by_match[mid] for _, mid in match_ids if mid in lineups_by_match]
-    official_clubs = fetch_official_clubs(competition_code=competition_code, season_code=season_code)
+    official_clubs = fetch_official_clubs(competition_code=competition_code, season_code=resolved_season_code)
 
     return {
         "league_id": league_id,
         "competition_code": competition_code,
-        "season_code": season_code,
+        "season_code": resolved_season_code,
+        "season_code_source": season_code_source,
         "config": config,
         "schedule": schedule,
         "schedules": ordered_schedules,
         "match_lineups": ordered_match_lineups,
         "official_clubs": official_clubs,
     }
+

@@ -178,7 +178,7 @@ def create_team(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{team_id}")
@@ -408,8 +408,10 @@ def execute_transfers(
         raise
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
+    except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 class RevertRoundStartRequest(BaseModel):

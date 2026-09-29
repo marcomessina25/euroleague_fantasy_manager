@@ -1,8 +1,8 @@
 # EuroLeague Fantasy Manager — Roadmap
 
 > **Current planning baseline:** 2026-09-29  
-> **Current baseline:** V0.6 is completed, validated, and ready for PR merge (branch `v06`).  
-> **Next releases:** V0.6.5 (Release Hardening & EuroCup Ingestion Pipeline) & V0.7 (Sequential Historical Decision Replay & Multi-Season Prediction Backtesting).
+> **Current baseline:** V0.6.5 is completed, hardened, and verified with 144 passing tests (branch `v065_new`).  
+> **Next release:** V0.7 (Sequential Historical Decision Replay & Multi-Season Prediction Backtesting).
 
 ## 1. Vision
 
@@ -232,26 +232,43 @@ V0.6 establishes the architecture that connects the deterministic engine to huma
 
 # 6. V0.6.5 — Release Hardening, Bug Audits & EuroCup Ingestion Pipeline
 
-**Status: Planned (Next Active Milestone)**
+**Status: Completed (v0.6.5 on branch `v065_new`, 2026-09-29)**
 
-Following the release hardening pattern established in `fpl-manager`, V0.6.5 focuses on bug audits, edge-case hardening, and operationalizing the EuroCup live data pipeline.
+Following the release hardening pattern established in `fpl-manager`, V0.6.5 implemented systematic bug audits, edge-case hardening, and operationalized the EuroCup live data pipeline with 144 passing automated tests and zero network dependencies in test suites.
 
 ## Core deliverables
 
-1. **EuroCup Live Ingestion Pipeline**:
-   - Enable `elf update --league eurocup` (using Dunkest league_id=11, competition_code="U", season_code="U2026").
-   - Partition SQLite snapshots by league (`snapshots.league` column and indexed retrieval).
-   - Ingest official EuroCup clubs (20 clubs across Group A and Group B) from IncrowdSports feeds.
-2. **CLI & Service Multi-League Auto-Detection**:
-   - `elf report`, `elf squad`, `elf players`, and `elf lineup` automatically resolve the active team's league.
-   - Add explicit `--league` overrides to CLI data inspection commands.
+1. **CLI Multi-League Resolution Precedence**:
+   - Implemented §2.1 resolution order: `--league` CLI flag > `ELF_LEAGUE` environment variable > selected team's league > default fallback (`euroleague`).
+   - Unified subparser inheritance across all commands (`report`, `players`, `squad`, `lineup`, `suggest-trades`, `fixtures`, `eval-round`, `history`, `dossier`, `advise`, `update`, `import-squad`).
+   - Diagnostic header `League: {LEAGUE} ({source})` emitted to `stderr`; invalid league values reject early with exit code 2.
+2. **EuroCup Live Ingestion Pipeline & Schema v3**:
+   - `SnapshotStore` upgraded to schema version 3 with `idx_snapshots_league_id`, `club_count`, and `season_code_source`.
+   - `api.py` dynamically resolves season codes (`E{year}` / `U{year}`) and derives official club counts from feeds (18-20 for EuroLeague, 20 for EuroCup across Groups A & B).
+   - Snapshot queries strictly partition by `league_id` (10 for EuroLeague, 11 for EuroCup).
 3. **EuroCup Squad Import Workflow**:
-   - Extend `import-squad` to support EuroCup rosters (`players.txt` or JSON with EuroCup player IDs).
-4. **Edge-Case & Potential Bugs Audit**:
-   - Systematically audit corner cases in T1/T2 turn substitutions (e.g., games postponed mid-round, coaches fired mid-week).
-   - Audit budget calculations for 0.0-credit bank boundaries.
-5. **Workstation GUI Multi-League Filter**:
-   - Court view and team tabs visually distinguish EuroLeague (`[EL]`) and EuroCup (`[EC]`) teams with filtered player market search.
+   - `import_squad.py` accepts explicit `--league` / `league_id`, searching only the target competition's snapshot.
+   - Records `league_id` inside `config/current_squad.json` and guards against cross-league player additions.
+4. **Edge-Case & Rules Hardening (Bug Audit)**:
+   - `BUG-EDGE-001`: Postponed or cancelled fixtures automatically project 0.0 FP, 0.0 sigma, and status `"postponed"` in `expected_points.py`.
+   - `BUG-EDGE-002`: Departed squad players retained in roster, projected at 0.0 FP with status `"unavailable - sell candidate"`, and prioritized for liquidation by transfer optimizer.
+   - `BUG-EDGE-003`: Replaced head coaches projected at 0.0 FP; transfer optimizer can legally replace them.
+   - `BUG-EDGE-004`: Bank boundaries: exact 0.0 Cr balance is legal; negative balances (< 0.0 Cr) are rejected across trades, optimizers, and API routes.
+   - `BUG-RULE-002`: Intra-round lockout rules enforced: starter who played can be moved to bench between turns; played bench player is locked on bench; played captain can only transfer armband to unplayed starter; played player cannot become new captain.
+   - `BUG-EDGE-005` & `BUG-EDGE-006`: 3-turn rounds (`T1/T2/T3`) and round rollover mid-round verified.
+5. **Web GUI & API Hardening**:
+   - Centralized `parse_league` FastAPI dependency returning HTTP 400 on invalid league values.
+   - Database player lookups (`/players/{player_id}`) strictly scoped to active snapshot's `league_id`.
+   - Complete XSS prevention in `app.js` using `escapeHtml()` across all dynamic template interpolations.
+6. **Provenance, Versioning & Model Alignment**:
+   - Upgraded version to `0.6.5` across `__init__.py` and `pyproject.toml`.
+   - `content_hash` in `ManagerDossier` calculated via SHA-256 over canonical sorted quantitative JSON (excluding mutable timestamps and IDs).
+   - Provenance model strings dynamically emit `"fp_decomposed_v03"` and `f"bounded_milp_{team.settings.risk_mode}"`.
+   - Heuristic and remote LLM provider defaults aligned with class constants; Copilot tier parameter accepted cleanly.
+7. **CI/CD Pipeline & Bug Register**:
+   - Created `.github/workflows/ci.yml` running `pytest` and `node --check` syntax validation on push/PR.
+   - Published `docs/specs/v065_potential_bugs.md` cataloging all 14 audited bug items with test coverage and manual GUI verification scripts.
+   - Full test suite passes: 144 tests in `tests/`.
 
 ---
 
@@ -431,11 +448,11 @@ V0.5     Multi-Team Workstation (FastAPI Web GUI)                    [Completed]
   ↓
 V0.5.1   Stabilization & Production Readiness                        [Completed - Merged]
   ↓
-V0.6     Strategic Intelligence, Manager Dossier & Multi-League      [Completed / PR-Ready]
+V0.6     Strategic Intelligence, Manager Dossier & Multi-League      [Completed]
   ↓
-V0.6.5   Release Hardening, Bug Audits & EuroCup Ingestion Pipeline  [Planned]
+V0.6.5   Release Hardening, Bug Audits & EuroCup Ingestion Pipeline  [Completed]
   ↓
-V0.7     Sequential Historical Replay & Multi-Season Backtesting     [Planned]
+V0.7     Sequential Historical Replay & Multi-Season Backtesting     [Planned - Next]
   ↓
 V0.8     Basketball Context, Participation & Strategic Risk          [Planned]
   ↓

@@ -117,8 +117,12 @@ def project_player_for_round(
         exp_margin = 0.0
         turn_num = int(player.turn_number or 1)
 
+    is_postponed = bool(fixture_info.get("is_postponed", False)) if fixture_info else False
+
     if player.position == Position.HEAD_COACH:
         coach_mean, coach_std = expected_coach_pdk(exp_margin)
+        if is_postponed:
+            coach_mean, coach_std = 0.0, 0.0
         return PlayerProjection(
             player_id=player.id,
             name=player.name,
@@ -127,21 +131,26 @@ def project_player_for_round(
             team_code=player.team_code,
             price_tenths=player.price_tenths,
             credits=player.credits,
-            status=player.status,
+            status="postponed" if is_postponed else player.status,
             turn_number=turn_num,
             opponent_code=opp_code,
             is_home=is_home,
             fdr=fdr,
-            win_probability=round(win_prob, 4),
-            expected_margin=round(exp_margin, 2),
-            availability_factor=1.0,
+            win_probability=round(win_prob, 4) if not is_postponed else 0.0,
+            expected_margin=round(exp_margin, 2) if not is_postponed else 0.0,
+            availability_factor=0.0 if is_postponed else 1.0,
             base_pir=coach_mean,
             expected_pdk=coach_mean,
             sigma_pdk=coach_std,
         )
 
-    avail = compute_availability_factor(player)
-    status_norm = player.status.strip().lower()
+    if is_postponed:
+        avail = 0.0
+        status_norm = "postponed"
+    else:
+        avail = compute_availability_factor(player)
+        status_norm = player.status.strip().lower()
+
     price_prior = player.credits * (1.02 if status_norm == "starter" else 0.78)
 
     if player.avg_fantasy_pts > 0.0:
@@ -154,8 +163,8 @@ def project_player_for_round(
     fdr_mult = position_fdr_multiplier(fdr=fdr, position=player.position, is_home=is_home)
     win_bonus_mult = 1.0 + 0.10 * win_prob
 
-    xpdk = round(avail * base_pir * fdr_mult * win_bonus_mult, 2)
-    sigma = round(max(4.0, 0.45 * xpdk), 2) if avail > 0.0 else 0.0
+    xpdk = round(avail * base_pir * fdr_mult * win_bonus_mult, 2) if not is_postponed else 0.0
+    sigma = round(max(4.0, 0.45 * xpdk), 2) if (avail > 0.0 and not is_postponed) else 0.0
 
     return PlayerProjection(
         player_id=player.id,
@@ -165,13 +174,13 @@ def project_player_for_round(
         team_code=player.team_code,
         price_tenths=player.price_tenths,
         credits=player.credits,
-        status=player.status,
+        status="postponed" if is_postponed else player.status,
         turn_number=turn_num,
         opponent_code=opp_code,
         is_home=is_home,
         fdr=fdr,
-        win_probability=round(win_prob, 4),
-        expected_margin=round(exp_margin, 2),
+        win_probability=round(win_prob, 4) if not is_postponed else 0.0,
+        expected_margin=round(exp_margin, 2) if not is_postponed else 0.0,
         availability_factor=avail,
         base_pir=round(base_pir, 2),
         expected_pdk=xpdk,
@@ -182,16 +191,17 @@ def project_player_for_round(
 def project_all_players(
     database_path: Path = DATABASE_PATH,
     round_number: int | None = None,
+    league_id: int | None = None,
 ) -> dict[int, PlayerProjection]:
     """Generate PlayerProjection objects for all players and Head Coaches in the latest snapshot."""
     store = SnapshotStore(database_path)
     if round_number is None:
-        round_number = get_current_round(store)
+        round_number = get_current_round(store, league_id=league_id)
 
-    players = store.load_latest_players()
-    teams_map = store.load_latest_teams()
+    players = store.load_latest_players(league_id=league_id)
+    teams_map = store.load_latest_teams(league_id=league_id)
     strengths = compute_team_strengths(players, teams_map)
-    fixtures = store.load_latest_fixtures(round_numbers=[round_number])
+    fixtures = store.load_latest_fixtures(round_numbers=[round_number], league_id=league_id)
 
     team_fixture_map: dict[int, dict[str, object]] = {}
     for fix in fixtures:
@@ -200,6 +210,9 @@ def project_all_players(
         tnum = fix["turn_number"]
         h_code = fix["home_team_code"] or teams_map.get(h_id, {}).get("short_name", f"T{h_id}")
         a_code = fix["away_team_code"] or teams_map.get(a_id, {}).get("short_name", f"T{a_id}")
+
+        fix_status = str(fix.get("status") or "").lower()
+        is_postponed = fix_status in ("postponed", "cancelled", "canceled", "suspended")
 
         s_h = strengths.get(h_id, 0.55)
         s_a = strengths.get(a_id, 0.55)
@@ -213,6 +226,7 @@ def project_all_players(
             "fdr": m_h["fdr"],
             "win_probability": m_h["win_probability"],
             "expected_margin": m_h["expected_margin"],
+            "is_postponed": is_postponed,
         }
         team_fixture_map[a_id] = {
             "opponent": h_code,
@@ -221,6 +235,7 @@ def project_all_players(
             "fdr": m_a["fdr"],
             "win_probability": m_a["win_probability"],
             "expected_margin": m_a["expected_margin"],
+            "is_postponed": is_postponed,
         }
 
     return {

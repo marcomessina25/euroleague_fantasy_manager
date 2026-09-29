@@ -28,11 +28,13 @@ def generate_squad_report(
     database_path: Path = DATABASE_PATH,
     report_path: Path | None = SQUAD_REPORT_PATH,
     round_number: int | None = None,
+    league_id: int | None = None,
 ) -> dict[str, Any]:
     """Generate a detailed financial, capital-gain, club-quota, and rule report for the 11-unit squad."""
     state = load_current_squad(squad_path)
     store = SnapshotStore(database_path)
-    all_players = store.load_latest_players()
+    eff_league_id = league_id if league_id is not None else getattr(state, "league_id", None)
+    all_players = store.load_latest_players(league_id=eff_league_id)
     if not all_players:
         raise RuntimeError("No players found in snapshot database. Run `elf update` first.")
 
@@ -49,13 +51,32 @@ def generate_squad_report(
     for pid in state.player_ids:
         p = players_by_id.get(pid)
         if p is None:
-            raise RuntimeError(f"Squad unit ID {pid} was not found in the latest SQLite snapshot.")
-        squad_models.append(p)
+            # BUG-EDGE-002: unit missing / left competition -> keep unit, project 0, flag unavailable
+            buy_tenths = state.purchase_prices_tenths.get(pid, 50)
+            cur_tenths = buy_tenths
+            sell_tenths = buy_tenths
+            cap_gain_tenths = 0
+            p = Player(
+                id=pid,
+                first_name="Departed",
+                last_name=f"Unit {pid}",
+                name=f"Unit {pid} (Departed)",
+                position=Position.GUARD,
+                team_id=0,
+                team_code="OUT",
+                team_name="Unavailable",
+                price_tenths=buy_tenths,
+                status="unavailable - sell candidate",
+                probability_of_playing=0.0,
+                turn_number=1,
+            )
+        else:
+            buy_tenths = state.purchase_prices_tenths.get(pid, p.price_tenths)
+            cur_tenths = p.price_tenths
+            sell_tenths = selling_price_tenths(p, buy_tenths)
+            cap_gain_tenths = sell_tenths - buy_tenths
 
-        buy_tenths = state.purchase_prices_tenths.get(pid, p.price_tenths)
-        cur_tenths = p.price_tenths
-        sell_tenths = selling_price_tenths(p, buy_tenths)
-        cap_gain_tenths = sell_tenths - buy_tenths
+        squad_models.append(p)
 
         total_purchase_tenths += buy_tenths
         total_current_tenths += cur_tenths

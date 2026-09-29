@@ -60,3 +60,16 @@ def get_scenario_service(
 def get_evaluation_service() -> EvaluationService:
     ds = DecisionStore(database_path=_db_path)
     return EvaluationService(store=ds)
+
+
+from fastapi import HTTPException, Query
+from euroleague_fantasy_manager.competition.ruleset import League
+
+
+def parse_league(league: str = Query("euroleague", description="Competition league: 'euroleague' or 'eurocup'.")) -> League:
+    """Validate and normalize competition league query parameter. Raises HTTP 400 on unrecognized values."""
+    try:
+        return League.from_str(league)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+

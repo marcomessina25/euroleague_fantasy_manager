@@ -26,6 +26,8 @@ class SnapshotSummary:
     player_count: int
     coach_count: int
     fixture_count: int
+    club_count: int = 0
+    season_code_source: str = "config"
 
 
 def _price_to_tenths(quotation: Any) -> int:
@@ -80,6 +82,18 @@ class SnapshotStore:
         conn.execute("ALTER TABLE players ADD COLUMN has_played INTEGER NOT NULL DEFAULT 0")
         logger.info("Migration complete: 'has_played' column added.")
 
+    def _migrate_to_v3_add_snapshots_league_index(self, conn: sqlite3.Connection) -> None:
+        """Safely add index on snapshots(league_id, id) and club_count / season_code_source columns."""
+        logger.info("Migrating schema to v3: creating index idx_snapshots_league_id on snapshots(league_id, id)...")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_league_id ON snapshots(league_id, id)")
+        info = conn.execute("PRAGMA table_info(snapshots)").fetchall()
+        column_names = [col[1] for col in info]
+        if "club_count" not in column_names:
+            conn.execute("ALTER TABLE snapshots ADD COLUMN club_count INTEGER NOT NULL DEFAULT 0")
+        if "season_code_source" not in column_names:
+            conn.execute("ALTER TABLE snapshots ADD COLUMN season_code_source TEXT NOT NULL DEFAULT 'config'")
+        logger.info("Migration complete: schema v3 index and columns added.")
+
     def _initialize_schema(self) -> None:
         with self._connect() as conn:
             current_version = self._get_schema_version(conn)
@@ -90,7 +104,11 @@ class SnapshotStore:
                 if row:
                     info = conn.execute("PRAGMA table_info(players)").fetchall()
                     has_played = any(col[1] == "has_played" for col in info)
-                    if has_played:
+                    idx_row = conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_snapshots_league_id'").fetchone()
+                    if idx_row:
+                        self._set_schema_version(conn, 3, "Backfilled schema v3 for existing database")
+                        current_version = 3
+                    elif has_played:
                         self._set_schema_version(conn, 2, "Backfilled schema v2 for existing database")
                         current_version = 2
                     else:
@@ -109,8 +127,12 @@ class SnapshotStore:
                         matchday_id INTEGER NOT NULL DEFAULT 0,
                         round_number INTEGER NOT NULL DEFAULT 1,
                         num_turns INTEGER NOT NULL DEFAULT 2,
-                        raw_archive_path TEXT
+                        raw_archive_path TEXT,
+                        club_count INTEGER NOT NULL DEFAULT 0,
+                        season_code_source TEXT NOT NULL DEFAULT 'config'
                     );
+
+                    CREATE INDEX IF NOT EXISTS idx_snapshots_league_id ON snapshots(league_id, id);
 
                     CREATE TABLE IF NOT EXISTS teams (
                         snapshot_id INTEGER NOT NULL,
@@ -171,6 +193,10 @@ class SnapshotStore:
             if current_version < 2:
                 self._migrate_to_v2_add_has_played_column(conn)
                 self._set_schema_version(conn, 2, "Added has_played column for live score tracking")
+
+            if current_version < 3:
+                self._migrate_to_v3_add_snapshots_league_index(conn)
+                self._set_schema_version(conn, 3, "Added idx_snapshots_league_id on snapshots(league_id, id)")
 
     def save_snapshot(
         self,
@@ -294,16 +320,44 @@ class SnapshotStore:
                         "has_played": has_played_val,
                     }
 
+        season_code_source = str(payload.get("season_code_source", "config"))
+        official_clubs = payload.get("official_clubs", [])
+        club_count = len(official_clubs) if official_clubs else len(team_map)
+
         with self._connect() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO snapshots (
-                    created_at, league_id, competition_code, season_code,
-                    matchday_id, round_number, num_turns, raw_archive_path
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (timestamp, league_id, comp_code, season_code, matchday_id, round_number, num_turns, raw_archive_str),
-            )
+            snap_cols = [c[1] for c in conn.execute("PRAGMA table_info(snapshots)").fetchall()]
+            if "club_count" in snap_cols and "season_code_source" in snap_cols:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO snapshots (
+                        created_at, league_id, competition_code, season_code,
+                        matchday_id, round_number, num_turns, raw_archive_path,
+                        club_count, season_code_source
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        timestamp,
+                        league_id,
+                        comp_code,
+                        season_code,
+                        matchday_id,
+                        round_number,
+                        num_turns,
+                        raw_archive_str,
+                        club_count,
+                        season_code_source,
+                    ),
+                )
+            else:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO snapshots (
+                        created_at, league_id, competition_code, season_code,
+                        matchday_id, round_number, num_turns, raw_archive_path
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (timestamp, league_id, comp_code, season_code, matchday_id, round_number, num_turns, raw_archive_str),
+                )
             snapshot_id = int(cursor.lastrowid)
 
             for tid, (tname, tcode) in sorted(team_map.items()):
@@ -372,12 +426,24 @@ class SnapshotStore:
             player_count=player_count,
             coach_count=coach_count,
             fixture_count=len(fixtures_rows),
+            club_count=club_count,
+            season_code_source=season_code_source,
         )
 
-    def get_latest_summary(self) -> SnapshotSummary | None:
-        """Return metadata summary of the most recently stored snapshot."""
+    def get_latest_summary(self, league_id: int | None = None) -> SnapshotSummary | None:
+        """Return metadata summary of the most recently stored snapshot (optionally scoped to league_id).
+
+        Note: league_id=None ("latest of any league") is reserved for internal maintenance code.
+        User-facing paths must always supply an explicit league_id.
+        """
         with self._connect() as conn:
-            row = conn.execute("SELECT * FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
+            if league_id is None:
+                row = conn.execute("SELECT * FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT * FROM snapshots WHERE league_id = ? ORDER BY id DESC LIMIT 1",
+                    (int(league_id),),
+                ).fetchone()
             if row is None:
                 return None
             sid = int(row["id"])
@@ -390,6 +456,9 @@ class SnapshotStore:
                 ).fetchone()[0]
             )
             total_units = int(conn.execute("SELECT COUNT(*) FROM players WHERE snapshot_id = ?", (sid,)).fetchone()[0])
+            row_keys = row.keys() if hasattr(row, "keys") else []
+            club_count = int(row["club_count"]) if "club_count" in row_keys else team_count
+            season_code_source = str(row["season_code_source"]) if "season_code_source" in row_keys else "config"
             return SnapshotSummary(
                 snapshot_id=sid,
                 created_at=str(row["created_at"]),
@@ -401,6 +470,8 @@ class SnapshotStore:
                 player_count=total_units - coach_count,
                 coach_count=coach_count,
                 fixture_count=fixture_count,
+                club_count=club_count,
+                season_code_source=season_code_source,
             )
 
     @staticmethod

@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from euroleague_fantasy_manager.competition.ruleset import League
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit
 from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
@@ -28,6 +29,7 @@ from euroleague_fantasy_manager.web.deps import (
     get_prediction_service,
     get_scenario_service,
     get_team_service,
+    parse_league,
 )
 
 router = APIRouter(prefix="/api/workstation", tags=["workstation"])
@@ -642,13 +644,13 @@ def list_players_endpoint(
     search: str | None = None,
     min_price: float | None = None,
     max_price: float | None = None,
-    league: str = "euroleague",
+    league: League = Depends(parse_league),
     limit: int = 50,
     prediction_service: PredictionService = Depends(get_prediction_service),
 ) -> list[dict[str, Any]]:
     """Player browser for Trade Studio with valuation metrics (Phase G)."""
-    contracts = prediction_service.get_projections(season, round_number, league=league)
-    valuations = prediction_service.get_player_valuations(season, round_number, league=league)
+    contracts = prediction_service.get_projections(season, round_number, league=league.value)
+    valuations = prediction_service.get_player_valuations(season, round_number, league=league.value)
 
     target_pos_code = None
     if position:
@@ -701,7 +703,7 @@ def get_player_details_endpoint(
     player_id: int,
     season: str = "2026/27",
     round_number: int = 1,
-    league: str = "euroleague",
+    league: League = Depends(parse_league),
     prediction_service: PredictionService = Depends(get_prediction_service),
 ) -> dict[str, Any]:
     """Retrieve complete player statistics, projections, and metadata for player window modal."""
@@ -710,19 +712,26 @@ def get_player_details_endpoint(
     db_path = prediction_service.database_path
 
     # Projection contract & valuation
-    contract = prediction_service.get_player_projection(season, round_number, player_id, league=league)
-    valuations = prediction_service.get_player_valuations(season, round_number, league=league)
+    contract = prediction_service.get_player_projection(season, round_number, player_id, league=league.value)
+    valuations = prediction_service.get_player_valuations(season, round_number, league=league.value)
     val = valuations.get(player_id, {})
 
-    # Detailed snapshot database row
+    target_league_id = 11 if league == League.EUROCUP else 10
+
+    # Detailed snapshot database row scoped to target league
     player_row: dict[str, Any] = {}
     if db_path.exists():
         try:
             with sqlite3.connect(db_path) as conn:
                 conn.row_factory = sqlite3.Row
                 row = conn.execute(
-                    "SELECT * FROM players WHERE id = ? ORDER BY snapshot_id DESC LIMIT 1",
-                    (player_id,),
+                    """
+                    SELECT p.* FROM players p
+                    JOIN snapshots s ON s.id = p.snapshot_id
+                    WHERE p.id = ? AND s.league_id = ?
+                    ORDER BY p.snapshot_id DESC LIMIT 1
+                    """,
+                    (player_id, target_league_id),
                 ).fetchone()
                 if row:
                     player_row = dict(row)
@@ -782,34 +791,43 @@ def get_player_details_endpoint(
 @router.post("/initial-team/suggest")
 def suggest_initial_team_endpoint(
     req: SuggestInitialTeamRequest,
+    league: str | None = None,
     optimization_service: OptimizationService = Depends(get_optimization_service),
 ) -> dict[str, Any]:
     """Suggest an optimal initial 11-player squad (from scratch or completing locked players)."""
+    target_league_raw = league if league is not None else req.league
+    try:
+        norm_league = League.from_str(target_league_raw)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     try:
         return optimization_service.suggest_initial_team(
             season=req.season,
             budget_credits=req.budget_credits,
             risk_mode=req.risk_mode,
             locked_player_ids=req.locked_player_ids,
-            league=req.league,
+            league=norm_league.value,
         )
-    except Exception as e:
+    except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/update-data")
 def update_data_endpoint(
-    league: str = Query("euroleague", description="Competition league ('euroleague' or 'eurocup')"),
+    league: League = Depends(parse_league),
     prediction_service: PredictionService = Depends(get_prediction_service),
 ) -> dict[str, Any]:
     """Fetch live data from official EuroLeague Fantasy API and update SQLite snapshot store."""
     try:
         from euroleague_fantasy_manager.api import fetch_current_data
-        from euroleague_fantasy_manager.cli import RAW_ARCHIVE_DIRECTORY, _resolve_league
+        from euroleague_fantasy_manager.cli import RAW_ARCHIVE_DIRECTORY
+        from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
         from euroleague_fantasy_manager.storage import SnapshotStore
 
-        league_id, comp_code, season_code = _resolve_league(league)
-        payload = fetch_current_data(league_id=league_id, competition_code=comp_code, season_code=season_code)
+        ruleset = get_league_ruleset(league)
+        payload = fetch_current_data(league_id=ruleset.league_id, competition_code=ruleset.competition_code)
         store = SnapshotStore(prediction_service.database_path)
         summary = store.save_snapshot(payload, raw_directory=RAW_ARCHIVE_DIRECTORY)
         prediction_service.clear_cache()

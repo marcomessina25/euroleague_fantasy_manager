@@ -138,14 +138,21 @@ def test_schema_migration_idempotent(tmp_path: Path):
     # Initialize store 1
     store1 = SnapshotStore(database_path=db_file)
     with store1._connect() as conn:
-        assert store1._get_schema_version(conn) == 2
+        assert store1._get_schema_version(conn) == 3
         info1 = conn.execute("PRAGMA table_info(players)").fetchall()
         assert any(col[1] == "has_played" for col in info1)
+        snap_info1 = conn.execute("PRAGMA table_info(snapshots)").fetchall()
+        assert any(col[1] == "club_count" for col in snap_info1)
+        assert any(col[1] == "season_code_source" for col in snap_info1)
 
     # Initialize store 2 on same database (idempotent migration)
     store2 = SnapshotStore(database_path=db_file)
     with store2._connect() as conn:
-        assert store2._get_schema_version(conn) == 2
+        assert store2._get_schema_version(conn) == 3
         info2 = conn.execute("PRAGMA table_info(players)").fetchall()
         assert any(col[1] == "has_played" for col in info2)
+        snap_info2 = conn.execute("PRAGMA table_info(snapshots)").fetchall()
+        assert any(col[1] == "club_count" for col in snap_info2)
+        assert any(col[1] == "season_code_source" for col in snap_info2)
+
 

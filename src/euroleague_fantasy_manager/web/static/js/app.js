@@ -1,5 +1,15 @@
 // EuroLeague Fantasy Workstation Client (V0.5)
 
+function escapeHtml(str) {
+  if (str === null || str === undefined) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 let state = {
   activeTeamId: "team_1",
   teams: [],
@@ -362,13 +372,13 @@ function createPlayerCard(player, lineup, roleType = "starter") {
       <span class="player-pos-badge">${posCode}</span>
       ${roleHtml}
     </div>
-    <div class="player-name" title="${player.name}">${player.name}</div>
+    <div class="player-name" title="${escapeHtml(player.name)}">${escapeHtml(player.name)}</div>
     <div class="player-meta">
-      <span>${player.team_code || "UNK"}</span>
+      <span>${escapeHtml(player.team_code || "UNK")}</span>
       <span>${player.credits} cr</span>
     </div>
     <div class="player-meta">
-      <span>T${player.turn_number || 1} vs ${player.opponent_code || "OPP"}</span>
+      <span>T${player.turn_number || 1} vs ${escapeHtml(player.opponent_code || "OPP")}</span>
       ${fpDisplay}
     </div>
     ${actionHtml}
@@ -410,7 +420,7 @@ function renderAlternatives(alternatives) {
     const item = document.createElement("div");
     item.style = "display:flex; justify-content:space-between; padding:0.4rem 0; border-bottom:1px solid var(--border-color); font-size:0.85rem;";
     item.innerHTML = `
-      <span>Formation <strong>${alt.formation}</strong></span>
+      <span>Formation <strong>${escapeHtml(alt.formation)}</strong></span>
       <span style="color:var(--accent-orange); font-weight:700;">${alt.expected_score} FP</span>
     `;
     list.appendChild(item);
@@ -420,9 +430,9 @@ function renderAlternatives(alternatives) {
 function renderProvenance(prov, oracleMatch) {
   const container = document.getElementById("provenance-badges");
   container.innerHTML = `
-    <span class="tag-provenance">Model: <strong>${prov.prediction_model}</strong></span>
-    <span class="tag-provenance">Opt: <strong>V${prov.optimizer_version}</strong></span>
-    <span class="tag-provenance">Risk: <strong>${prov.risk_mode}</strong></span>
+    <span class="tag-provenance">Model: <strong>${escapeHtml(prov.prediction_model)}</strong></span>
+    <span class="tag-provenance">Opt: <strong>V${escapeHtml(prov.optimizer_version)}</strong></span>
+    <span class="tag-provenance">Risk: <strong>${escapeHtml(prov.risk_mode)}</strong></span>
     ${oracleMatch ? '<span class="badge badge-green">✓ Oracle Verified</span>' : '<span class="badge badge-gold">Heuristic</span>'}
   `;
 }
@@ -841,11 +851,11 @@ function renderIntraRoundSquadTable(lineup) {
 
     tr.innerHTML = `
       <td>
-        <strong style="cursor:pointer;" onclick="openPlayerModal(${p.player_id})">${p.name}</strong>
+        <strong style="cursor:pointer;" onclick="openPlayerModal(${p.player_id})">${escapeHtml(p.name)}</strong>
         <span class="player-pos-badge" style="margin-left:0.3rem;">${pos}</span>
       </td>
       <td>${roleBadge}</td>
-      <td>T${p.turn_number || 1} vs ${p.opponent_code || "OPP"}</td>
+      <td>T${p.turn_number || 1} vs ${escapeHtml(p.opponent_code || "OPP")}</td>
       <td>${scoreStatus}</td>
       <td>${subEligibility}</td>
     `;
@@ -915,11 +925,11 @@ function renderIntraSubResults(data) {
             return `
             <div class="intra-sub-card">
               <div>
-                <span style="color:var(--accent-red); font-weight:700;">OUT:</span> <strong>${outName}</strong> (${outPos}, ${outScore} FP)
+                <span style="color:var(--accent-red); font-weight:700;">OUT:</span> <strong>${escapeHtml(outName)}</strong> (${escapeHtml(outPos)}, ${outScore} FP)
               </div>
               <div style="color:var(--text-muted); font-size:1.1rem;">➔</div>
               <div>
-                <span style="color:var(--accent-green); font-weight:700;">IN:</span> <strong>${inName}</strong> (${inScore} FP)
+                <span style="color:var(--accent-green); font-weight:700;">IN:</span> <strong>${escapeHtml(inName)}</strong> (${inScore} FP)
               </div>
             </div>`;
           }).join("")}
@@ -933,7 +943,7 @@ function renderIntraSubResults(data) {
     const newCapName = data.captain_change_detail && data.captain_change_detail.new_captain ? data.captain_change_detail.new_captain.name : (data.optimal_captain_name || "New Captain");
     captainHtml = `
       <div class="intra-sub-card captain-switch" style="margin-top:0.5rem;">
-        <div>👑 <strong>Captaincy Switch:</strong> Reassign captaincy to <strong>${newCapName}</strong></div>
+        <div>👑 <strong>Captaincy Switch:</strong> Reassign captaincy to <strong>${escapeHtml(newCapName)}</strong></div>
       </div>
     `;
   }
@@ -1109,8 +1119,8 @@ function renderTradeStudioSquad() {
 
     tr.innerHTML = `
       <td>
-        <strong style="cursor:pointer;" onclick="openPlayerModal(${unit.player_id})">${unit.name}</strong>
-        <span style="color:var(--text-muted); font-size:0.75rem;">(${unit.team_code || "UNK"})</span>
+        <strong style="cursor:pointer;" onclick="openPlayerModal(${unit.player_id})">${escapeHtml(unit.name)}</strong>
+        <span style="color:var(--text-muted); font-size:0.75rem;">(${escapeHtml(unit.team_code || "UNK")})</span>
       </td>
       <td><span class="player-pos-badge">${pos}</span></td>
       <td>${(unit.current_price_tenths / 10.0).toFixed(1)} cr</td>
@@ -1118,7 +1128,7 @@ function renderTradeStudioSquad() {
       <td>
         <button class="btn ${isOut ? "btn-secondary" : "btn-primary"}"
                 style="padding:0.2rem 0.5rem; font-size:0.75rem; ${isOut ? "border-color:var(--accent-red); color:var(--accent-red);" : ""}"
-                onclick="toggleTradeOut(${unit.player_id}, '${unit.name.replace("'", "")}', ${unit.current_price_tenths / 10.0})">
+                onclick="toggleTradeOut(${unit.player_id}, '${escapeHtml(unit.name).replace(/'/g, "\\'")}', ${unit.current_price_tenths / 10.0})">
           ${isOut ? "✓ Selected (Out)" : "✕ Sell"}
         </button>
       </td>
@@ -1209,7 +1219,7 @@ function updateTradeStudioUI() {
       outContainer.innerHTML = `<span style="color:var(--text-muted); font-size:0.8rem; font-style:italic;">None selected</span>`;
     } else {
       outContainer.innerHTML = tradeStudioState.transfersOut.map(
-        (p) => `<span class="trade-chip out">${p.name} (${p.credits} cr) <span class="trade-chip-remove" onclick="removeTradeOut(${p.id})">✕</span></span>`
+        (p) => `<span class="trade-chip out">${escapeHtml(p.name)} (${p.credits} cr) <span class="trade-chip-remove" onclick="removeTradeOut(${p.id})">✕</span></span>`
       ).join(" ");
     }
   }
@@ -1220,7 +1230,7 @@ function updateTradeStudioUI() {
       inContainer.innerHTML = `<span style="color:var(--text-muted); font-size:0.8rem; font-style:italic;">None selected</span>`;
     } else {
       inContainer.innerHTML = tradeStudioState.transfersIn.map(
-        (p) => `<span class="trade-chip in">${p.name} (${p.credits} cr) <span class="trade-chip-remove" onclick="removeTradeIn(${p.id})">✕</span></span>`
+        (p) => `<span class="trade-chip in">${escapeHtml(p.name)} (${p.credits} cr) <span class="trade-chip-remove" onclick="removeTradeIn(${p.id})">✕</span></span>`
       ).join(" ");
     }
   }
@@ -1296,10 +1306,10 @@ async function triggerSuggestTransfers() {
 
         recs.forEach((rec, idx) => {
           const isOptimal = idx === 0;
-          const outNames = rec.transfers_out_details.map((p) => `<strong>${p.name}</strong> (${p.credits} cr)`).join(", ");
-          const inNames = rec.transfers_in_details.map((p) => `<strong>${p.name}</strong> (${p.credits} cr)`).join(", ");
-          const outsJson = JSON.stringify(rec.transfers_out_details).replace(/"/g, '&quot;');
-          const insJson = JSON.stringify(rec.transfers_in_details).replace(/"/g, '&quot;');
+          const outNames = rec.transfers_out_details.map((p) => `<strong>${escapeHtml(p.name)}</strong> (${p.credits} cr)`).join(", ");
+          const inNames = rec.transfers_in_details.map((p) => `<strong>${escapeHtml(p.name)}</strong> (${p.credits} cr)`).join(", ");
+          const outsJson = escapeHtml(JSON.stringify(rec.transfers_out_details));
+          const insJson = escapeHtml(JSON.stringify(rec.transfers_in_details));
 
           html += `
             <div class="trade-rec-option ${isOptimal ? "optimal" : ""}">
@@ -1405,13 +1415,13 @@ async function loadPlayerPool() {
         } else if (isIn) {
           actionBtn = `<button class="btn btn-secondary" style="padding:0.2rem 0.5rem; font-size:0.75rem; color:var(--accent-green); border-color:var(--accent-green);" onclick="removeTradeIn(${p.player_id})">✓ In (Remove)</button>`;
         } else {
-          actionBtn = `<button class="btn btn-primary" style="padding:0.2rem 0.5rem; font-size:0.75rem;" onclick="addTradeIn(${p.player_id}, '${p.name.replace("'", "")}', ${p.credits})">+ Buy</button>`;
+          actionBtn = `<button class="btn btn-primary" style="padding:0.2rem 0.5rem; font-size:0.75rem;" onclick="addTradeIn(${p.player_id}, '${escapeHtml(p.name).replace(/'/g, "\\'")}', ${p.credits})">+ Buy</button>`;
         }
 
         tr.innerHTML = `
           <td>
-            <strong style="cursor:pointer;" onclick="openPlayerModal(${p.player_id})">${p.name}</strong>
-            <span style="color:var(--text-muted); font-size:0.75rem;">(${p.team_code || "UNK"})</span>
+            <strong style="cursor:pointer;" onclick="openPlayerModal(${p.player_id})">${escapeHtml(p.name)}</strong>
+            <span style="color:var(--text-muted); font-size:0.75rem;">(${escapeHtml(p.team_code || "UNK")})</span>
           </td>
           <td><span class="player-pos-badge">${p.position}</span></td>
           <td>${p.credits} cr</td>
@@ -1465,18 +1475,18 @@ async function triggerMultiRound() {
 
         stepDiv.innerHTML = `
           <div class="card-header">
-            <h3>Round ${s.round_number} (Formation ${s.formation})</h3>
+            <h3>Round ${s.round_number} (Formation ${escapeHtml(s.formation)})</h3>
             <span style="color:var(--accent-orange); font-weight:700;">${s.expected_score} FP</span>
           </div>
           <p style="font-size:0.85rem; color:var(--text-muted); margin-top:0.3rem;">
-            Trades: <span style="color:var(--accent-red);">Out: [${outs}]</span> → <span style="color:var(--accent-green);">In: [${ins}]</span> | Bank: ${s.bank_credits} cr
+            Trades: <span style="color:var(--accent-red);">Out: [${escapeHtml(outs)}]</span> → <span style="color:var(--accent-green);">In: [${escapeHtml(ins)}]</span> | Bank: ${s.bank_credits} cr
           </p>
         `;
         container.appendChild(stepDiv);
       });
     } else {
       const err = await res.json();
-      container.innerHTML = `<p style="color:var(--accent-red); font-size:0.85rem;">Multi-round planning failed: ${err.detail || "Server error"}</p>`;
+      container.innerHTML = `<p style="color:var(--accent-red); font-size:0.85rem;">Multi-round planning failed: ${escapeHtml(err.detail || "Server error")}</p>`;
     }
   } catch (err) {
     console.error("Multi-round planning failed:", err);
@@ -1544,7 +1554,7 @@ async function triggerScenario() {
         <span class="badge ${data.delta_expected_score >= 0 ? "badge-green" : "badge-red"}">Score Impact: ${data.delta_expected_score >= 0 ? "+" : ""}${data.delta_expected_score} FP</span>
       </div>
       <p style="font-size:0.85rem; color:var(--text-muted);">
-        Formation Shift: <strong>${data.baseline_lineup.formation} → ${data.scenario_lineup.formation}</strong> | Captain Shift: <strong>${data.captain_changed ? "Yes" : "No"}</strong>
+        Formation Shift: <strong>${escapeHtml(data.baseline_lineup.formation)} → ${escapeHtml(data.scenario_lineup.formation)}</strong> | Captain Shift: <strong>${data.captain_changed ? "Yes" : "No"}</strong>
       </p>
     `;
   }
@@ -1650,7 +1660,7 @@ function onTeamBuilderSearchInput() {
 
   if (filtered.length === 0) {
     dropdown.style.display = "block";
-    dropdown.innerHTML = `<div style="padding:0.75rem; color:var(--text-muted); font-size:0.8rem;">No matching players found${query ? ` for "${query}"` : ""}.</div>`;
+    dropdown.innerHTML = `<div style="padding:0.75rem; color:var(--text-muted); font-size:0.8rem;">No matching players found${query ? ` for "${escapeHtml(query)}"` : ""}.</div>`;
     return;
   }
 
@@ -1663,8 +1673,8 @@ function onTeamBuilderSearchInput() {
     item.innerHTML = `
       <div>
         <span class="player-pos-badge" style="font-size:0.7rem; margin-right:0.3rem;">${pos}</span>
-        <strong>${p.name}</strong>
-        <span style="color:var(--text-muted); font-size:0.75rem; margin-left:0.3rem;">(${p.team_code})</span>
+        <strong>${escapeHtml(p.name)}</strong>
+        <span style="color:var(--text-muted); font-size:0.75rem; margin-left:0.3rem;">(${escapeHtml(p.team_code)})</span>
       </div>
       <div style="display:flex; align-items:center; gap:0.6rem;">
         <span style="font-size:0.75rem; color:var(--text-muted);">${p.credits} cr</span>
@@ -1874,7 +1884,7 @@ function updateTeamBuilderUI() {
     const tr = document.createElement("tr");
     const pos = normalizePos(p.position);
     tr.innerHTML = `
-      <td><strong>${p.name}</strong> <span style="color:var(--text-muted);font-size:0.75rem;">(${p.team_code || "UNK"})</span></td>
+      <td><strong>${escapeHtml(p.name)}</strong> <span style="color:var(--text-muted);font-size:0.75rem;">(${escapeHtml(p.team_code || "UNK")})</span></td>
       <td><span class="player-pos-badge">${pos}</span></td>
       <td>${p.credits} cr</td>
       <td style="color:var(--accent-orange); font-weight:700;">${p.expected_fp} FP</td>
@@ -2116,10 +2126,10 @@ function renderStrategicAnalysisView(strat) {
       const impactStr = asm.estimated_impact_fp !== undefined ? ` (Impact: ±${asm.estimated_impact_fp} FP)` : "";
       card.innerHTML = `
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.25rem;">
-          <strong style="text-transform:uppercase; font-size:0.75rem; color:var(--text-muted);">${cat}</strong>
-          <span style="color:${sensColor}; font-weight:700; font-size:0.75rem;">Risk: ${risk.toUpperCase()}${impactStr}</span>
+          <strong style="text-transform:uppercase; font-size:0.75rem; color:var(--text-muted);">${escapeHtml(cat)}</strong>
+          <span style="color:${sensColor}; font-weight:700; font-size:0.75rem;">Risk: ${escapeHtml(risk.toUpperCase())}${impactStr}</span>
         </div>
-        <div>${desc}</div>
+        <div>${escapeHtml(desc)}</div>
       `;
       asmContainer.appendChild(card);
     });
@@ -2138,16 +2148,16 @@ function renderStrategicAnalysisView(strat) {
       const reversal = s.decision_reversal !== undefined ? s.decision_reversal : (s.recommendation_changes || false);
       const changesRec = reversal ? "<span class='badge badge-red'>REC SHIFT</span>" : "<span class='badge badge-green'>STABLE</span>";
       const desc = s.shock_description || s.summary || "";
-      const mit = s.mitigation ? `<div style="font-size:0.75rem; color:var(--accent-blue); margin-top:0.25rem;">Mitigation: ${s.mitigation}</div>` : "";
+      const mit = s.mitigation ? `<div style="font-size:0.75rem; color:var(--accent-blue); margin-top:0.25rem;">Mitigation: ${escapeHtml(s.mitigation)}</div>` : "";
       card.innerHTML = `
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.25rem;">
-          <strong style="color:var(--text-main); font-size:0.85rem;">${title}</strong>
+          <strong style="color:var(--text-main); font-size:0.85rem;">${escapeHtml(title)}</strong>
           <div style="display:flex; gap:0.4rem; align-items:center;">
             <span style="color:var(--accent-orange); font-weight:700;">${swingStr} FP</span>
             ${changesRec}
           </div>
         </div>
-        <div style="color:var(--text-muted);">${desc}</div>
+        <div style="color:var(--text-muted);">${escapeHtml(desc)}</div>
         ${mit}
       `;
       sensContainer.appendChild(card);
@@ -2166,11 +2176,11 @@ function renderStrategicAnalysisView(strat) {
         ? "<span class='badge badge-green'>PASS</span>"
         : (status === "WARNING" ? "<span class='badge badge-gold'>WARN</span>" : "<span class='badge badge-red'>FLAG</span>");
       const detailText = item.details || item.detail || "";
-      const evText = item.evidence ? ` <span style="font-size:0.75rem; color:var(--text-muted);">(${item.evidence})</span>` : "";
+      const evText = item.evidence ? ` <span style="font-size:0.75rem; color:var(--text-muted);">(${escapeHtml(item.evidence)})</span>` : "";
       tr.innerHTML = `
         <td style="width:70px;">${markBadge}</td>
-        <td style="font-weight:600; font-size:0.85rem; width:160px;">${item.check_name}</td>
-        <td style="font-size:0.85rem; color:var(--text-muted);">${detailText}${evText}</td>
+        <td style="font-weight:600; font-size:0.85rem; width:160px;">${escapeHtml(item.check_name)}</td>
+        <td style="font-size:0.85rem; color:var(--text-muted);">${escapeHtml(detailText)}${evText}</td>
       `;
       checkTbody.appendChild(tr);
     });

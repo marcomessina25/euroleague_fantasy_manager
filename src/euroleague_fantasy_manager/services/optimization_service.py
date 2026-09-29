@@ -427,13 +427,31 @@ class OptimizationService:
         """Convert TeamRosterUnits into valid PlayerProjectionContracts."""
         projections_dict = self.prediction_service.get_projections_dict(season, round_number, league=league)
         contracts: list[PlayerProjectionContract] = []
+        has_market_data = bool(projections_dict)
 
         for unit in squad_units:
             proj = projections_dict.get(unit.player_id)
             if proj is not None:
                 contracts.append(proj)
+            elif has_market_data:
+                # BUG-EDGE-002: unit missing/departed from market projections -> project 0 FP, unavailable
+                pos = Position.from_raw(unit.position)
+                contracts.append(
+                    PlayerProjectionContract(
+                        player_id=unit.player_id,
+                        player_name=unit.name or f"Player {unit.player_id} (Departed)",
+                        position=pos,
+                        team_id=None,
+                        team_code=unit.team_code or "OUT",
+                        price_tenths=unit.current_price_tenths,
+                        expected_fp=0.0,
+                        probability_play=0.0,
+                        expected_minutes=0.0,
+                        turn_number=unit.turn_number,
+                    )
+                )
             else:
-                # Synthesize valid contract from unit metadata
+                # Fallback when no market snapshot exists at all (e.g. unseeded test database)
                 pos = Position.from_raw(unit.position)
                 contracts.append(
                     PlayerProjectionContract(
@@ -443,7 +461,7 @@ class OptimizationService:
                         team_id=None,
                         team_code=unit.team_code or "UNK",
                         price_tenths=unit.current_price_tenths,
-                        expected_fp=10.0 if pos != Position.HEAD_COACH else 8.0,
+                        expected_fp=10.0,
                         probability_play=1.0,
                         expected_minutes=20.0,
                         turn_number=unit.turn_number,
@@ -451,3 +469,4 @@ class OptimizationService:
                 )
 
         return contracts
+

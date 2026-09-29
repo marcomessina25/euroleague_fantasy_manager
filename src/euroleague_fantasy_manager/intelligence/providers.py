@@ -45,6 +45,7 @@ class ProviderRequest:
     timeout_seconds: float = 15.0
     max_output_tokens: int | None = None
     extra_headers: dict[str, str] = field(default_factory=dict)
+    tier: str = "standard"
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +89,12 @@ class HeuristicProvider(BaseLLMProvider):
         super().__init__(name="heuristic", api_key=None, default_model="deterministic-heuristic-v0.6")
 
     def generate(self, request: ProviderRequest) -> ProviderResponse:
+        """Generate deterministic heuristic response.
+
+        Note:
+            The heuristic provider is fully offline and ignores the requested analysis tier (ACCEPTED RISK).
+            The requested tier is passed through to raw_metadata for provenance and auditing.
+        """
         t0 = time.perf_counter()
 
         heading = "### Deterministic Strategic Assessment (Offline Heuristic Mode)"
@@ -118,9 +125,9 @@ class HeuristicProvider(BaseLLMProvider):
         return ProviderResponse(
             content=content,
             provider=self.name,
-            model=self.default_model or "deterministic-heuristic",
+            model=self.default_model or "deterministic-heuristic-v0.6",
             latency_ms=round(latency, 2),
-            raw_metadata={"offline": True},
+            raw_metadata={"offline": True, "tier": getattr(request, "tier", "standard")},
         )
 
 
@@ -474,7 +481,7 @@ def list_available_providers() -> list[dict[str, Any]]:
             "provider_name": "heuristic",
             "name": "Deterministic Heuristic (Offline)",
             "display_name": "Deterministic Heuristic (Offline)",
-            "default_model": "heuristic-engine-v1",
+            "default_model": "deterministic-heuristic-v0.6",
             "available": True,
             "requires_key": False,
             "tier": "fast",
@@ -484,7 +491,7 @@ def list_available_providers() -> list[dict[str, Any]]:
             "provider_name": "gemini",
             "name": "Google Gemini",
             "display_name": "Google Gemini",
-            "default_model": "gemini-2.5-flash",
+            "default_model": "gemini-2.0-flash",
             "available": bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")),
             "requires_key": True,
             "tier": "standard",
@@ -524,7 +531,7 @@ def list_available_providers() -> list[dict[str, Any]]:
             "provider_name": "local",
             "name": "Local LLM (Ollama / vLLM)",
             "display_name": "Local LLM (Ollama / vLLM)",
-            "default_model": "llama3.2:latest",
+            "default_model": "llama3.2",
             "available": True,
             "requires_key": False,
             "tier": "fast",
