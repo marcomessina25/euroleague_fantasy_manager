@@ -34,6 +34,11 @@ from euroleague_fantasy_manager.tracking.store import DecisionStore
 from euroleague_fantasy_manager.web.app import create_app
 from euroleague_fantasy_manager.web.deps import set_db_path
 
+try:
+    from tests.test_v04_optimization import make_standard_squad, make_test_player
+except ModuleNotFoundError:
+    from test_v04_optimization import make_standard_squad, make_test_player
+
 
 def _build_test_squad_contracts() -> list[PlayerProjectionContract]:
     """Helper creating 11 valid contracts (4G, 4F, 2C, 1HC) with varied turn numbers and clubs."""
@@ -1201,7 +1206,6 @@ def test_transfer_optimizer_speed_and_multiple_recommendations():
     """Verify that transfer optimization runs fast (<1.5s) and yields multiple distinct options."""
     import time
     from euroleague_fantasy_manager.optimization.transfers import TransferOptimizer
-    from tests.test_v04_optimization import make_standard_squad, make_test_player
 
     squad = make_standard_squad()
     # Market with diverse candidate tiers
@@ -1474,7 +1478,6 @@ def test_checkpoint_exact_match_or_raise(tmp_path: Path):
 def test_transfer_optimizer_multi_option_ranking():
     """Verify Stage 2 exact ranking matches expected order of recommendations."""
     from euroleague_fantasy_manager.optimization.transfers import TransferOptimizer
-    from tests.test_v04_optimization import make_standard_squad, make_test_player
 
     squad = make_standard_squad()
 
@@ -1627,7 +1630,6 @@ def test_transfer_optimizer_performance_budget():
     import time
     from euroleague_fantasy_manager.models import Position
     from euroleague_fantasy_manager.optimization.transfers import TransferOptimizer
-    from tests.test_v04_optimization import make_standard_squad, make_test_player
 
     squad = make_standard_squad()
     market = [

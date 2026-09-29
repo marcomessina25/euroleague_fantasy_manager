@@ -640,7 +640,10 @@ def test_strategic_analysis_offers_captain_switch_after_captain_played(team_serv
 def _league_payload(league_id: int, id_offset: int) -> dict:
     import copy
 
-    from test_storage_and_cli import make_synthetic_snapshot_payload
+    try:
+        from tests.test_storage_and_cli import make_synthetic_snapshot_payload
+    except ModuleNotFoundError:
+        from test_storage_and_cli import make_synthetic_snapshot_payload
 
     payload = copy.deepcopy(make_synthetic_snapshot_payload(league_id=league_id))
     for match in payload["match_lineups"]:
