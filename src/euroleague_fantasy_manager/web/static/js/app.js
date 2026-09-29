@@ -13,6 +13,7 @@ let state = {
 
 // Initialize
 document.addEventListener("DOMContentLoaded", async () => {
+  captureIntelligenceDefaults();
   initNav();
   await loadTeams();
   await loadDashboard();
@@ -42,6 +43,11 @@ function initNav() {
 }
 
 // Teams API & Team Management
+function activeTeamLeague() {
+  const t = state.teams.find((x) => x.team_id === state.activeTeamId);
+  return (t && t.league) || "euroleague";
+}
+
 async function loadTeams() {
   try {
     const res = await fetch("/api/teams");
@@ -138,6 +144,8 @@ async function deleteTeam(teamId) {
       state.activeTeamId = null;
       await loadTeams();
       await loadDashboard();
+      resetIntelligenceView();
+      if (state.activeTab === "intelligence") loadIntelligenceView();
     } else {
       const err = await res.json();
       alert("Failed to delete team: " + (err.detail || "Server error"));
@@ -148,12 +156,16 @@ async function deleteTeam(teamId) {
 }
 
 async function switchTeam(teamId) {
+  const changed = teamId !== state.activeTeamId;
   state.activeTeamId = teamId;
   await fetch(`/api/teams/${teamId}/active`, { method: "POST" });
   await loadTeams();
   await loadDashboard();
+  if (changed) resetIntelligenceView();
   if (state.activeTab === "trade-studio") {
     loadTradeStudio();
+  } else if (state.activeTab === "intelligence") {
+    loadIntelligenceView();
   }
 }
 
@@ -635,7 +647,7 @@ async function openPlayerModal(playerId) {
   if (!modal) return;
 
   try {
-    const res = await fetch(`/api/workstation/players/${playerId}?season=${state.season}&round_number=${state.roundNumber}`);
+    const res = await fetch(`/api/workstation/players/${playerId}?season=${state.season}&round_number=${state.roundNumber}&league=${encodeURIComponent(activeTeamLeague())}`);
     if (!res.ok) {
       alert("Could not load statistics for player #" + playerId);
       return;
@@ -1371,7 +1383,7 @@ async function loadPlayerPool() {
   const pos = document.getElementById("market-filter-pos")?.value || "";
   const search = document.getElementById("market-filter-search")?.value || "";
 
-  let url = `/api/workstation/players?season=${state.season}&round_number=${state.roundNumber}&limit=40`;
+  let url = `/api/workstation/players?season=${state.season}&round_number=${state.roundNumber}&limit=40&league=${encodeURIComponent(activeTeamLeague())}`;
   if (pos) url += `&position=${pos}`;
   if (search) url += `&search=${encodeURIComponent(search)}`;
 
@@ -1554,28 +1566,33 @@ function normalizePos(pos) {
 let teamBuilderState = {
   selectedPlayers: [],
   allPlayers: [],
+  poolLeague: null,
   recommendedPlayerIds: [],
 };
 
-async function openTeamBuilderModal() {
-  document.getElementById("team-builder-modal").style.display = "flex";
-  document.getElementById("tb-team-name").value = "";
-  teamBuilderState.selectedPlayers = [];
-  teamBuilderState.recommendedPlayerIds = [];
+function teamBuilderLeague() {
+  const sel = document.getElementById("tb-team-league");
+  return sel ? sel.value : "euroleague";
+}
 
+async function loadTeamBuilderPool() {
+  const league = teamBuilderLeague();
   const poolIndicator = document.getElementById("tb-pool-count");
-  if (poolIndicator) poolIndicator.textContent = "Loading player pool...";
 
-  // Fetch full player pool for instant search / dropdown if not yet cached
-  if (teamBuilderState.allPlayers.length === 0) {
+  if (teamBuilderState.allPlayers.length === 0 || teamBuilderState.poolLeague !== league) {
+    if (poolIndicator) poolIndicator.textContent = "Loading player pool...";
+    teamBuilderState.allPlayers = [];
     try {
-      const res = await fetch(`/api/workstation/players?season=${state.season}&round_number=1&limit=500`);
+      const res = await fetch(`/api/workstation/players?season=${state.season}&round_number=1&limit=500&league=${encodeURIComponent(league)}`);
       if (res.ok) {
         const rawPlayers = await res.json();
+        // Ignore stale responses if the league was changed while loading.
+        if (teamBuilderLeague() !== league) return;
         teamBuilderState.allPlayers = rawPlayers.map((p) => ({
           ...p,
           position: normalizePos(p.position),
         }));
+        teamBuilderState.poolLeague = league;
       }
     } catch (err) {
       console.error("Failed to fetch market pool:", err);
@@ -1583,9 +1600,32 @@ async function openTeamBuilderModal() {
   }
 
   if (poolIndicator) {
-    poolIndicator.textContent = `${teamBuilderState.allPlayers.length} players available`;
+    const count = teamBuilderState.allPlayers.length;
+    if (count === 0) {
+      const label = league === "eurocup" ? "EuroCup" : "EuroLeague";
+      poolIndicator.innerHTML = `0 players available — <a href="#" onclick="triggerUpdateData('${league === "eurocup" ? "eurocup" : "euroleague"}'); return false;">download ${label} data</a>`;
+    } else {
+      poolIndicator.textContent = `${count} players available`;
+    }
   }
+}
 
+async function onTeamBuilderLeagueChange() {
+  // A squad from one competition is not valid in another.
+  teamBuilderState.selectedPlayers = [];
+  teamBuilderState.recommendedPlayerIds = [];
+  hideTeamBuilderDropdown();
+  await loadTeamBuilderPool();
+  updateTeamBuilderUI();
+}
+
+async function openTeamBuilderModal() {
+  document.getElementById("team-builder-modal").style.display = "flex";
+  document.getElementById("tb-team-name").value = "";
+  teamBuilderState.selectedPlayers = [];
+  teamBuilderState.recommendedPlayerIds = [];
+
+  await loadTeamBuilderPool();
   updateTeamBuilderUI();
 }
 
@@ -1719,6 +1759,7 @@ async function suggestOptimalInitialTeam() {
         budget_credits: 100.0,
         risk_mode: risk,
         locked_player_ids: lockedIds,
+        league: teamBuilderLeague(),
       }),
     });
 
@@ -1879,6 +1920,8 @@ async function submitCreateTeam() {
       closeTeamBuilderModal();
       await loadTeams();
       await loadDashboard();
+      resetIntelligenceView();
+      if (state.activeTab === "intelligence") loadIntelligenceView();
     } else {
       const err = await res.json();
       alert(`Team creation failed: ${err.detail || "Server error"}`);
@@ -1896,7 +1939,8 @@ async function submitCreateTeam() {
 // =========================================================================
 // Live Data Update (Official EuroLeague Fantasy API)
 // =========================================================================
-async function triggerUpdateData() {
+async function triggerUpdateData(league) {
+  const targetLeague = league || activeTeamLeague();
   const btn = document.getElementById('btn-update-data');
   const spinner = document.getElementById('update-spinner');
   const icon = document.getElementById('update-icon');
@@ -1908,17 +1952,23 @@ async function triggerUpdateData() {
   if (text) text.textContent = 'Updating...';
 
   try {
-    const res = await fetch('/api/workstation/update-data', {
+    const res = await fetch(`/api/workstation/update-data?league=${encodeURIComponent(targetLeague)}`, {
       method: 'POST',
     });
 
     if (res.ok) {
       const data = await res.json();
       teamBuilderState.allPlayers = []; // Invalidate cached player pool
-      alert(data.message || 'EuroLeague Fantasy snapshot updated successfully!');
+      teamBuilderState.poolLeague = null;
+      alert(data.message || 'Fantasy snapshot updated successfully!');
       await loadDashboard();
       if (state.activeTab === 'trade-studio') {
         await loadPlayerPool();
+      }
+      const tbModal = document.getElementById('team-builder-modal');
+      if (tbModal && tbModal.style.display === 'flex') {
+        await loadTeamBuilderPool();
+        updateTeamBuilderUI();
       }
     } else {
       const err = await res.json();
@@ -1945,6 +1995,42 @@ let intelligenceState = {
   copilotAdvice: null,
   providers: [],
 };
+
+const INTEL_RESET_IDS = [
+  "strat-assumptions-list",
+  "strat-sensitivities-list",
+  "strat-checklist-tbody",
+  "copilot-advice-text",
+  "copilot-meta-badge",
+  "copilot-consistency-status",
+  "copilot-latency",
+  "dossier-provenance-badge",
+  "dossier-raw-json",
+];
+const intelDefaultMarkup = {};
+
+function captureIntelligenceDefaults() {
+  INTEL_RESET_IDS.forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) intelDefaultMarkup[id] = el.innerHTML;
+  });
+}
+
+// Clears all team-specific intelligence output so a new team never shows another team's analysis.
+function resetIntelligenceView() {
+  intelligenceState.dossier = null;
+  intelligenceState.strategicAnalysis = null;
+  intelligenceState.copilotAdvice = null;
+  INTEL_RESET_IDS.forEach((id) => {
+    const el = document.getElementById(id);
+    if (el && id in intelDefaultMarkup) {
+      el.innerHTML = intelDefaultMarkup[id];
+      el.style.color = "";
+    }
+  });
+  const fbBanner = document.getElementById("copilot-fallback-banner");
+  if (fbBanner) fbBanner.style.display = "none";
+}
 
 async function loadIntelligenceView() {
   if (!state.activeTeamId) return;
@@ -1986,6 +2072,7 @@ async function loadIntelligenceView() {
 function populateProvidersDropdown(providers) {
   const sel = document.getElementById("copilot-provider");
   if (!sel || !providers || providers.length === 0) return;
+  const previous = sel.value;
   sel.innerHTML = "";
   providers.forEach((p) => {
     const opt = document.createElement("option");
@@ -1994,6 +2081,9 @@ function populateProvidersDropdown(providers) {
     opt.textContent = `${availMark} ${p.display_name} (${p.default_model})`;
     sel.appendChild(opt);
   });
+  if (previous && providers.some((p) => p.provider_name === previous)) {
+    sel.value = previous;
+  }
 }
 
 function onProviderSelected() {
@@ -2019,13 +2109,17 @@ function renderStrategicAnalysisView(strat) {
     strat.assumptions.forEach((asm) => {
       const card = document.createElement("div");
       card.style = "background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; padding:0.75rem; font-size:0.85rem;";
-      const sensColor = asm.sensitivity_label === "high" ? "var(--accent-red)" : (asm.sensitivity_label === "medium" ? "var(--accent-gold)" : "var(--accent-green)");
+      const risk = (asm.risk_level || asm.sensitivity_label || "low").toLowerCase();
+      const sensColor = risk === "high" ? "var(--accent-red)" : (risk === "medium" ? "var(--accent-gold)" : "var(--accent-green)");
+      const cat = (asm.category || "Assumption").toUpperCase();
+      const desc = asm.description || asm.statement || asm.name || "";
+      const impactStr = asm.estimated_impact_fp !== undefined ? ` (Impact: ±${asm.estimated_impact_fp} FP)` : "";
       card.innerHTML = `
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.25rem;">
-          <strong style="text-transform:uppercase; font-size:0.75rem; color:var(--text-muted);">${asm.category}</strong>
-          <span style="color:${sensColor}; font-weight:700; font-size:0.75rem;">Sensitivity: ${asm.sensitivity_label.toUpperCase()}</span>
+          <strong style="text-transform:uppercase; font-size:0.75rem; color:var(--text-muted);">${cat}</strong>
+          <span style="color:${sensColor}; font-weight:700; font-size:0.75rem;">Risk: ${risk.toUpperCase()}${impactStr}</span>
         </div>
-        <div>${asm.statement}</div>
+        <div>${desc}</div>
       `;
       asmContainer.appendChild(card);
     });
@@ -2038,17 +2132,23 @@ function renderStrategicAnalysisView(strat) {
     strat.sensitivities.forEach((s) => {
       const card = document.createElement("div");
       card.style = "background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; padding:0.75rem; font-size:0.85rem;";
-      const swingStr = s.score_swing_fp >= 0 ? `+${s.score_swing_fp.toFixed(2)}` : `${s.score_swing_fp.toFixed(2)}`;
-      const changesRec = s.recommendation_changes ? "<span class='badge badge-red'>REC SHIFT</span>" : "<span class='badge badge-green'>STABLE</span>";
+      const title = s.parameter || s.perturbation_name || "Sensitivity Scenario";
+      const swingVal = typeof s.delta_fp === "number" ? s.delta_fp : (typeof s.score_swing_fp === "number" ? s.score_swing_fp : 0);
+      const swingStr = swingVal >= 0 ? `+${swingVal.toFixed(2)}` : `${swingVal.toFixed(2)}`;
+      const reversal = s.decision_reversal !== undefined ? s.decision_reversal : (s.recommendation_changes || false);
+      const changesRec = reversal ? "<span class='badge badge-red'>REC SHIFT</span>" : "<span class='badge badge-green'>STABLE</span>";
+      const desc = s.shock_description || s.summary || "";
+      const mit = s.mitigation ? `<div style="font-size:0.75rem; color:var(--accent-blue); margin-top:0.25rem;">Mitigation: ${s.mitigation}</div>` : "";
       card.innerHTML = `
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.25rem;">
-          <strong style="color:var(--text-main); font-size:0.85rem;">${s.perturbation_name}</strong>
+          <strong style="color:var(--text-main); font-size:0.85rem;">${title}</strong>
           <div style="display:flex; gap:0.4rem; align-items:center;">
             <span style="color:var(--accent-orange); font-weight:700;">${swingStr} FP</span>
             ${changesRec}
           </div>
         </div>
-        <div style="color:var(--text-muted);">${s.summary}</div>
+        <div style="color:var(--text-muted);">${desc}</div>
+        ${mit}
       `;
       sensContainer.appendChild(card);
     });
@@ -2056,15 +2156,21 @@ function renderStrategicAnalysisView(strat) {
 
   // 3. Devil's Advocate Checklist
   const checkTbody = document.getElementById("strat-checklist-tbody");
-  if (checkTbody && strat.devils_advocate_checklist) {
+  const checklistItems = strat.checklist || strat.devils_advocate_checklist;
+  if (checkTbody && checklistItems) {
     checkTbody.innerHTML = "";
-    strat.devils_advocate_checklist.forEach((item) => {
+    checklistItems.forEach((item) => {
       const tr = document.createElement("tr");
-      const markBadge = item.passed ? "<span class='badge badge-green'>PASS</span>" : "<span class='badge badge-red'>FLAG</span>";
+      const status = (item.status || (item.passed ? "PASS" : "FLAG")).toUpperCase();
+      const markBadge = status === "PASS"
+        ? "<span class='badge badge-green'>PASS</span>"
+        : (status === "WARNING" ? "<span class='badge badge-gold'>WARN</span>" : "<span class='badge badge-red'>FLAG</span>");
+      const detailText = item.details || item.detail || "";
+      const evText = item.evidence ? ` <span style="font-size:0.75rem; color:var(--text-muted);">(${item.evidence})</span>` : "";
       tr.innerHTML = `
         <td style="width:70px;">${markBadge}</td>
         <td style="font-weight:600; font-size:0.85rem; width:160px;">${item.check_name}</td>
-        <td style="font-size:0.85rem; color:var(--text-muted);">${item.detail}</td>
+        <td style="font-size:0.85rem; color:var(--text-muted);">${detailText}${evText}</td>
       `;
       checkTbody.appendChild(tr);
     });
@@ -2113,7 +2219,7 @@ async function triggerCopilotAdvise() {
       // Meta badge
       const metaBadge = document.getElementById("copilot-meta-badge");
       if (metaBadge) {
-        metaBadge.textContent = `${data.provider.toUpperCase()} (${data.model})`;
+        metaBadge.textContent = `${data.provider.toUpperCase()} (${data.model})${data.tier ? ` · ${data.tier}` : ""}`;
       }
 
       // Fallback banner
@@ -2130,13 +2236,22 @@ async function triggerCopilotAdvise() {
 
       // Consistency status
       const cStatus = document.getElementById("copilot-consistency-status");
-      if (cStatus && data.consistency) {
-        if (data.consistency.is_consistent) {
-          cStatus.textContent = "✓ Consistency: 100% Grounded in Dossier";
+      if (cStatus) {
+        const c = data.consistency;
+        if (!c) {
+          cStatus.textContent = "Consistency: Not checked";
+          cStatus.style.color = "var(--text-muted)";
+        } else if (c.is_consistent === true) {
+          cStatus.textContent = "✓ Consistency: Grounded in Dossier";
           cStatus.style.color = "var(--accent-green)";
         } else {
-          const issues = data.consistency.rule_violations.concat(data.consistency.hallucinations).slice(0, 2);
-          cStatus.textContent = `⚠️ Flagged Consistency: ${issues.join("; ")}`;
+          const issues = [
+            ...(Array.isArray(c.rule_warnings) ? c.rule_warnings : []),
+            ...(Array.isArray(c.hallucinated_players) ? c.hallucinated_players.map((h) => `Unrecognized player: ${h}`) : []),
+          ];
+          if (issues.length === 0 && Array.isArray(c.details)) issues.push(...c.details);
+          const displayIssues = issues.length > 0 ? issues.slice(0, 2).join("; ") : "Inconsistencies detected";
+          cStatus.textContent = `⚠️ Flagged Consistency: ${displayIssues}`;
           cStatus.style.color = "var(--accent-gold)";
         }
       }

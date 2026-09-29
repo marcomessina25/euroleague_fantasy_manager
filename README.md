@@ -247,14 +247,14 @@ Create, list, inspect, select active profiles, and import squads for up to 6 iso
 # List existing teams
 elf team list
 
-# Create a new EuroLeague team profile
-elf team create --id team_alpha --name "Alpha Contender" --league euroleague --season 2026/27 --bank 15.0
+# Create a new EuroLeague team profile (--bank is in tenths of a credit: 150 = 15.0 credits)
+elf team create --id team_alpha --name "Alpha Contender" --league euroleague --season 2026/27 --bank 150
 
 # Create a new EuroCup team profile
-elf team create --id team_eurocup --name "EuroCup Challenger" --league eurocup --season 2026/27 --bank 10.0
+elf team create --id team_eurocup --name "EuroCup Challenger" --league eurocup --season 2026/27 --bank 100
 
 # Set active context
-elf team select team_alpha
+elf team select --id team_alpha
 
 # Show full team profile and roster
 elf team show --id team_alpha
@@ -283,44 +283,44 @@ elf gui --host 127.0.0.1 --port 8080 --open-browser
 
 V0.6 layers strategic interpretation around the deterministic engine with strict **zero-mutation invariants** (analysis cannot modify persistent team state without explicit human workflow) and complete **offline deterministic fallback**:
 
-### 1. Manager Dossier (`--tier dossier`)
+Every `elf advise` run builds the dossier, runs the deterministic strategic analysis and then asks the Copilot for a narrative. The analysis tier (`--tier fast|standard|extended`, default `standard`) controls Copilot depth, output-token budget and provider timeout; `--llm-model` overrides the provider's default model.
+
+### 1. Manager Dossier
 
 Generates a standardized quantitative fact sheet with cryptographic SHA-256 provenance hashes (`content_hash` and `config_hash`), starting five, captaincy, sixth man, bench units, head coach, multi-option transfer packages, T1 $\to$ T2 turn substitutions, and market player valuations:
 
 ```powershell
-# Generate complete deterministic Manager Dossier in Markdown
-elf advise --tier dossier
-
-# Output dossier as structured JSON for automation or inspection
-elf advise --tier dossier --json
+# Full payload (dossier, strategic analysis and Copilot advice) as structured JSON
+elf advise --json
 ```
 
-### 2. Deterministic Strategic Analysis (`--tier strategic`)
+### 2. Deterministic Strategic Analysis
 
 Operates 100% offline with zero external API dependencies or network access:
 - **Assumption Breakdown**: Ranked top strategic assumptions by fantasy point impact.
-- **Sensitivity Stress Testing**: Evaluates one-way shocks (Captaincy $-25\%$, starter rotation floor bust).
+- **Sensitivity Stress Testing**: Evaluates one-way shocks (Captaincy $-25\%$, starter rotation floor bust) on players who have not played yet; realized scores are treated as locked.
 - **Devil's Advocate Checklist**: Quantitative sanity check verifying rule legality, projection plausibility, alternative completeness, downside variance regret, and bank liquidity flexibility.
 
 ```powershell
-elf advise --tier strategic
+elf advise --provider heuristic
 ```
 
-### 3. Grounded LLM Copilot (`--tier full`)
+### 3. Grounded LLM Copilot
 
 Invokes specialized strategic personas grounded in deterministic dossier facts:
-- **Personas**: `manager_briefing` (executive summary), `devils_advocate` (contrarian stress-tester), `tactical_analyst` (matchup & T1/T2 specialist), `strategic_planner` (multi-round horizon).
-- **Supported Providers**: `heuristic` (offline fallback), `gemini` (Google Gemini), `openai` (GPT-4o), `anthropic` (Claude 3.5), `openrouter`, and `local` (Ollama/vLLM).
+- **Personas**: `briefing` (executive summary), `devil_advocate` (contrarian stress-tester), `tactical_analyst` (matchup & T1/T2 specialist), `strategic_planner` (multi-round horizon).
+- **Supported Providers**: `heuristic` (offline fallback), `gemini` (Google Gemini), `openai` (GPT-4o), `claude` (Anthropic Claude), `openrouter`, and `local` (Ollama/vLLM).
+- **Tiers**: `fast` (brief answer, short timeout), `standard`, `extended` (full sensitivity/transfer context, larger token budget, longer timeout).
 - **Consistency Verification**: Automatically scans LLM responses to verify numerical consistency, detect hallucinated player names outside the dossier pool, and reject illegal fantasy chips (e.g., Free Hit, Triple Captain) that do not exist in basketball rules.
 - **Failure Isolation**: Provider timeouts or missing API keys automatically fall back to the offline heuristic advisor without throwing unhandled exceptions or corrupting team state.
 
 ```powershell
 # Offline heuristic copilot advice
-elf advise --persona manager_briefing --provider heuristic
+elf advise --persona briefing --provider heuristic
 
 # Claude / Gemini strategic analysis
-elf advise --persona devils_advocate --provider gemini
-elf advise --persona tactical_analyst --provider anthropic
+elf advise --persona devil_advocate --provider gemini --tier fast
+elf advise --persona tactical_analyst --provider claude --tier extended
 ```
 
 ### 4. Web Workstation "🧠 Intelligence & Copilot" Tab

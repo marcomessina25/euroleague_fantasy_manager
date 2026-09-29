@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from euroleague_fantasy_manager.intelligence.copilot import (
     CopilotAdviceResult,
     generate_copilot_advice,
+    resolve_tier,
 )
 from euroleague_fantasy_manager.intelligence.dossier import (
     ManagerDossier,
@@ -107,6 +108,11 @@ def copilot_advise_endpoint(
     Guarantees zero persistent state mutation. Falls back gracefully to heuristic analysis on provider failure.
     """
     try:
+        tier = resolve_tier(req.tier)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    try:
         dossier = generate_manager_dossier(
             team_id=req.team_id,
             season=req.season,
@@ -122,6 +128,7 @@ def copilot_advise_endpoint(
             api_key=req.api_key,
             model=req.model,
             database_path=prediction_service.database_path,
+            tier=tier,
         )
         return advice.to_dict()
     except KeyError:

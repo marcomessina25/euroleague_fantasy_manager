@@ -20,8 +20,9 @@ Core EuroLeague Fantasy Challenge Rules:
 7. Exactly 4 Bench units (all locked played bench players must be in bench, 0.5x).
 8. Captaincy:
    - Must be one of the Starting 5 (2.0x).
-   - If current captain has already played, captaincy can be retained (if score was good)
-     or switched to a starter who has NOT played yet.
+   - The current captain can keep the armband, or it can be switched to a starter who
+     has NOT played yet, even if the current captain has already played.
+   - A player who has already played can never become the new captain.
 """
 
 from __future__ import annotations
@@ -202,23 +203,18 @@ class IntraRoundSubstitutionOptimizer:
                     continue
 
                 # Determine legal Captaincy for this starting 5
-                # Captaincy rule:
-                # 1. If current captain has already played, their score is locked: they must remain starter and captain.
-                # 2. If current captain has NOT played yet, captaincy can stay or switch to another unplayed starter.
-                if curr_cap_id and played_map.get(curr_cap_id, False):
-                    if curr_cap_id not in s_ids_set:
-                        continue  # Played captain cannot be removed from starters
-                    candidate_caps = [curr_cap_id]
-                else:
-                    candidate_caps = []
-                    if curr_cap_id in s_ids_set and not played_map.get(curr_cap_id, False):
-                        candidate_caps.append(curr_cap_id)
-                    for pid in s_ids:
-                        if not played_map[pid] and pid not in candidate_caps:
-                            candidate_caps.append(pid)
+                # Captaincy rule (official): the current captain may keep the armband, or it may be
+                # moved to any starter who has NOT played yet, even after the current captain has played.
+                # A player who has already played can never become the new captain.
+                candidate_caps = []
+                if curr_cap_id in s_ids_set:
+                    candidate_caps.append(curr_cap_id)
+                for pid in s_ids:
+                    if not played_map[pid] and pid not in candidate_caps:
+                        candidate_caps.append(pid)
 
                 if not candidate_caps:
-                    candidate_caps = [s_ids[0]]
+                    continue
 
                 for cap_id in candidate_caps:
                     score = coach_fp

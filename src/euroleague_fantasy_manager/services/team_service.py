@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Sequence
 
+from euroleague_fantasy_manager.competition.ruleset import League
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.optimization.constraints import validate_squad_constraints
 from euroleague_fantasy_manager.rules import (
@@ -43,6 +44,7 @@ class TeamService:
         squad: Sequence[TeamRosterUnit] | None = None,
     ) -> Team:
         """Create a new isolated team profile (max 6)."""
+        league = League.from_str(league).value
         existing = self.store.get_team(team_id)
         if existing:
             raise ValueError(f"Team with ID '{team_id}' already exists.")

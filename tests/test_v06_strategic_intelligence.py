@@ -575,3 +575,293 @@ def test_provenance_content_hash_invariance_to_timestamp(team_service: TeamServi
     # and is unaffected even when generated_at and dossier_id vary
     assert dossier1.dossier_id != dossier2.dossier_id
 
+
+
+# =========================================================================
+# 10. PR review regressions: live-round shocks, league isolation, tiers, CLI flags
+# =========================================================================
+def _mark_played(unit, actual_fp: float):
+    import dataclasses
+
+    return dataclasses.replace(unit, has_played=True, actual_fp=actual_fp)
+
+
+def test_strategic_analysis_does_not_shock_played_players(team_service: TeamService, temp_db: Path) -> None:
+    import dataclasses
+
+    _seed_sample_team(team_service, team_id="team_live", league="euroleague")
+    dossier = generate_manager_dossier(team_id="team_live", team_service=team_service, database_path=temp_db)
+    ln = dossier.current_lineup
+    assert ln.captain is not None
+
+    played_starters = [_mark_played(s, 20.0) for s in ln.starters]
+    played_cap = next(s for s in played_starters if s.player_id == ln.captain.player_id)
+    live = dataclasses.replace(
+        dossier,
+        current_lineup=dataclasses.replace(ln, starters=played_starters, captain=played_cap),
+    )
+
+    strat = analyze_dossier(live)
+    played_names = {s.name for s in played_starters}
+
+    cap_cases = [s for s in strat.sensitivities if played_cap.name in s.parameter]
+    assert cap_cases, "captain case must still be reported"
+    assert all(c.delta_fp == 0.0 for c in cap_cases)
+    assert any("Captaincy Final" in c.parameter for c in cap_cases)
+
+    for case in strat.sensitivities:
+        if "Floor Bust" in case.parameter:
+            assert not any(name in case.parameter for name in played_names)
+
+
+def test_strategic_analysis_offers_captain_switch_after_captain_played(team_service: TeamService, temp_db: Path) -> None:
+    import dataclasses
+
+    _seed_sample_team(team_service, team_id="team_switch", league="euroleague")
+    dossier = generate_manager_dossier(team_id="team_switch", team_service=team_service, database_path=temp_db)
+    ln = dossier.current_lineup
+    assert ln.captain is not None
+
+    played_cap = _mark_played(ln.captain, 5.0)
+    starters = [played_cap if s.player_id == played_cap.player_id else s for s in ln.starters]
+    live = dataclasses.replace(dossier, current_lineup=dataclasses.replace(ln, starters=starters, captain=played_cap))
+
+    strat = analyze_dossier(live)
+    switch = next(s for s in strat.sensitivities if s.parameter.startswith("Captaincy Switch to"))
+    unplayed = [s for s in starters if not s.has_played]
+    best = max(unplayed, key=lambda s: s.expected_fp)
+    assert best.name in switch.parameter
+    assert switch.delta_fp == round(best.expected_fp - 5.0, 2)
+    assert switch.decision_reversal == (switch.delta_fp > 0)
+    # The played captain is never offered as a switch target and the realized score is not shocked.
+    assert not any("Captaincy Shock" in s.parameter for s in strat.sensitivities)
+
+
+def _league_payload(league_id: int, id_offset: int) -> dict:
+    import copy
+
+    from test_storage_and_cli import make_synthetic_snapshot_payload
+
+    payload = copy.deepcopy(make_synthetic_snapshot_payload(league_id=league_id))
+    for match in payload["match_lineups"]:
+        for side in ("home_team", "away_team"):
+            for p in match[side]["lineups"]:
+                p["id"] += id_offset
+    return payload
+
+
+def test_projection_market_is_league_isolated(tmp_path: Path) -> None:
+    from euroleague_fantasy_manager.rules import EUROCUP_LEAGUE_ID, EUROLEAGUE_LEAGUE_ID
+    from euroleague_fantasy_manager.services.prediction_service import PredictionService
+    from euroleague_fantasy_manager.storage import SnapshotStore
+
+    db = tmp_path / "leagues.sqlite3"
+    store = SnapshotStore(db)
+    store.save_snapshot(_league_payload(EUROLEAGUE_LEAGUE_ID, 0))
+
+    ps = PredictionService(database_path=db)
+    # No EuroCup snapshot yet: must not fall back to the EuroLeague market.
+    assert ps.get_projections_dict("2026/27", 1, league="eurocup") == {}
+    assert store.load_latest_players(league_id=EUROCUP_LEAGUE_ID) == []
+
+    store.save_snapshot(_league_payload(EUROCUP_LEAGUE_ID, 5000))
+    store.save_snapshot(_league_payload(EUROLEAGUE_LEAGUE_ID, 0))  # EuroLeague is the latest snapshot overall
+
+    ps = PredictionService(database_path=db)
+    el_ids = set(ps.get_projections_dict("2026/27", 1, league="euroleague"))
+    ec_ids = set(ps.get_projections_dict("2026/27", 1, league="eurocup"))
+    assert el_ids and ec_ids
+    assert all(pid < 5000 for pid in el_ids)
+    assert all(pid >= 5000 for pid in ec_ids)
+
+
+def test_create_team_uses_selected_league_market(tmp_path: Path) -> None:
+    from euroleague_fantasy_manager.rules import EUROCUP_LEAGUE_ID, EUROLEAGUE_LEAGUE_ID
+    from euroleague_fantasy_manager.storage import SnapshotStore
+
+    db = tmp_path / "create_team.sqlite3"
+    store = SnapshotStore(db)
+    store.save_snapshot(_league_payload(EUROCUP_LEAGUE_ID, 5000))
+    store.save_snapshot(_league_payload(EUROLEAGUE_LEAGUE_ID, 0))
+
+    squad = [101, 102, 103, 104, 201, 202, 203, 204, 301, 302, 401]
+    client = TestClient(create_app(db_path=db))
+
+    res_wrong = client.post("/api/teams", json={"name": "EC wrong pool", "league": "eurocup", "player_ids": squad})
+    assert res_wrong.status_code == 400
+    assert "eurocup" in res_wrong.json()["detail"]
+
+    res_ok = client.post(
+        "/api/teams",
+        json={"name": "EC squad", "league": "eurocup", "player_ids": [pid + 5000 for pid in squad]},
+    )
+    assert res_ok.status_code == 200, res_ok.text
+    assert res_ok.json()["league"] == "eurocup"
+
+    res_pool = client.get("/api/workstation/players?league=eurocup&limit=500")
+    assert res_pool.status_code == 200
+    assert res_pool.json() and all(p["player_id"] >= 5000 for p in res_pool.json())
+
+
+class _RecordingProvider(BaseLLMProvider):
+    def __init__(self) -> None:
+        super().__init__(name="recording", api_key="k", default_model="rec-v1")
+        self.requests: list[ProviderRequest] = []
+
+    def generate(self, request: ProviderRequest) -> ProviderResponse:
+        self.requests.append(request)
+        return ProviderResponse(content="Keep the lineup.", provider=self.name, model="rec-v1", latency_ms=1.0)
+
+
+def test_copilot_tier_changes_request_settings(team_service: TeamService, temp_db: Path) -> None:
+    _seed_sample_team(team_service, team_id="team_tier", league="euroleague")
+    dossier = generate_manager_dossier(team_id="team_tier", team_service=team_service, database_path=temp_db)
+
+    rec = _RecordingProvider()
+    with patch("euroleague_fantasy_manager.intelligence.copilot.get_provider", return_value=rec):
+        fast = generate_copilot_advice(dossier=dossier, provider_name="recording", tier="fast", database_path=temp_db)
+        extended = generate_copilot_advice(dossier=dossier, provider_name="recording", tier="extended", database_path=temp_db)
+
+    assert (fast.tier, extended.tier) == ("fast", "extended")
+    assert fast.to_dict()["tier"] == "fast"
+    fast_req, ext_req = rec.requests
+    assert fast_req.timeout_seconds < ext_req.timeout_seconds
+    assert fast_req.max_output_tokens < ext_req.max_output_tokens
+    assert fast_req.prompt != ext_req.prompt
+
+    with pytest.raises(ValueError, match="Unknown analysis tier"):
+        generate_copilot_advice(dossier=dossier, provider_name="heuristic", tier="turbo", database_path=temp_db)
+
+
+def test_copilot_advise_api_applies_and_validates_tier(temp_db: Path) -> None:
+    client = TestClient(create_app(db_path=temp_db))
+    body = {"team_id": "team_1", "persona": "briefing", "provider": "heuristic"}
+
+    res = client.post("/api/workstation/copilot/advise", json={**body, "tier": "extended"})
+    assert res.status_code == 200
+    assert res.json()["tier"] == "extended"
+
+    res_bad = client.post("/api/workstation/copilot/advise", json={**body, "tier": "turbo"})
+    assert res_bad.status_code == 400
+
+
+def test_cli_advise_rejects_unsupported_squad_flag(temp_db: Path) -> None:
+    with pytest.raises(SystemExit):
+        cli_main(["--db", str(temp_db), "advise", "--squad", "current_squad.json"])
+
+
+# =========================================================================
+# 11. Second-review regressions
+# =========================================================================
+def _snapshot_team_db(tmp_path: Path) -> tuple[Path, TestClient]:
+    from euroleague_fantasy_manager.rules import EUROLEAGUE_LEAGUE_ID
+    from euroleague_fantasy_manager.storage import SnapshotStore
+
+    db = tmp_path / "dossier_market.sqlite3"
+    SnapshotStore(db).save_snapshot(_league_payload(EUROLEAGUE_LEAGUE_ID, 0))
+    client = TestClient(create_app(db_path=db))
+    # Guard 105 (10.0 cr) held instead of 101 (11.0 cr): an obvious 1-for-1 upgrade within the 1.0 cr bank.
+    squad = [102, 103, 104, 105, 201, 202, 203, 204, 301, 302, 401]
+    res = client.post("/api/teams", json={"team_id": "mkt", "name": "Market Team", "league": "euroleague", "player_ids": squad})
+    assert res.status_code == 200, res.text
+    return db, client
+
+
+def test_dossier_includes_transfer_and_intra_round_analysis(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    db, _ = _snapshot_team_db(tmp_path)
+    ts = TeamService(db_path=db)
+
+    with caplog.at_level("WARNING", logger="euroleague_fantasy_manager.intelligence.dossier"):
+        dossier = generate_manager_dossier(team_id="mkt", team_service=ts, database_path=db)
+    assert not [r for r in caplog.records if "optimization failed" in r.getMessage()]
+
+    assert dossier.transfer_recommendations, "dossier must carry real transfer options"
+    top = dossier.transfer_recommendations[0]
+    assert all(isinstance(p["name"], str) and p["name"] for p in top.out_players + top.in_players)
+    assert {p["player_id"] for p in top.in_players} == {101}
+    assert top.remaining_bank_credits >= 0
+
+    strat = analyze_dossier(dossier)
+    assert any(a.category == "transfer" for a in strat.assumptions)
+    assert "Option 1" in dossier.summary_markdown()
+
+
+def test_dossier_markdown_renders_optimizer_substitutions(team_service: TeamService, temp_db: Path) -> None:
+    import dataclasses
+
+    from euroleague_fantasy_manager.intelligence.dossier import DossierIntraRoundOption
+
+    _seed_sample_team(team_service, team_id="team_md", league="euroleague")
+    dossier = generate_manager_dossier(team_id="team_md", team_service=team_service, database_path=temp_db)
+    option = DossierIntraRoundOption(
+        can_sub=True,
+        projected_gain=3.5,
+        suggested_subs=[{"out_player": {"name": "Jan Vesely"}, "in_player": {"name": "Mario Hezonja"}}],
+        suggested_captain={"old_captain": {"name": "Facundo Campazzo"}, "new_captain": {"name": "Kendrick Nunn"}},
+    )
+    md = dataclasses.replace(dossier, intra_round_recommendations=option).summary_markdown()
+    assert "Swap `Mario Hezonja` onto court for `Jan Vesely`" in md
+    assert "from `Facundo Campazzo` to `Kendrick Nunn`" in md
+
+
+def test_alternative_formation_gap_uses_optimizer_scores(tmp_path: Path) -> None:
+    db, _ = _snapshot_team_db(tmp_path)
+    ts = TeamService(db_path=db)
+    dossier = generate_manager_dossier(team_id="mkt", team_service=ts, database_path=db)
+
+    alts = dossier.current_lineup.alternatives
+    assert alts
+    from euroleague_fantasy_manager.services.optimization_service import OptimizationService
+    from euroleague_fantasy_manager.services.prediction_service import PredictionService
+
+    opt_total = OptimizationService(team_service=ts, prediction_service=PredictionService(database_path=db)).optimize_lineup(
+        team_id="mkt", season="2026/27"
+    ).expected_total_fp
+    for alt in alts:
+        assert alt["gap_to_optimal_fp"] == round(opt_total - alt["expected_score"], 2)
+
+    check = next(c for c in analyze_dossier(dossier).checklist if c.check_name == "Alternative Formation Viability")
+    assert f"{abs(alts[0]['gap_to_optimal_fp']):.2f}" in check.details
+
+
+def test_team_league_is_validated_and_normalized(temp_db: Path, team_service: TeamService) -> None:
+    with pytest.raises(ValueError, match="Unsupported or unknown league"):
+        team_service.create_team(team_id="bad", name="Bad", league="nba")
+
+    client = TestClient(create_app(db_path=temp_db))
+    res_bad = client.post("/api/teams", json={"team_id": "bad_api", "name": "Bad", "league": "nba"})
+    assert res_bad.status_code == 400
+    assert all(t["team_id"] != "bad_api" for t in client.get("/api/teams").json())
+
+    res_alias = client.post("/api/teams", json={"team_id": "alias", "name": "Alias", "league": "EuroCup"})
+    assert res_alias.status_code == 200
+    assert res_alias.json()["league"] == "eurocup"
+
+
+def test_gemini_api_key_sent_in_header_not_url() -> None:
+    import io
+    import json as _json
+
+    from euroleague_fantasy_manager.intelligence.providers import GeminiProvider
+
+    captured = {}
+
+    class _Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        captured["req"] = req
+        payload = {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}
+        return _Resp(_json.dumps(payload).encode("utf-8"))
+
+    with patch("euroleague_fantasy_manager.intelligence.providers.urllib.request.urlopen", side_effect=fake_urlopen):
+        GeminiProvider(api_key="secret-key").generate(ProviderRequest(prompt="hi"))
+
+    req = captured["req"]
+    assert "secret-key" not in req.full_url
+    assert "key=" not in req.full_url
+    assert req.get_header("X-goog-api-key") == "secret-key"

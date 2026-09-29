@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from euroleague_fantasy_manager.competition.ruleset import League, get_league_ruleset
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.evaluation.baselines import (
     canonical_model_name,
@@ -25,7 +26,7 @@ class PredictionService:
 
     def __init__(self, database_path: str | Path = "data/euroleague.sqlite3") -> None:
         self.database_path = Path(database_path)
-        self._cache: dict[tuple[str, int, str], dict[int, PlayerProjectionContract]] = {}
+        self._cache: dict[tuple[str, int, str, str], dict[int, PlayerProjectionContract]] = {}
 
     def get_projections_dict(
         self,
@@ -33,13 +34,15 @@ class PredictionService:
         round_number: int,
         model_name: str = "fp_decomposed_v03",
         force_refresh: bool = False,
+        league: str | League | None = None,
     ) -> dict[int, PlayerProjectionContract]:
         """Retrieve projection contracts keyed by player_id."""
-        cache_key = (normalize_season_code(season), int(round_number), canonical_model_name(model_name))
+        norm_league = League.from_str(league).value if league else "euroleague"
+        cache_key = (normalize_season_code(season), int(round_number), canonical_model_name(model_name), norm_league)
         if not force_refresh and cache_key in self._cache:
             return self._cache[cache_key]
 
-        contracts = self._build_contracts(season, round_number, model_name)
+        contracts = self._build_contracts(season, round_number, model_name, league=norm_league)
         self._cache[cache_key] = contracts
         return contracts
 
@@ -48,9 +51,10 @@ class PredictionService:
         season: str,
         round_number: int,
         model_name: str = "fp_decomposed_v03",
+        league: str | League | None = None,
     ) -> list[PlayerProjectionContract]:
         """Retrieve all projection contracts as a list."""
-        contracts_dict = self.get_projections_dict(season, round_number, model_name)
+        contracts_dict = self.get_projections_dict(season, round_number, model_name, league=league)
         return list(contracts_dict.values())
 
     def get_player_projection(
@@ -59,9 +63,10 @@ class PredictionService:
         round_number: int,
         player_id: int,
         model_name: str = "fp_decomposed_v03",
+        league: str | League | None = None,
     ) -> PlayerProjectionContract | None:
         """Retrieve single player projection contract."""
-        contracts = self.get_projections_dict(season, round_number, model_name)
+        contracts = self.get_projections_dict(season, round_number, model_name, league=league)
         return contracts.get(int(player_id))
 
     def get_player_valuations(
@@ -70,9 +75,10 @@ class PredictionService:
         round_number: int,
         model_name: str = "fp_decomposed_v03",
         risk_lambda: float = 0.5,
+        league: str | League | None = None,
     ) -> dict[int, dict[str, Any]]:
         """Compute advanced valuation metrics: PAR, credit efficiency, and risk-adjusted score."""
-        contracts = self.get_projections(season, round_number, model_name)
+        contracts = self.get_projections(season, round_number, model_name, league=league)
         if not contracts:
             return {}
 
@@ -107,17 +113,20 @@ class PredictionService:
         season: str,
         round_number: int,
         model_name: str,
+        league: str | None = None,
     ) -> dict[int, PlayerProjectionContract]:
         norm_season = normalize_season_code(season)
         canon_model = canonical_model_name(model_name)
         contracts: dict[int, PlayerProjectionContract] = {}
+        league_enum = League.from_str(league) if league else League.EUROLEAGUE
 
         if not self.database_path.exists():
             return contracts
 
         try:
             store_eval = EvaluationDatasetStore(self.database_path)
-            if norm_season in store_eval.list_seasons():
+            # The historical evaluation dataset only covers EuroLeague.
+            if league_enum == League.EUROLEAGUE and norm_season in store_eval.list_seasons():
                 cutoff = store_eval.get_round_decision_cutoff(norm_season, round_number)
                 if cutoff:
                     feature_table = build_round_feature_table(
@@ -154,9 +163,12 @@ class PredictionService:
             try:
                 from euroleague_fantasy_manager.storage import SnapshotStore
 
+                ruleset = get_league_ruleset(league_enum)
+                league_id = ruleset.league_id
+
                 store = SnapshotStore(self.database_path)
-                players = store.load_latest_players()
-                fixtures = store.load_latest_fixtures()
+                players = store.load_latest_players(league_id=league_id)
+                fixtures = store.load_latest_fixtures(league_id=league_id)
 
                 team_fix: dict[str, tuple[str, bool, int, bool]] = {}
                 for f in fixtures:

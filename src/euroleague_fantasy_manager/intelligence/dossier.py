@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 from pathlib import Path
 from typing import Any, Sequence
 import uuid
@@ -16,6 +17,8 @@ from ..optimization.constraints import PlayerProjectionContract
 from ..services.optimization_service import OptimizationService
 from ..services.prediction_service import PredictionService
 from ..services.team_service import TeamService
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,7 +220,14 @@ class ManagerDossier:
         if self.intra_round_recommendations.can_sub and self.intra_round_recommendations.suggested_subs:
             lines.append(f"**Projected Gain:** +{self.intra_round_recommendations.projected_gain:.2f} FP")
             for sub in self.intra_round_recommendations.suggested_subs:
-                lines.append(f"- Swap `{sub.get('bench_player_name')}` onto court for `{sub.get('court_player_name')}`")
+                in_name = (sub.get("in_player") or {}).get("name")
+                out_name = (sub.get("out_player") or {}).get("name")
+                lines.append(f"- Swap `{in_name}` onto court for `{out_name}`")
+            cap = self.intra_round_recommendations.suggested_captain
+            if cap:
+                lines.append(
+                    f"- Move captaincy from `{cap['old_captain']['name']}` to `{cap['new_captain']['name']}`"
+                )
         else:
             lines.append("No beneficial intra-round substitutions available.")
 
@@ -244,8 +254,8 @@ def generate_manager_dossier(
     ruleset = get_league_ruleset(league_val)
 
     # 1. Projections and valuations
-    proj_dict = ps.get_projections_dict(season, rnd)
-    valuations_map = ps.get_player_valuations(season, rnd)
+    proj_dict = ps.get_projections_dict(season, rnd, league=league_val)
+    valuations_map = ps.get_player_valuations(season, rnd, league=league_val)
 
     # 2. Lineup optimization & court roles
     opt_lineup = opt.optimize_lineup(
@@ -364,57 +374,67 @@ def generate_manager_dossier(
         expected_total_fp=tot_proj_fp,
         realized_total_fp=round(realized_fp, 2),
         unplayed_expected_fp=round(unplayed_exp_fp, 2),
-        alternatives=list(opt_lineup.alternatives or []),
+        alternatives=[
+            {**alt, "gap_to_optimal_fp": round(opt_lineup.expected_total_fp - float(alt.get("expected_score", 0.0)), 2)}
+            for alt in (opt_lineup.alternatives or [])
+        ],
     )
 
     # 3. Transfer Recommendations
+    def _tx_player(p: PlayerProjectionContract) -> dict[str, Any]:
+        return {
+            "player_id": p.player_id,
+            "name": p.player_name,
+            "position": p.position.short_code if hasattr(p.position, "short_code") else str(p.position),
+            "team_code": p.team_code,
+            "credits": round(p.price_tenths / 10.0, 1),
+            "expected_fp": round(p.expected_fp, 2),
+        }
+
     transfer_options: list[DossierTransferOption] = []
-    try:
-        top_tx = opt.suggest_transfers(
-            team_id=team_id,
-            season=season,
-            round_number=rnd,
-            max_trades=min(team.transfers_remaining, 3),
-            risk_mode=team.settings.risk_mode,
-            top_n=3,
-        )
-        for idx, rec in enumerate(top_tx, start=1):
-            transfer_options.append(
-                DossierTransferOption(
-                    option_id=idx,
-                    out_players=rec.get("transfers_out", []),
-                    in_players=rec.get("transfers_in", []),
-                    gross_gain=float(rec.get("gross_score_gain", 0.0)),
-                    transfer_cost=float(rec.get("transfer_cost", 0.0)),
-                    net_transfer_value=float(rec.get("net_transfer_value", 0.0)),
-                    remaining_bank_credits=float(rec.get("remaining_bank_credits", 0.0)),
-                    formation=str(rec.get("formation", "2-2-1")),
-                )
+    max_trades = min(team.transfers_remaining, 3)
+    if max_trades > 0:
+        try:
+            tx_res = opt.optimize_transfers(
+                team_id=team_id,
+                season=season,
+                round_number=rnd,
+                max_trades=max_trades,
             )
-    except Exception:
-        pass
+            for idx, rec in enumerate(tx_res.recommendations[:3], start=1):
+                transfer_options.append(
+                    DossierTransferOption(
+                        option_id=idx,
+                        out_players=[_tx_player(p) for p in rec.out_players],
+                        in_players=[_tx_player(p) for p in rec.in_players],
+                        gross_gain=round(float(rec.gross_score_gain), 2),
+                        transfer_cost=round(float(rec.transfer_cost), 2),
+                        net_transfer_value=round(float(rec.net_transfer_value), 2),
+                        remaining_bank_credits=round(rec.remaining_bank_tenths / 10.0, 1),
+                        formation=rec.new_lineup.formation,
+                    )
+                )
+        except Exception:
+            logger.warning("Dossier transfer optimization failed for team '%s'.", team_id, exc_info=True)
 
     # 4. Intra-Round Substitutions
     intra_round = DossierIntraRoundOption(can_sub=False, projected_gain=0.0)
     try:
-        # Check turn sub options
-        turn_sub_res = opt.simulate_intra_round_substitutions(
+        turn_sub_res = opt.optimize_intra_round(
             team_id=team_id,
             season=season,
             round_number=rnd,
         )
-        gain = float(turn_sub_res.get("net_gain", 0.0))
-        subs = turn_sub_res.get("substitutions", [])
-        cap_switch = turn_sub_res.get("captain_switch")
+        gain = float(turn_sub_res.net_gain)
         if gain > 0:
             intra_round = DossierIntraRoundOption(
                 can_sub=True,
-                projected_gain=gain,
-                suggested_subs=subs,
-                suggested_captain=cap_switch,
+                projected_gain=round(gain, 2),
+                suggested_subs=list(turn_sub_res.substitutions),
+                suggested_captain=turn_sub_res.captain_change_detail,
             )
     except Exception:
-        pass
+        logger.warning("Dossier intra-round optimization failed for team '%s'.", team_id, exc_info=True)
 
     # 5. Provenance & Hashes
     dossier_id = str(uuid.uuid4())
