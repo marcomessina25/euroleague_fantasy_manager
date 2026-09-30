@@ -1,4 +1,8 @@
-// EuroLeague Fantasy Workstation Client (V0.5)
+// EuroLeague Fantasy Workstation Client (V0.7)
+
+// Official EuroLeague Fantasy rule: 4 free trades per round.
+// Mirrors rules.py::MAX_TRADES_PER_ROUND — do not narrow this in the UI layer.
+const MAX_TRADES_PER_ROUND = 4;
 
 function escapeHtml(str) {
   if (str === null || str === undefined) return "";
@@ -1276,7 +1280,9 @@ async function triggerSuggestTransfers() {
         team_id: state.activeTeamId,
         season: state.season,
         round_number: state.roundNumber,
-        max_trades: tradeStudioState.unlimited ? 2 : Math.min(2, tradeStudioState.transfersRemaining || 1),
+        max_trades: tradeStudioState.unlimited
+          ? MAX_TRADES_PER_ROUND
+          : Math.min(MAX_TRADES_PER_ROUND, tradeStudioState.transfersRemaining || 1),
         unlimited: tradeStudioState.unlimited,
       }),
     });

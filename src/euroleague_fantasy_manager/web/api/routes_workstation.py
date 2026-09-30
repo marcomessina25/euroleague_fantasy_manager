@@ -10,6 +10,7 @@ from euroleague_fantasy_manager.competition.ruleset import League
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit
 from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
+from euroleague_fantasy_manager.rules import MAX_TRADES_PER_ROUND
 from euroleague_fantasy_manager.services.decision_service import DecisionService
 from euroleague_fantasy_manager.services.evaluation_service import EvaluationService
 from euroleague_fantasy_manager.services.optimization_service import (
@@ -48,7 +49,7 @@ class OptimizeTransfersRequest(BaseModel):
     team_id: str
     season: str = "2026/27"
     round_number: int | None = None
-    max_trades: int = 1
+    max_trades: int = MAX_TRADES_PER_ROUND
     unlimited: bool = False
     exhaustive: bool = False
 

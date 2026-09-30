@@ -280,8 +280,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--trades",
         "-t",
         type=int,
-        default=1,
-        help="Number of trades per package (1..4, default: 1).",
+        default=4,
+        help="Number of trades per package (1..4, default: 4).",
     )
     suggest_parser.add_argument(
         "--round",
@@ -477,7 +477,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--season", type=str, default="2025", help="Season code (default: 2025).")
         p.add_argument("--round", "-r", type=int, default=1, help="Round number (default: 1).")
         p.add_argument("--squad", type=Path, default=DEFAULT_SQUAD_PATH, help="Path to current_squad.json.")
-        p.add_argument("--trades", "-t", type=int, default=1, help="Max number of trades (1..4, default: 1).")
+        p.add_argument("--trades", "-t", type=int, default=4, help="Max number of trades (1..4, default: 4).")
         p.add_argument("--unlimited", action="store_true", help="Allow unlimited trades (Unlimited Trade Window).")
         p.add_argument("--top", type=int, default=5, help="Number of top trade recommendations (default: 5).")
         p.add_argument("--model", "-m", type=str, default="fp_decomposed_v03", help="Predictive model (default: fp_decomposed_v03).")
@@ -493,7 +493,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--start-round", type=int, default=1, help="Start round number (default: 1).")
         p.add_argument("--horizon", type=int, default=2, help="Planning horizon rounds (2..4, default: 2).")
         p.add_argument("--squad", type=Path, default=DEFAULT_SQUAD_PATH, help="Path to current_squad.json.")
-        p.add_argument("--max-trades", type=int, default=2, help="Max trades per round (default: 2).")
+        p.add_argument("--max-trades", type=int, default=4, help="Max trades per round (default: 4).")
         p.add_argument("--discount", type=float, default=0.95, help="Discount factor gamma (default: 0.95).")
         p.add_argument("--model", "-m", type=str, default="fp_decomposed_v03", help="Predictive model (default: fp_decomposed_v03).")
         p.add_argument("--risk-mode", type=str, default="expected", choices=["expected", "conservative", "aggressive"], help="Risk mode (default: expected).")

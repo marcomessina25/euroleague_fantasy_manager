@@ -383,7 +383,7 @@ Following `fpl-manager` V1.1.5, harden the engine against real-world roster chur
    - Detect and handle mid-season player departures: NBA buyouts, EuroLeague-to-domestic transfers, contract terminations, and mid-season waivers.
    - Immediate dead-capital liquidation flags to purge departed assets before trade deadlines.
 2. **Seasonal Trade Strategy Calibration**:
-   - Historically calibrate the expenditure of the 3 free trades per round across the season: preserving trade flexibility for double-round weeks and injury crises.
+   - Historically calibrate the expenditure of the 4 free trades per round across the season: preserving trade flexibility for double-round weeks and injury crises.
 3. **Multi-Version Benchmark Ledgers**:
    - Comprehensive multi-season performance benchmark comparing all engine iterations (V0.7 vs V0.9 vs V1.0 vs V1.1 vs V1.1.5) across historical seasons.
 
@@ -408,7 +408,7 @@ Directly incorporating the empirical findings from `fpl-manager` V1.2 to resolve
    - Automatic dead capital penalty: assets flagged as long-term unavailable receive zero projected points across the multi-round horizon and are prioritized for immediate liquidation.
    - Strict exclusion from candidate purchase pools in transfer and squad solvers.
 3. **Lineup-Aware Transfer Planning**:
-   - Transfer moves evaluated by net gain on expected starting lineup points ($\Delta \text{LineupXP}$) rather than raw 11-player squad sums, preventing waste of the 3 free trades on sideways bench upgrades.
+   - Transfer moves evaluated by net gain on expected starting lineup points ($\Delta \text{LineupXP}$) rather than raw 11-player squad sums, preventing waste of the 4 free trades on sideways bench upgrades.
 
 ---
 

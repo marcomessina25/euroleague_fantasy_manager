@@ -8,6 +8,7 @@ from typing import Any, Mapping, Sequence
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.rules import (
     COURT_STARTERS_SIZE,
+    MAX_TRADES_PER_ROUND,
     SQUAD_QUOTAS,
     SQUAD_SIZE,
 )
@@ -248,7 +249,7 @@ class OptimizationService:
         team_id: str,
         season: str = "2026/27",
         round_number: int | None = None,
-        max_trades: int = 1,
+        max_trades: int = MAX_TRADES_PER_ROUND,
         unlimited: bool = False,
         candidate_pool: Sequence[PlayerProjectionContract] | None = None,
         exhaustive: bool = False,

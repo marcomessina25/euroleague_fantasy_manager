@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from ..models import Player
+from ..rules import MAX_TRADES_PER_ROUND
 from .candidates import CandidateGenerator
 from .constraints import OptimizationConstraints, PlayerProjectionContract
 from .lineup import FixedSquadLineupOptimizer, OptimalLineupDecision
@@ -50,7 +51,7 @@ class MultiRoundOptimizer:
         self,
         constraints: OptimizationConstraints | None = None,
         discount_factor: float = 0.95,
-        max_trades_per_round: int = 2,
+        max_trades_per_round: int = MAX_TRADES_PER_ROUND,
         branching_factor: int = 4,
     ) -> None:
         """Initialize MultiRoundOptimizer.
@@ -61,7 +62,7 @@ class MultiRoundOptimizer:
             EuroLeague Fantasy constraints.
         discount_factor : float, default 0.95
             Strategic modeling parameter gamma in [0.0, 1.0].
-        max_trades_per_round : int, default 2
+        max_trades_per_round : int, default 4
             Maximum trades explored per step in the planning horizon.
         branching_factor : int, default 4
             Number of top beam states retained at each round transition.
