@@ -659,16 +659,21 @@ class TeamStore:
         restored_transfers = 4  # Standard fresh round transfers
 
         with self._get_connection() as conn:
-            conn.execute(
-                """
-                UPDATE managed_teams SET
-                    bank_tenths = ?,
-                    transfers_remaining = ?,
-                    updated_at = ?
-                WHERE team_id = ?;
-                """,
-                (restored_bank, restored_transfers, datetime.now(timezone.utc).isoformat(), team_id),
-            )
+            if rnd == team.round_number:
+                conn.execute(
+                    """
+                    UPDATE managed_teams SET
+                        bank_tenths = ?,
+                        transfers_remaining = ?,
+                        updated_at = ?
+                    WHERE team_id = ?;
+                    """,
+                    (restored_bank, restored_transfers, datetime.now(timezone.utc).isoformat(), team_id),
+                )
             self._save_squad_conn(conn, team_id, rnd, restored_squad)
+            conn.execute(
+                "DELETE FROM team_transfers WHERE team_id = ? AND round_number = ? AND season = ?;",
+                (team_id, rnd, season),
+            )
 
         return self.get_team(team_id)

@@ -617,6 +617,23 @@ def build_parser() -> argparse.ArgumentParser:
     t_del = team_sub.add_parser("delete", help="Delete a team.")
     t_del.add_argument("--id", required=True, type=str, help="Team ID to delete.")
 
+    t_set_lineup = team_sub.add_parser("set-lineup", help="Set team lineup for a specific round (§3.3).")
+    t_set_lineup.add_argument("--team", type=str, default=None, help="Target team ID (default: active team).")
+    t_set_lineup.add_argument("--round", "-r", type=int, required=True, help="Target round number.")
+    t_set_lineup.add_argument("--starters", type=str, required=True, help="Comma-separated player IDs for Starting 5.")
+    t_set_lineup.add_argument("--captain", type=int, required=True, help="Captain player ID.")
+    t_set_lineup.add_argument("--sixth-man", type=int, required=True, help="Sixth man player ID.")
+    t_set_lineup.add_argument("--bench", type=str, required=True, help="Comma-separated player IDs for 4 bench players.")
+    t_set_lineup.add_argument("--coach", type=int, default=None, help="Head Coach player ID (optional if already on squad).")
+
+    t_trade = team_sub.add_parser("trade", help="Execute trades for a team in a specific round (§3.3).")
+    t_trade.add_argument("--team", type=str, default=None, help="Target team ID (default: active team).")
+    t_trade.add_argument("--round", "-r", type=int, default=None, help="Target round number (default: live round).")
+    t_trade.add_argument("--out", type=str, required=True, help="Comma-separated player IDs transferred out.")
+    t_trade.add_argument("--in", dest="in_players", type=str, required=True, help="Comma-separated player IDs transferred in.")
+    t_trade.add_argument("--unlimited", action="store_true", help="Execute under unlimited trade rules.")
+    t_trade.add_argument("--season", type=str, default="2026/27", help="Season code (default: 2026/27).")
+
     # V0.6 Strategic Intelligence & Copilot
     advise_parser = subparsers.add_parser(
         "advise",
@@ -1253,6 +1270,65 @@ def main(argv: Sequence[str] | None = None) -> int:
             else:
                 print(f"Team '{args.id}' not found.")
             return 0
+
+        if args.team_command == "set-lineup":
+            target_id = args.team
+            if not target_id:
+                act = ts.get_active_team()
+                if not act:
+                    print("Error: No active team found. Specify --team.")
+                    return 1
+                target_id = act.team_id
+
+            try:
+                starter_ids = [int(x.strip()) for x in args.starters.split(",") if x.strip()]
+                bench_ids = [int(x.strip()) for x in args.bench.split(",") if x.strip()]
+                ts.update_lineup(
+                    team_id=target_id,
+                    round_number=args.round,
+                    starter_ids=starter_ids,
+                    captain_id=args.captain,
+                    sixth_man_id=args.sixth_man,
+                    bench_ids=bench_ids,
+                    head_coach_id=args.coach,
+                )
+                print(f"Updated lineup for team '{target_id}' in Round {args.round}.")
+                print(f"Starters: {starter_ids} (Captain: {args.captain})")
+                print(f"Sixth Man: {args.sixth_man}")
+                print(f"Bench: {bench_ids}")
+                return 0
+            except Exception as e:
+                print(f"Error setting lineup: {e}")
+                return 1
+
+        if args.team_command == "trade":
+            target_id = args.team
+            if not target_id:
+                act = ts.get_active_team()
+                if not act:
+                    print("Error: No active team found. Specify --team.")
+                    return 1
+                target_id = act.team_id
+
+            try:
+                out_ids = [int(x.strip()) for x in args.out.split(",") if x.strip()]
+                in_ids = [int(x.strip()) for x in args.in_players.split(",") if x.strip()]
+                res = ts.execute_transfers(
+                    team_id=target_id,
+                    transfers_out_ids=out_ids,
+                    transfers_in_ids=in_ids,
+                    round_number=args.round,
+                    season=args.season,
+                    unlimited=args.unlimited,
+                )
+                rnd_str = f"Round {res['target_round']}"
+                print(f"Successfully executed {len(out_ids)} trade(s) for team '{target_id}' in {rnd_str}.")
+                print(f"Out: {out_ids} -> In: {in_ids}")
+                print(f"Bank: {res['base_bank_tenths'] / 10.0:.1f} cr -> {res['new_bank_tenths'] / 10.0:.1f} cr")
+                return 0
+            except Exception as e:
+                print(f"Error executing trade: {e}")
+                return 1
 
     if args.command == "advise":
         from .intelligence.copilot import generate_copilot_advice

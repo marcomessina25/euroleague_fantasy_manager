@@ -172,3 +172,37 @@ class Team:
                 data.get("updated_at") or datetime.now(timezone.utc).isoformat()
             ),
         )
+
+
+@dataclass
+class PointInTimeTeamState:
+    """Reconstructed point-in-time financial, availability, and squad state at a round boundary."""
+
+    team_id: str
+    round_number: int
+    season: str
+    squad: list[TeamRosterUnit]
+    bank_tenths: int
+    transfers_remaining: int
+    squad_valuation_tenths: int
+    total_team_value_tenths: int
+    price_changes: dict[int, int] = field(default_factory=dict)
+    player_availabilities: dict[int, str] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "team_id": self.team_id,
+            "round_number": self.round_number,
+            "season": self.season,
+            "squad": [u.to_dict() for u in self.squad],
+            "bank_tenths": self.bank_tenths,
+            "bank_credits": round(self.bank_tenths / 10.0, 1),
+            "transfers_remaining": self.transfers_remaining,
+            "squad_valuation_tenths": self.squad_valuation_tenths,
+            "squad_valuation_credits": round(self.squad_valuation_tenths / 10.0, 1),
+            "total_team_value_tenths": self.total_team_value_tenths,
+            "total_team_value_credits": round(self.total_team_value_tenths / 10.0, 1),
+            "price_changes": self.price_changes,
+            "player_availabilities": self.player_availabilities,
+        }
+

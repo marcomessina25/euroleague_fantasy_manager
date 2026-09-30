@@ -9,4 +9,4 @@ __all__ = ["__version__"]
 try:
     __version__ = importlib.metadata.version("euroleague-fantasy-manager")
 except importlib.metadata.PackageNotFoundError:
-    __version__ = "0.6.5"
+    __version__ = "0.7.0"

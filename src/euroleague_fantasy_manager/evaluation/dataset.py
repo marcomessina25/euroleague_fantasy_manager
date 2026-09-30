@@ -26,8 +26,8 @@ PRICE_PROVENANCE_CATEGORIES: tuple[str, ...] = (
 )
 
 
-def normalize_season_code(season: str | int) -> str:
-    """Normalize season identifier (e.g. 2025 or '2025/26' or 'E2025') to 'E2025'."""
+def normalize_season_code(season: str | int, league: str | None = None) -> str:
+    """Normalize season identifier (e.g. 2025 or '2025/26' or 'E2025' or 'U2025')."""
     s = str(season).strip().upper()
     if "/" in s:
         s = s.split("/")[0]
@@ -35,8 +35,9 @@ def normalize_season_code(season: str | int) -> str:
         s = s.split("-")[0]
     if s.startswith(("E", "U")) and len(s) == 5 and s[1:].isdigit():
         return s
+    prefix = "U" if (league and str(league).lower() in ("eurocup", "ec", "u", "11")) else "E"
     if s.isdigit() and len(s) == 4:
-        return f"E{s}"
+        return f"{prefix}{s}"
     return s
 
 
@@ -444,10 +445,24 @@ class EvaluationDatasetStore:
                 return str(row["decision_cutoff"])
         raise KeyError(f"No round cutoff found for season={norm_season}, round={round_number}")
 
-    def list_seasons(self) -> list[str]:
+    def list_seasons(self, league: str | None = None) -> list[str]:
         with self._connect() as conn:
             rows = conn.execute("SELECT DISTINCT season FROM eval_rounds ORDER BY season").fetchall()
-            return [str(r["season"]) for r in rows]
+            seasons = [str(r["season"]) for r in rows]
+            if league:
+                prefix = "U" if str(league).lower() in ("eurocup", "ec", "u", "11") else "E"
+                return [s for s in seasons if s.startswith(prefix)]
+            return seasons
+
+    def list_leagues(self) -> list[str]:
+        """Return list of leagues with stored evaluation datasets."""
+        seasons = self.list_seasons()
+        leagues = []
+        if any(s.startswith("E") for s in seasons):
+            leagues.append("euroleague")
+        if any(s.startswith("U") for s in seasons):
+            leagues.append("eurocup")
+        return leagues
 
     def list_season_rounds(self, season: str) -> list[int]:
         norm_season = normalize_season_code(season)
@@ -457,6 +472,8 @@ class EvaluationDatasetStore:
                 (norm_season,),
             ).fetchall()
             return [int(r["round"]) for r in rows]
+
+    list_rounds = list_season_rounds
 
     def get_price_coverage_by_season(self, season: str | None = None) -> dict[str, dict[str, int]]:
         """Return counts of player-game rows by season and price_provenance category."""
@@ -654,90 +671,156 @@ def _det_int(seed_str: str, low: int, high: int) -> int:
     return low + (val % (high - low + 1))
 
 
+EUROLEAGUE_TEAMS = [
+    (1, "PAO", "Panathinaikos AKTOR Athens", 0.82),
+    (2, "RMB", "Real Madrid", 0.78),
+    (3, "OLY", "Olympiacos Piraeus", 0.76),
+    (4, "FBB", "Fenerbahce Beko Istanbul", 0.71),
+    (5, "ASM", "AS Monaco", 0.68),
+    (6, "BER", "ALBA Berlin", 0.42),
+]
+
+EUROLEAGUE_ROSTER = [
+    # Team 1 (PAO)
+    (1001, "Kendrick Nunn", "G", 1, "PAO", 165, 1, 21.0),
+    (1002, "Kostas Sloukas", "G", 1, "PAO", 135, 1, 15.5),
+    (1003, "Juancho Hernangomez", "F", 1, "PAO", 125, 1, 14.0),
+    (1004, "Mathias Lessort", "C", 1, "PAO", 160, 1, 19.5),
+    (1091, "Ergin Ataman", "HC", 1, "PAO", 95, 1, 14.0),
+    # Team 2 (RMB)
+    (2001, "Facundo Campazzo", "G", 2, "RMB", 155, 1, 18.5),
+    (2002, "Mario Hezonja", "F", 2, "RMB", 140, 1, 16.0),
+    (2003, "Gabriel Deck", "F", 2, "RMB", 115, 0, 12.0),
+    (2004, "Walter Tavares", "C", 2, "RMB", 150, 1, 17.5),
+    (2091, "Chus Mateo", "HC", 2, "RMB", 90, 1, 12.0),
+    # Team 3 (OLY)
+    (3001, "Thomas Walkup", "G", 3, "OLY", 110, 1, 12.5),
+    (3002, "Sasha Vezenkov", "F", 3, "OLY", 175, 1, 22.5),
+    (3003, "Alec Peters", "F", 3, "OLY", 115, 0, 11.5),
+    (3004, "Nikola Milutinov", "C", 3, "OLY", 145, 1, 16.5),
+    (3091, "Georgios Bartzokas", "HC", 3, "OLY", 90, 1, 12.0),
+    # Team 4 (FBB)
+    (4001, "Scottie Wilbekin", "G", 4, "FBB", 125, 1, 13.5),
+    (4002, "Marko Guduric", "G", 4, "FBB", 115, 0, 12.0),
+    (4003, "Nigel Hayes-Davis", "F", 4, "FBB", 155, 1, 18.0),
+    (4004, "Tarik Biberovic", "F", 4, "FBB", 85, 0, 9.0),
+    (4091, "Saras Jasikevicius", "HC", 4, "FBB", 85, 1, 10.0),
+    # Team 5 (ASM)
+    (5001, "Mike James", "G", 5, "ASM", 170, 1, 21.5),
+    (5002, "Elie Okobo", "G", 5, "ASM", 125, 0, 14.0),
+    (5003, "Alpha Diallo", "F", 5, "ASM", 130, 1, 15.0),
+    (5004, "Donatas Motiejunas", "C", 5, "ASM", 105, 1, 11.5),
+    (5091, "Sasa Obradovic", "HC", 5, "ASM", 80, 1, 9.0),
+    # Team 6 (BER)
+    (6001, "Martin Hermannsson", "G", 6, "BER", 85, 1, 9.5),
+    (6002, "Gabriele Procida", "F", 6, "BER", 75, 1, 8.5),
+    (6003, "Louis Olinde", "F", 6, "BER", 70, 0, 7.5),
+    (6004, "Trevion Williams", "C", 6, "BER", 95, 1, 11.0),
+    (6091, "Israel Gonzalez", "HC", 6, "BER", 55, 1, 2.0),
+]
+
+EUROLEAGUE_PAIRINGS = [
+    [(1, 6, 1), (2, 5, 1), (3, 4, 2)],
+    [(6, 3, 1), (5, 1, 2), (4, 2, 2)],
+    [(1, 4, 1), (3, 2, 1), (6, 5, 2)],
+    [(2, 1, 1), (4, 6, 2), (5, 3, 2)],
+    [(1, 3, 1), (6, 2, 1), (5, 4, 2)],
+]
+
+EUROCUP_TEAMS = [
+    (11, "VBC", "Valencia Basket", 0.80),
+    (12, "HAP", "Hapoel Tel Aviv", 0.78),
+    (13, "GRA", "Dreamland Gran Canaria", 0.72),
+    (14, "CJB", "Joventut Badalona", 0.68),
+    (15, "BES", "Besiktas Fibabanka Istanbul", 0.65),
+    (16, "TRE", "Dolomiti Energia Trento", 0.45),
+]
+
+EUROCUP_ROSTER = [
+    # Team 11 (VBC)
+    (1101, "Chris Jones", "G", 11, "VBC", 160, 1, 19.5),
+    (1102, "Jean Montero", "G", 11, "VBC", 145, 1, 17.0),
+    (1103, "Semi Ojeleye", "F", 11, "VBC", 140, 1, 16.0),
+    (1104, "Matt Costello", "C", 11, "VBC", 130, 1, 15.0),
+    (1191, "Pedro Martinez", "HC", 11, "VBC", 90, 1, 13.0),
+    # Team 12 (HAP)
+    (1201, "Patrick Beverley", "G", 12, "HAP", 155, 1, 18.0),
+    (1202, "Marcus Foster", "G", 12, "HAP", 135, 1, 15.0),
+    (1203, "Ish Wainright", "F", 12, "HAP", 120, 0, 12.0),
+    (1204, "Johnathan Motley", "C", 12, "HAP", 165, 1, 20.0),
+    (1291, "Stefanos Dedas", "HC", 12, "HAP", 85, 1, 11.0),
+    # Team 13 (GRA)
+    (1301, "Andrew Albicy", "G", 13, "GRA", 115, 1, 12.5),
+    (1302, "Caleb Homesley", "G", 13, "GRA", 130, 1, 14.5),
+    (1303, "John Shurna", "F", 13, "GRA", 115, 0, 11.5),
+    (1304, "Mike Tobey", "C", 13, "GRA", 135, 1, 15.5),
+    (1391, "Jaka Lakovic", "HC", 13, "GRA", 85, 1, 10.5),
+    # Team 14 (CJB)
+    (1401, "Guillem Vives", "G", 14, "CJB", 100, 1, 11.0),
+    (1402, "Devon Dotson", "G", 14, "CJB", 130, 0, 14.0),
+    (1403, "Adam Hanga", "F", 14, "CJB", 125, 1, 13.5),
+    (1404, "Ante Tomic", "C", 14, "CJB", 145, 1, 17.5),
+    (1491, "Dani Miret", "HC", 14, "CJB", 75, 1, 8.5),
+    # Team 15 (BES)
+    (1501, "Derek Needham", "G", 15, "BES", 120, 1, 13.0),
+    (1502, "Jonah Mathews", "G", 15, "BES", 135, 1, 15.0),
+    (1503, "Matt Mitchell", "F", 15, "BES", 125, 1, 13.5),
+    (1504, "Dustin Sleva", "C", 15, "BES", 110, 1, 12.0),
+    (1591, "Dusan Alimpijevic", "HC", 15, "BES", 75, 1, 8.0),
+    # Team 16 (TRE)
+    (1601, "Quinn Ellis", "G", 16, "TRE", 95, 1, 10.5),
+    (1602, "Jordan Ford", "G", 16, "TRE", 110, 1, 12.0),
+    (1603, "Anthony Lamb", "F", 16, "TRE", 125, 1, 14.0),
+    (1604, "Selom Mawugbe", "C", 16, "TRE", 90, 1, 9.5),
+    (1691, "Paolo Galbiati", "HC", 16, "TRE", 60, 1, 4.0),
+]
+
+EUROCUP_PAIRINGS = [
+    [(11, 16, 1), (12, 15, 1), (13, 14, 2)],
+    [(16, 13, 1), (15, 11, 2), (14, 12, 2)],
+    [(11, 14, 1), (13, 12, 1), (16, 15, 2)],
+    [(12, 11, 1), (14, 16, 2), (15, 13, 2)],
+    [(11, 13, 1), (16, 12, 1), (15, 14, 2)],
+]
+
+
 def build_historical_dataset(
     database_path: Path = DATABASE_PATH,
     seasons: Sequence[str | int] = ("2022", "2023", "2024", "2025"),
     rounds_per_season: int = 12,
     dataset_version: str = DATASET_VERSION,
+    league: str | None = None,
 ) -> HistoricalBuildSummary:
     """Build a deterministic, point-in-time normalized multi-season dataset in SQLite.
 
-    Generates normalized records across `seasons` (default: 4 seasons `E2022`..`E2025`):
-      - 6 EuroLeague clubs (`PAO`, `RMB`, `OLY`, `FBB`, `ASM`, `BER`)
-      - 24 court players (`8 G, 8 F, 8 C`) + 6 Head Coaches (`6 HC`) with stable `player_id` across seasons
-      - Round-robin Turn 1 (Thursday) and Turn 2 (Friday) games with strict pre-round `decision_cutoff`
-      - Full box-score statistics (`PTS, REB, AST, STL, BLK, TOV, PF, FD, FGA/FGM, FTA/FTM, 3PA/3PM`),
-        reconstructed `PIR`, `fantasy_points`, Head Coach margin targets, and explicit availability
-        statuses (`available`, `questionable`, `out`, `DNP`).
+    Generates normalized records across `seasons` for EuroLeague (E) and EuroCup (U):
+      - 6 clubs per competition
+      - 24 court players (8 G, 8 F, 8 C) + 6 Head Coaches (6 HC) per competition
+      - Round-robin Turn 1 and Turn 2 games with strict pre-round `decision_cutoff`
+      - Full box-score statistics and reconstructed fantasy metrics
     """
     store = EvaluationDatasetStore(database_path)
-    norm_seasons = tuple(normalize_season_code(s) for s in seasons)
+    norm_seasons = tuple(normalize_season_code(s, league=league) for s in seasons)
     store.clear_season_data(norm_seasons)
 
-    teams = [
-        (1, "PAO", "Panathinaikos AKTOR Athens", 0.82),
-        (2, "RMB", "Real Madrid", 0.78),
-        (3, "OLY", "Olympiacos Piraeus", 0.76),
-        (4, "FBB", "Fenerbahce Beko Istanbul", 0.71),
-        (5, "ASM", "AS Monaco", 0.68),
-        (6, "BER", "ALBA Berlin", 0.42),
-    ]
+    has_el = any(s.startswith("E") for s in norm_seasons)
+    has_ec = any(s.startswith("U") for s in norm_seasons)
 
-    # 24 court players (4 per team: 2 G, 1 F or 2 F, 1 C) + 6 Head Coaches (1 per team)
-    # Ensuring across the 6 teams we have plenty of G, F, C, HC for legal 11-unit squads (4G, 4F, 2C, 1HC)
-    roster_templates = [
-        # Team 1 (PAO)
-        (1001, "Kendrick Nunn", "G", 1, "PAO", 165, 1, 21.0),
-        (1002, "Kostas Sloukas", "G", 1, "PAO", 135, 1, 15.5),
-        (1003, "Juancho Hernangomez", "F", 1, "PAO", 125, 1, 14.0),
-        (1004, "Mathias Lessort", "C", 1, "PAO", 160, 1, 19.5),
-        (1091, "Ergin Ataman", "HC", 1, "PAO", 95, 1, 14.0),
-        # Team 2 (RMB)
-        (2001, "Facundo Campazzo", "G", 2, "RMB", 155, 1, 18.5),
-        (2002, "Mario Hezonja", "F", 2, "RMB", 140, 1, 16.0),
-        (2003, "Gabriel Deck", "F", 2, "RMB", 115, 0, 12.0),
-        (2004, "Walter Tavares", "C", 2, "RMB", 150, 1, 17.5),
-        (2091, "Chus Mateo", "HC", 2, "RMB", 90, 1, 12.0),
-        # Team 3 (OLY)
-        (3001, "Thomas Walkup", "G", 3, "OLY", 110, 1, 12.5),
-        (3002, "Sasha Vezenkov", "F", 3, "OLY", 175, 1, 22.5),
-        (3003, "Alec Peters", "F", 3, "OLY", 115, 0, 11.5),
-        (3004, "Nikola Milutinov", "C", 3, "OLY", 145, 1, 16.5),
-        (3091, "Georgios Bartzokas", "HC", 3, "OLY", 90, 1, 12.0),
-        # Team 4 (FBB)
-        (4001, "Scottie Wilbekin", "G", 4, "FBB", 125, 1, 13.5),
-        (4002, "Marko Guduric", "G", 4, "FBB", 115, 0, 12.0),
-        (4003, "Nigel Hayes-Davis", "F", 4, "FBB", 155, 1, 18.0),
-        (4004, "Tarik Biberovic", "F", 4, "FBB", 85, 0, 9.0),
-        (4091, "Saras Jasikevicius", "HC", 4, "FBB", 85, 1, 10.0),
-        # Team 5 (ASM)
-        (5001, "Mike James", "G", 5, "ASM", 170, 1, 21.5),
-        (5002, "Elie Okobo", "G", 5, "ASM", 125, 0, 14.0),
-        (5003, "Alpha Diallo", "F", 5, "ASM", 130, 1, 15.0),
-        (5004, "Donatas Motiejunas", "C", 5, "ASM", 105, 1, 11.5),
-        (5091, "Sasa Obradovic", "HC", 5, "ASM", 80, 1, 9.0),
-        # Team 6 (BER)
-        (6001, "Martin Hermannsson", "G", 6, "BER", 85, 1, 9.5),
-        (6002, "Gabriele Procida", "F", 6, "BER", 75, 1, 8.5),
-        (6003, "Louis Olinde", "F", 6, "BER", 70, 0, 7.5),
-        (6004, "Trevion Williams", "C", 6, "BER", 95, 1, 11.0),
-        (6091, "Israel Gonzalez", "HC", 6, "BER", 55, 1, 2.0),
-    ]
-
-    pairings_cycle = [
-        [(1, 6, 1), (2, 5, 1), (3, 4, 2)],
-        [(6, 3, 1), (5, 1, 2), (4, 2, 2)],
-        [(1, 4, 1), (3, 2, 1), (6, 5, 2)],
-        [(2, 1, 1), (4, 6, 2), (5, 3, 2)],
-        [(1, 3, 1), (6, 2, 1), (5, 4, 2)],
-    ]
+    active_rosters: list[tuple[Any, ...]] = []
+    active_teams: list[tuple[Any, ...]] = []
+    if has_el:
+        active_rosters.extend(EUROLEAGUE_ROSTER)
+        active_teams.extend(EUROLEAGUE_TEAMS)
+    if has_ec:
+        active_rosters.extend(EUROCUP_ROSTER)
+        active_teams.extend(EUROCUP_TEAMS)
 
     total_games = 0
     total_pg = 0
     total_tg = 0
 
     with store._connect() as conn:
-        for pid, pname, pos, tid, tcode, base_q, _, _ in roster_templates:
+        for pid, pname, pos, tid, tcode, base_q, _, _ in active_rosters:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO eval_players (
@@ -749,6 +832,11 @@ def build_historical_dataset(
             )
 
         for season_code in norm_seasons:
+            is_ec = season_code.startswith("U")
+            teams = EUROCUP_TEAMS if is_ec else EUROLEAGUE_TEAMS
+            roster_templates = EUROCUP_ROSTER if is_ec else EUROLEAGUE_ROSTER
+            pairings_cycle = EUROCUP_PAIRINGS if is_ec else EUROLEAGUE_PAIRINGS
+
             year_num = int(season_code[1:]) if season_code[1:].isdigit() else 2025
             season_start = datetime(year_num, 10, 3, 16, 0, 0, tzinfo=timezone.utc)
 
@@ -832,7 +920,7 @@ def build_historical_dataset(
                         team_won = h_win if is_home else a_win
                         team_margin = margin if is_home else -margin
                         pre_quote = current_quotations[pid]
-                        if season_code in ("E2024", "E2025"):
+                        if season_code in ("E2024", "E2025", "U2024", "U2025"):
                             price_prov = "archived_fantasy" if rnum == 1 else "reconstructed"
                         else:
                             price_prov = "proxy"
@@ -980,9 +1068,9 @@ def build_historical_dataset(
         dataset_version=dataset_version,
         seasons=norm_seasons,
         rounds_per_season=rounds_per_season,
-        total_players=sum(1 for r in roster_templates if r[2] != "HC"),
-        total_coaches=sum(1 for r in roster_templates if r[2] == "HC"),
-        total_teams=len(teams),
+        total_players=len(set(r[0] for r in active_rosters if r[2] != "HC")),
+        total_coaches=len(set(r[0] for r in active_rosters if r[2] == "HC")),
+        total_teams=len(set(t[0] for t in active_teams)),
         total_games=total_games,
         total_player_games=total_pg,
         total_team_games=total_tg,

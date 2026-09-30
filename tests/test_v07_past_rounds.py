@@ -394,18 +394,18 @@ def test_trade_events_pair_outs_with_ins_in_request_order(ctx):
     assert events[5003]["price_in_tenths"] > 0
 
 
-def test_trades_for_a_past_round_are_rejected_not_silently_misapplied(ctx):
-    """Past-round TRADE entry is deferred to W6 (see docs/specs/v07.md).
+def test_trades_for_a_past_round_succeed_and_propagate_forward(ctx):
+    """Past-round TRADE entry is supported in V0.7 W6 with forward replay (§3.2).
 
-    A past-round trade changes the bank and trade budget of every later round,
-    which needs point-in-time state reconstruction. Rejecting is the only honest
-    option: silently applying the trade to the live round, or applying it to the
-    past round without propagating the budget, both corrupt state.
+    A past-round trade applies to round n, writes the resulting bank/budget as the
+    round-start checkpoint of n+1, replays forward through recorded team_transfers,
+    updates the live round squad and bank, enforces the transfer cap, and keeps
+    revert-round-start fully functional.
     """
     client, service = ctx["client"], ctx["service"]
-    before_r1 = {u.player_id for u in service.store.get_squad("bt", 1)}
-    before_r2 = {u.player_id for u in service.store.get_squad("bt", 2)}
+    assert service.get_team("bt").round_number == 2
 
+    # 1. Execute past-round trade in Round 1: sell 5003, buy 5004
     res = client.post(
         "/api/teams/bt/transfers",
         json={
@@ -415,14 +415,40 @@ def test_trades_for_a_past_round_are_rejected_not_silently_misapplied(ctx):
             "round_number": 1,
         },
     )
-    assert res.status_code == 400
-    detail = res.json()["detail"].lower()
-    assert "past round" in detail and "not supported yet" in detail
+    assert res.status_code == 200, res.text
 
-    # Nothing was applied to either round.
-    assert {u.player_id for u in service.store.get_squad("bt", 1)} == before_r1
-    assert {u.player_id for u in service.store.get_squad("bt", 2)} == before_r2
-    assert service.store.get_transfers("bt", SEASON) == []
+    # Round 1 squad now has 5004 and not 5003
+    r1_pids = {u.player_id for u in service.store.get_squad("bt", 1)}
+    assert 5004 in r1_pids
+    assert 5003 not in r1_pids
+
+    # Round 2 squad received forward propagation
+    r2_pids = {u.player_id for u in service.store.get_squad("bt", 2)}
+    assert 5004 in r2_pids
+    assert 5003 not in r2_pids
+
+    # Round 2 start checkpoint was updated with forward propagation (overwrite=True, not deleted)
+    r2_chk = service.store.get_round_checkpoint("bt", 2, SEASON)
+    chk_pids = {u.player_id for u in r2_chk["squad"]}
+    assert 5004 in chk_pids
+    assert 5003 not in chk_pids
+
+    # Revert round start on live round 2 restores cleanly to round 2's starting checkpoint
+    reverted_team = service.revert_to_round_start("bt", SEASON, round_number=2)
+    assert 5004 in {u.player_id for u in reverted_team.squad}
+
+    # Attempting 4 trades in Round 1 when only 3 remain fails with 400
+    res_cap = client.post(
+        "/api/teams/bt/transfers",
+        json={
+            "transfers_out_ids": [5000, 5001, 5002, 5004],
+            "transfers_in_ids": [5003, 5100, 5101, 5102],
+            "season": SEASON,
+            "round_number": 1,
+        },
+    )
+    assert res_cap.status_code == 400
+    assert "transfers remaining" in res_cap.text.lower()
 
 
 def test_trades_for_the_live_round_still_work_when_round_is_named(ctx):

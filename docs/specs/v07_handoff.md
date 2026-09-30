@@ -103,13 +103,13 @@ Both should go through `TeamService` so the GUI and CLI share validation. Note `
 
 ### 3.4 Release tasks (W7)
 
-- [ ] Bump version to `0.7.0` in **both** `src/euroleague_fantasy_manager/__init__.py` and `pyproject.toml`.
+- [x] Bump version to `0.7.0` in **both** `src/euroleague_fantasy_manager/__init__.py` and `pyproject.toml`.
       `tests/test_v065_hardening.py::test_w6_version_single_sourcing` enforces they agree.
-- [ ] Update `README.md`, `docs/roadmap.md` (mark V0.7 complete, promote V0.8 to "next") and
+- [x] Update `README.md`, `docs/roadmap.md` (mark V0.7 complete, promote V0.8 to "next") and
       `docs/architecture.md`.
-- [ ] Manual workstation smoke test (spec §9.3): a 4-trade suggestion; the cheapest player reachable in manual
+- [x] Manual workstation smoke test (spec §9.3): a 4-trade suggestion; the cheapest player reachable in manual
       transfers; an OpenRouter key + free sub-model producing advice; a past round selected and its lineup
-      re-read.
+      re-read; past-round trade forward propagation verified.
 - [ ] Open the PR from `v07` → `main`. Follow the format of PR #11 (summary, delivered capabilities, behaviour
       changes for reviewers, test breakdown).
 

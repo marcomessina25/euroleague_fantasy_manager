@@ -1,8 +1,8 @@
 # EuroLeague Fantasy Manager — Roadmap
 
-> **Current planning baseline:** 2026-09-29  
-> **Current baseline:** V0.6.5 is completed, hardened, and verified with 144 passing tests (branch `v065_new`).  
-> **Next release:** V0.7 (Sequential Historical Decision Replay & Multi-Season Prediction Backtesting).
+> **Current planning baseline:** 2026-09-30  
+> **Current baseline:** V0.7 is completed, verified with 205 passing tests (branch `v07`).  
+> **Next release:** V0.8 (Basketball Context Modeling, Participation & Rotation Dynamics, Rank-Aware Decisions & Risk Profiling).
 
 ## 1. Vision
 
@@ -272,24 +272,34 @@ Following the release hardening pattern established in `fpl-manager`, V0.6.5 imp
 
 ---
 
-# 7. V0.7 — Sequential Historical Decision Replay & Multi-Season Prediction Backtesting
+# 7. V0.7 — Full Trade Capacity, Historical Round Backfill & Sequential Decision Replay
 
-**Status: Planned**
+**Status: Completed (v0.7.0 on branch `v07`, 2026-09-30)**
 
-Aligning with `fpl-manager` V0.7, move from evaluating static point-in-time predictions to reconstructing the sequential decision process over multi-season historical datasets for both EuroLeague and EuroCup.
+V0.7 un-throttled the decision engine to its full legal action space, opened the reachable player universe, brought LLM provider parity with `fpl-manager` v0.6+, and delivered the sequential historical decision replay foundation with regret attribution and forward trade propagation across 205 passing automated tests.
 
 ## Core deliverables
 
-1. **Multi-Season Historical Datasets**:
-   - Curate and ingest historical round snapshots across seasons (2022-23, 2023-24, 2024-25, 2025-26) for EuroLeague and EuroCup.
-2. **Point-in-Time State Reconstruction**:
-   - Reconstruct squad valuation, bank balance, injury status, and price changes at every historical round boundary.
-3. **Sequential Decision Simulation**:
-   - Simulate sequential lineup, captaincy, sixth man, T1 $\to$ T2 turn substitution, and transfer decisions across full seasons.
-4. **Model-Version Comparison Ledgers**:
-   - Standardized evaluation ledgers comparing decision versions (e.g. Heuristic vs Decomposed vs Closed-Loop) against actual human decisions and hindsight oracles.
-5. **Historical Regret Attribution**:
-   - Decompose total season regret into Captain Regret, Sixth Man Regret, Bench Regret, Turn Substitution Regret, and Transfer Regret.
+1. **Full 4-Trade Legal Action Space (W1 & W2)**:
+   - Derives trade capacity directly from `rules.py::MAX_TRADES_PER_ROUND = 4` across Trade Studio, transfer suggester, multi-round beam search, and CLI.
+   - Evaluated suggester performance at $k=4$, demonstrating $O(1)$ candidate pruning stage costs (under 0.70s for 4-trade packages on a 200+ player reference market).
+2. **Reachable Player Universe & Pagination (W3)**:
+   - Player workstation endpoint `/api/workstation/players` implements addressable pagination via `offset`, `limit`, and sorting (`expected_fp`, `fp_per_credit`, `price_asc`, `price_desc`, `name`) with `X-Total-Count` headers.
+3. **LLM Provider Parity & Secret Redaction (W4)**:
+   - Server-driven model catalog for Gemini, OpenAI, Claude, OpenRouter, and Local providers.
+   - OpenRouter key input stored strictly in browser `localStorage`, selectable sub-models with paid indicators (`*`), and `"auto"` mode.
+   - Cryptographic secret redaction via `intelligence.security.redact_secrets` across all provider exception paths.
+4. **Historical Round Backfill & Forward Trade Replay (W5 & §3.2)**:
+   - Lineup editing for past rounds via GUI round selector and CLI (`elf team set-lineup --round N`), updating role flags without invalidating checkpoints.
+   - Forward trade propagation: applying trades in past round $n$ logs immutable events to `team_transfers`, updates round-start checkpoints for $n+1 \dots$, and propagates roster updates forward while preserving `revert-round-start`.
+5. **Sequential Decision Simulation & Regret Attribution (W6 / F1–F8)**:
+   - Multi-season historical datasets for EuroLeague and EuroCup across 2022-23 … 2025-26.
+   - Point-in-time financial, availability, and valuation reconstruction (`reconstruct_point_in_time_state`).
+   - `SequentialDecisionSimulator` simulating transfers, starting five, captain, sixth man, and T1 $\to$ T2 turn substitutions under a verified zero-mutation invariant.
+   - `RegretAttribution` decomposing manager regret into Captain, Sixth Man, Bench, Turn Substitution, Transfer, and Formation regret, enforcing mathematical identity within $|\text{residual}| \le 1.0$ floating point tolerance.
+   - `ModelComparisonLedger` benchmarking multi-model strategies against human manager decisions and hindsight oracle.
+6. **CLI Round-Aware Entry (§3.3)**:
+   - Added `elf team set-lineup --round N` and `elf team trade --round N` commands wired to `TeamService`.
 
 ---
 
@@ -452,9 +462,9 @@ V0.6     Strategic Intelligence, Manager Dossier & Multi-League      [Completed]
   ↓
 V0.6.5   Release Hardening, Bug Audits & EuroCup Ingestion Pipeline  [Completed]
   ↓
-V0.7     Sequential Historical Replay & Multi-Season Backtesting     [Planned - Next]
+V0.7     Full Trade Capacity, Backfill & Sequential Decision Replay  [Completed]
   ↓
-V0.8     Basketball Context, Participation & Strategic Risk          [Planned]
+V0.8     Basketball Context, Participation & Strategic Risk          [Planned - Next]
   ↓
 V0.9     Learned Models, EuroCup Full Parity & Cross-League Testing  [Planned]
   ↓
