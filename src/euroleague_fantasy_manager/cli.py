@@ -8,6 +8,7 @@ import sys
 from typing import Any, Sequence
 
 from .api import fetch_current_data
+from .competition.ruleset import League, get_league_ruleset
 from .evaluation import (
     EvaluationDatasetStore,
     build_historical_dataset,
@@ -62,11 +63,70 @@ from .transfers import parse_trade_specs, validate_trades
 RAW_ARCHIVE_DIRECTORY = PROJECT_ROOT / "data" / "raw"
 
 
-def _resolve_league(league_arg: str) -> tuple[int, str, str]:
-    norm = league_arg.strip().lower()
-    if norm in ("eurocup", "ec", "u", "11"):
-        return EUROCUP_LEAGUE_ID, "U", "U2026"
-    return EUROLEAGUE_LEAGUE_ID, "E", "E2026"
+def _resolve_league(league_arg: str | League | None) -> tuple[int, str, str]:
+    if league_arg is None:
+        league = League.EUROLEAGUE
+    elif isinstance(league_arg, League):
+        league = league_arg
+    else:
+        league = League.from_str(league_arg)
+    ruleset = get_league_ruleset(league)
+    default_season_code = "U2026" if league == League.EUROCUP else "E2026"
+    return ruleset.league_id, ruleset.competition_code, default_season_code
+
+
+def resolve_command_league_with_source(
+    args: argparse.Namespace | None = None,
+    team_service: Any = None,
+    explicit_league: str | League | None = None,
+) -> tuple[League, str]:
+    """Resolve league following precedence: explicit --league -> target/active team -> default euroleague."""
+    # 1. Explicit --league argument
+    league_arg = explicit_league if explicit_league is not None else getattr(args, "league", None)
+    if league_arg is not None:
+        return League.from_str(league_arg), "explicit flag"
+
+    # 2. Target or active team
+    ts = team_service
+    if ts is None and args is not None and hasattr(args, "db"):
+        try:
+            from .multi_team.store import TeamStore
+            from .services.team_service import TeamService
+            ts = TeamService(store=TeamStore(db_path=args.db))
+        except Exception:
+            ts = None
+
+    if ts is not None:
+        target_team_id = getattr(args, "team", None) or getattr(args, "id", None) if args is not None else None
+        team = None
+        if target_team_id:
+            try:
+                team = ts.get_team(target_team_id)
+            except Exception:
+                team = None
+        if team is None:
+            try:
+                team = ts.get_active_team()
+            except Exception:
+                team = None
+        if team is not None and getattr(team, "league", None):
+            try:
+                src_label = f"team '{team.team_id}'" if target_team_id else f"active team '{team.team_id}'"
+                return League.from_str(team.league), src_label
+            except Exception:
+                pass
+
+    # 3. Default euroleague
+    return League.EUROLEAGUE, "default"
+
+
+def resolve_command_league(
+    args: argparse.Namespace | None = None,
+    team_service: Any = None,
+    explicit_league: str | League | None = None,
+) -> League:
+    league, _ = resolve_command_league_with_source(args, team_service, explicit_league=explicit_league)
+    return league
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -83,24 +143,38 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--league",
         type=str,
-        default="euroleague",
-        help="Competition league ('euroleague' [default, id=10] or 'eurocup' [id=11]).",
+        default=None,
+        help="Competition league ('euroleague' [id=10] or 'eurocup' [id=11]). Defaults to active team's league or euroleague.",
+    )
+
+    sub_league_parent = argparse.ArgumentParser(add_help=False)
+    sub_league_parent.add_argument(
+        "--league",
+        type=str,
+        default=argparse.SUPPRESS,
+        help="Competition league ('euroleague' [id=10] or 'eurocup' [id=11]). Defaults to active team's league or euroleague.",
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("update", help="Download and persist a live official EuroLeague Fantasy snapshot.")
-    subparsers.add_parser("report", help="Print a summary of the most recently saved SQLite snapshot.")
+    update_parser = subparsers.add_parser("update", parents=[sub_league_parent], help="Download and persist a live official EuroLeague Fantasy snapshot.")
+    update_parser.add_argument(
+        "--season-code",
+        type=str,
+        default=None,
+        help="Explicit season code override (e.g. E2026 or U2026). If not provided, derived from API config.",
+    )
+    subparsers.add_parser("report", parents=[sub_league_parent], help="Print a summary of the most recently saved SQLite snapshot.")
 
-    players_parser = subparsers.add_parser("players", help="Search players and Head Coaches in the latest snapshot.")
+    players_parser = subparsers.add_parser("players", parents=[sub_league_parent], help="Search players and Head Coaches in the latest snapshot.")
     players_parser.add_argument("--search", "-s", type=str, default="", help="Name or club abbreviation filter.")
     players_parser.add_argument("--position", "-p", type=str, default=None, help="Position filter (G, F, C, HC).")
 
-    import_parser = subparsers.add_parser("import-squad", help="Import 11-unit squad from players.txt.")
+    import_parser = subparsers.add_parser("import-squad", parents=[sub_league_parent], help="Import 11-unit squad from players.txt.")
     import_parser.add_argument("--file", type=Path, default=DEFAULT_PLAYERS_PATH, help="Path to players.txt.")
     import_parser.add_argument("--squad", type=Path, default=DEFAULT_SQUAD_PATH, help="Path to current_squad.json.")
 
-    trades_parser = subparsers.add_parser("validate-trades", help="Validate proposed between-round trades.")
+    trades_parser = subparsers.add_parser("validate-trades", parents=[sub_league_parent], help="Validate proposed between-round trades.")
     trades_parser.add_argument(
         "--trade",
         "-t",
@@ -129,6 +203,7 @@ def build_parser() -> argparse.ArgumentParser:
     # V0.2 Decision Support Commands
     squad_parser = subparsers.add_parser(
         "squad",
+        parents=[sub_league_parent],
         help="Inspect 11-unit squad capital gains (0% sell-on tax), bank, and trade budget.",
     )
     squad_parser.add_argument(
@@ -147,6 +222,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     fixtures_parser = subparsers.add_parser(
         "fixtures",
+        parents=[sub_league_parent],
         help="Rank clubs or current squad by multi-round schedule & Fixture Difficulty Rating (FDR 1..5).",
     )
     fixtures_parser.add_argument(
@@ -176,6 +252,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     lineup_parser = subparsers.add_parser(
         "lineup",
+        parents=[sub_league_parent],
         aliases=["starting-five", "captain"],
         help="Recommend optimal Starting 5, Sixth Man, Bench, Head Coach, and Captain with T1->T2 Option Value.",
     )
@@ -195,6 +272,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     suggest_parser = subparsers.add_parser(
         "suggest-trades",
+        parents=[sub_league_parent],
         aliases=["suggest-transfers"],
         help="Recommend top legal 1-to-4 trade packages ranked by Turn-Adjusted Expected PDK gain.",
     )
@@ -562,23 +640,56 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     store = SnapshotStore(args.db)
 
+    league_commands = {
+        "update",
+        "report",
+        "players",
+        "import-squad",
+        "validate-trades",
+        "squad",
+        "fixtures",
+        "lineup",
+        "starting-five",
+        "captain",
+        "suggest-trades",
+        "suggest-transfers",
+    }
+
+    resolved_league = League.EUROLEAGUE
+    league_source = "default"
+    league_id = EUROLEAGUE_LEAGUE_ID
+
+    if args.command in league_commands:
+        try:
+            resolved_league, league_source = resolve_command_league_with_source(args)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 2
+        ruleset = get_league_ruleset(resolved_league)
+        league_id = ruleset.league_id
+        print(f"League: {resolved_league.value.upper()} ({league_source})", file=sys.stderr)
+
     if args.command == "update":
-        league_id, comp_code, season_code = _resolve_league(args.league)
-        payload = fetch_current_data(league_id=league_id, competition_code=comp_code, season_code=season_code)
+        ruleset = get_league_ruleset(resolved_league)
+        payload = fetch_current_data(
+            league_id=ruleset.league_id,
+            competition_code=ruleset.competition_code,
+            season_code=getattr(args, "season_code", None),
+        )
         summary = store.save_snapshot(payload, raw_directory=RAW_ARCHIVE_DIRECTORY)
         print(json.dumps(asdict(summary), indent=2))
         return 0
 
     if args.command == "report":
-        summary = store.get_latest_summary()
+        summary = store.get_latest_summary(league_id=league_id)
         if summary is None:
-            print("No snapshots found in database. Run `elf update` first.", file=sys.stderr)
+            print(f"No snapshots found in database for league {resolved_league.value}. Run `elf update --league {resolved_league.value}` first.", file=sys.stderr)
             return 1
         print(json.dumps(asdict(summary), indent=2))
         return 0
 
     if args.command == "players":
-        matches = store.search_latest_players(args.search, position=args.position)
+        matches = store.search_latest_players(args.search, position=args.position, league_id=league_id)
         print(json.dumps(matches, indent=2, ensure_ascii=False))
         return 0
 
@@ -587,15 +698,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             players_path=args.file,
             squad_path=args.squad,
             database_path=args.db,
+            league_id=league_id,
         )
         print(f"Saved {len(result.get('player_ids', []))} units to {args.squad}")
         return 0
 
     if args.command == "validate-trades":
         state = load_current_squad(args.squad)
-        players_list = store.load_latest_players()
+        players_list = store.load_latest_players(league_id=league_id)
         if not players_list:
-            print("No players in snapshot database. Run `elf update` first.", file=sys.stderr)
+            print(f"No players in snapshot database for league {resolved_league.value}. Run `elf update --league {resolved_league.value}` first.", file=sys.stderr)
             return 1
         players_by_id = {p.id: p for p in players_list}
         moves = parse_trade_specs(args.trade, players_by_id, by_name=args.by_name)
@@ -609,6 +721,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             database_path=args.db,
             report_path=None,
             round_number=args.round,
+            league_id=league_id,
         )
         print(json.dumps(report, indent=2, ensure_ascii=False))
         return 0
@@ -620,6 +733,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 database_path=args.db,
                 num_rounds=args.rounds,
                 start_round=args.start_round,
+                league_id=league_id,
             )
             print(json.dumps(squad_fixtures, indent=2, ensure_ascii=False))
             return 0
@@ -628,6 +742,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             num_rounds=args.rounds,
             start_round=args.start_round,
             report_path=None,
+            league_id=league_id,
         )
         print(json.dumps(team_report, indent=2, ensure_ascii=False))
         return 0
@@ -638,6 +753,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             database_path=args.db,
             round_number=args.round,
             report_path=None,
+            league_id=league_id,
         )
         print(json.dumps(lineup_payload, indent=2, ensure_ascii=False))
         return 0
@@ -651,6 +767,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             top_k=args.top,
             unlimited_window=args.unlimited,
             report_path=None,
+            league_id=league_id,
         )
         print(json.dumps(trades_payload, indent=2, ensure_ascii=False))
         return 0

@@ -15,10 +15,11 @@ It is **not** an autonomous team manager. A human remains responsible for final 
 - Deterministic software is the source of truth for EuroLeague Fantasy facts, rules, budget, capital gains (`0%` sell-on tax), 11-unit squad state (`4G, 4F, 2C, 1HC`), formations (`2-2-1`, `1-2-2`, `2-1-2`, `1-3-1`, `3-1-1`), and turn lockouts (`T1`, `T2`, `T3`).
 - Every recommendation must pass an independent validator before it is shown as actionable.
 - Quantitative projections estimate expected value ($\text{xPDK}$), expected capital variation ($\Delta \text{Cr}$), and Turn-1 to Turn-2 real option value ($\Delta \text{Option xP}$); they do not invent facts.
-- Multi-competition inheritance: `league_id` (`10` = EuroLeague, `11` = EuroCup) and `competition_code` (`"E"` = EuroLeague, `"U"` = EuroCup) are parameterized at the transport and storage layers so EuroCup can inherit the entire stack seamlessly.
+- Multi-competition inheritance: `league_id` (`10` = EuroLeague, `11` = EuroCup) and `competition_code` (`"E"` = EuroLeague, `"U"` = EuroCup) are parameterized at the transport and storage layers so EuroCup inherits the entire stack seamlessly. Storage schema v3 indexes and partitions snapshots by `league_id` (`idx_snapshots_league_id`).
+- Strict league resolution precedence: all CLI commands and API endpoints resolve competition via `--league` CLI flag > `ELF_LEAGUE` environment variable > selected team's league > default fallback (`euroleague`). Invalid competition inputs reject early (CLI exit code 2, API HTTP 400).
 - LLMs are strategic analysts over structured, generated data. They are not the optimizer or source of truth.
 - Decisions, intra-round substitutions, alternatives, and outcomes should be recorded so the system can be evaluated and improved.
-- The system runs locally with zero external runtime dependencies (`urllib.request` + `sqlite3`) except for public data downloads and optional LLM API calls.
+- The system runs locally with zero external runtime dependencies (`urllib.request` + `sqlite3`) except for public data downloads and optional LLM API calls. Test suites run completely offline with zero network calls.
 
 ## Planned architecture
 

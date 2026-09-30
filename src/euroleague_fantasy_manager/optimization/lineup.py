@@ -95,15 +95,14 @@ class FixedSquadLineupOptimizer:
             if not contracts:
                 breakdown = LineupScoreBreakdown(
                     formation="none",
-                    raw_expected_total=0.0,
                     starter_score=0.0,
                     captain_bonus=0.0,
                     sixth_man_score=0.0,
                     bench_score=0.0,
                     head_coach_score=0.0,
-                    risk_penalty=0.0,
-                    uncertainty_stdev=0.0,
-                    turn_sub_option_bonus=0.0,
+                    raw_expected_total=0.0,
+                    risk_adjustment=0.0,
+                    option_value_bonus=0.0,
                     objective_value=0.0,
                 )
                 return OptimalLineupDecision(

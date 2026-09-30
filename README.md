@@ -2,7 +2,7 @@
 
 A deterministic, local-first **EuroLeague Fantasy Challenge (Classic Mode)** decision engine for the 2026/27 season (`E2026`), architected to share its core engine with **EuroCup Fantasy Challenge** (`U2026`).
 
-![Version](https://img.shields.io/badge/Version-0.6.0-purple) ![Python](https://img.shields.io/badge/Python-3.12-blue) ![License](https://img.shields.io/badge/License-MIT-green)
+![Version](https://img.shields.io/badge/Version-0.6.5-purple) ![Python](https://img.shields.io/badge/Python-3.12-blue) ![CI](https://github.com/marcomessina25/euroleague_fantasy_manager/actions/workflows/ci.yml/badge.svg) ![License](https://img.shields.io/badge/License-MIT-green)
 
 ---
 
@@ -20,7 +20,7 @@ This project uses official EuroLeague/EuroCup fantasy data and related public co
 ## Living roadmap
 
 - [`docs/architecture.md`](docs/architecture.md) defines the purpose, architectural boundaries, and responsibilities of each layer.
-- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1`, `V0.2`, `V0.2.5`, `V0.3`, `V0.4`, `0.4.5`, `V0.5`, `V0.5.1`, and `V0.6` completed; `V0.6.5` / `V0.7` next).
+- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1`, `V0.2`, `V0.2.5`, `V0.3`, `V0.4`, `0.4.5`, `V0.5`, `V0.5.1`, `V0.6`, and `V0.6.5` completed; `V0.7` next).
 - [`docs/specs/v02.md`](docs/specs/v02.md) and [`docs/specs/items_left_for_v02.md`](docs/specs/items_left_for_v02.md) define the **V0.2** heuristic decision-support baseline specification and pre-merge checklist.
 - [`docs/specs/v025.md`](docs/specs/v025.md) and [`docs/specs/v025_cleanup.md`](docs/specs/v025_cleanup.md) define the **V0.2.5** historical evaluation foundation.
 - [`docs/specs/v03.md`](docs/specs/v03.md) and [`docs/specs/items_left_for_v03.md`](docs/specs/items_left_for_v03.md) define the **V0.3** validated predictive projection layer (`0.3.0`) and merge checklist.
@@ -29,6 +29,7 @@ This project uses official EuroLeague/EuroCup fantasy data and related public co
 - [`docs/specs/v05.md`](docs/specs/v05.md) and [`docs/specs/items_left_for_v05.md`](docs/specs/items_left_for_v05.md) define the **V0.5** multi-team management, application services, and local Web GUI workstation (`0.5.0`).
 - [`docs/specs/items_left_for_v051.md`](docs/specs/items_left_for_v051.md) documents **V0.5.1** live score presentation, quantitative decomposed prediction priors, and high-speed transfer optimization (`0.5.1`).
 - [`docs/specs/v06.md`](docs/specs/v06.md) and [`docs/specs/items_left_for_v06.md`](docs/specs/items_left_for_v06.md) define **V0.6** Strategic Intelligence, Manager Dossier, Multi-League Foundation, and Grounded Copilot (`0.6.0`).
+- [`docs/specs/v065.md`](docs/specs/v065.md) and [`docs/specs/v065_potential_bugs.md`](docs/specs/v065_potential_bugs.md) define **V0.6.5** release hardening, EuroCup ingestion pipeline, edge-case audit, and bug register (`0.6.5`).
 
 Both human contributors and AI agents must read the relevant living documents before making material changes and update them whenever architecture, scope, priorities, or delivery status changes.
 
@@ -43,41 +44,53 @@ conda activate elf
 pip install -e ".[dev]"
 ```
 
-Download and store an official EuroLeague Fantasy Challenge (`league_id=10`) + EuroLeague (`E2026`) snapshot:
+Download and store an official EuroLeague (`league_id=10`) or EuroCup (`league_id=11`) snapshot:
 
 ```powershell
-elf update
+# EuroLeague (default)
+elf update --league euroleague
+
+# EuroCup (20 clubs across Groups A & B)
+elf update --league eurocup
 ```
 
 Inspect the most recently saved snapshot (Round/Turn schedule, teams, players, and Head Coaches):
 
 ```powershell
 elf report
+# Or for EuroCup:
+elf report --league eurocup
 ```
 
 Search players or Head Coaches in the latest snapshot:
 
 ```powershell
 elf players --search "Vezenkov"
-elf players --search "Bartzokas"
+elf players --league eurocup --search "Patrick"
 elf players --position HC
 ```
+
+> **League Resolution Precedence**: All commands resolve the competition in order: `--league` CLI flag > `ELF_LEAGUE` environment variable > selected team's league > default fallback (`euroleague`). A diagnostic header `League: {LEAGUE} ({source})` is printed to stderr.
 
 ## Private current-squad file (`config/current_squad.json`)
 
 Copy `config/current_squad.example.json` to `config/current_squad.json`, or populate `players.txt` with your **11 roster units** (`4 Guards`, `4 Forwards`, `2 Centers`, `1 Head Coach`) and run the automatic squad import utility:
 
 ```powershell
-elf import-squad
+# Import into active EuroLeague team
+elf import-squad --league euroleague
+
+# Import into EuroCup team
+elf import-squad --league eurocup
 ```
 
 or:
 
 ```powershell
-python scripts/import_squad.py
+python scripts/import_squad.py --league euroleague
 ```
 
-The private `config/current_squad.json` and `players.txt` files are ignored by Git; do not commit them. Prices and bank balances are stored in tenths of a Credit (`17.0 Cr` is stored as `170`).
+The private `config/current_squad.json` and `players.txt` files are ignored by Git; do not commit them. Prices and bank balances are stored in tenths of a Credit (`17.0 Cr` is stored as `170`). Squad imports record `league_id` and validate that all units belong to the designated competition.
 
 ## V0.2 Decision Support (`elf squad`, `elf fixtures`, `elf lineup`, `elf suggest-trades`)
 

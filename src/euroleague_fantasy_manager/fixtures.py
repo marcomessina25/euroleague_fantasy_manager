@@ -30,9 +30,9 @@ def normal_pdf(x: float) -> float:
     return (1.0 / math.sqrt(2.0 * math.pi)) * math.exp(-0.5 * x * x)
 
 
-def get_current_round(store: SnapshotStore) -> int:
+def get_current_round(store: SnapshotStore, league_id: int | None = None) -> int:
     """Return the active round number from the latest snapshot."""
-    summary = store.get_latest_summary()
+    summary = store.get_latest_summary(league_id=league_id)
     if summary is None:
         raise RuntimeError("No EuroLeague Fantasy snapshot found. Run `elf update` first.")
     return summary.round_number
@@ -116,17 +116,18 @@ def analyze_team_fixtures(
     num_rounds: int = 5,
     start_round: int | None = None,
     report_path: Path | None = FIXTURES_REPORT_PATH,
+    league_id: int | None = None,
 ) -> dict[str, Any]:
-    """Analyze upcoming fixtures, Turns (T1/T2), Win Probabilities, and FDR for all EuroLeague teams."""
+    """Analyze upcoming fixtures, Turns (T1/T2), Win Probabilities, and FDR for teams."""
     store = SnapshotStore(database_path)
     if start_round is None:
-        start_round = get_current_round(store)
+        start_round = get_current_round(store, league_id=league_id)
 
     target_rounds = list(range(start_round, start_round + max(1, num_rounds)))
-    teams_map = store.load_latest_teams()
-    players = store.load_latest_players()
+    teams_map = store.load_latest_teams(league_id=league_id)
+    players = store.load_latest_players(league_id=league_id)
     strengths = compute_team_strengths(players, teams_map)
-    fixtures = store.load_latest_fixtures(round_numbers=target_rounds)
+    fixtures = store.load_latest_fixtures(round_numbers=target_rounds, league_id=league_id)
 
     team_schedules: dict[int, list[dict[str, Any]]] = {tid: [] for tid in teams_map}
     for fix in fixtures:
@@ -216,24 +217,42 @@ def analyze_squad_fixtures(
     database_path: Path = DATABASE_PATH,
     num_rounds: int = 5,
     start_round: int | None = None,
+    league_id: int | None = None,
 ) -> dict[str, Any]:
     """Analyze upcoming multi-round fixtures specifically for the 11 units in the current squad."""
     state = load_current_squad(squad_path)
+    eff_league_id = league_id if league_id is not None else getattr(state, "league_id", None)
     team_report = analyze_team_fixtures(
         database_path=database_path,
         num_rounds=num_rounds,
         start_round=start_round,
         report_path=None,
+        league_id=eff_league_id,
     )
     team_by_id = {t["team_id"]: t for t in team_report["team_rankings"]}
 
     store = SnapshotStore(database_path)
-    players_by_id = {p.id: p for p in store.load_latest_players()}
+    players_by_id = {p.id: p for p in store.load_latest_players(league_id=eff_league_id)}
 
     squad_fixtures: list[dict[str, Any]] = []
     for pid in state.player_ids:
         p = players_by_id.get(pid)
         if p is None:
+            # BUG-EDGE-002: departed / missing unit kept and marked unavailable
+            squad_fixtures.append(
+                {
+                    "id": pid,
+                    "name": f"Unit {pid} (Departed)",
+                    "position": "G",
+                    "team": "OUT",
+                    "credits": 0.0,
+                    "avg_fdr": 5.0,
+                    "avg_win_probability": 0.0,
+                    "ticker": "UNAVAILABLE",
+                    "fixtures": [],
+                    "status": "unavailable - sell candidate",
+                }
+            )
             continue
         t_entry = team_by_id.get(p.team_id, {})
         squad_fixtures.append(

@@ -244,6 +244,7 @@ def generate_copilot_advice(
         temperature=temperature,
         timeout_seconds=tier_cfg.timeout_seconds,
         max_output_tokens=tier_cfg.max_output_tokens,
+        tier=norm_tier,
     )
 
     is_fallback = False

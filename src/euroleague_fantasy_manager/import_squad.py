@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .competition.ruleset import League, get_league_ruleset
 from .rules import EUROLEAGUE_LEAGUE_ID, MAX_BUDGET_TENTHS, MAX_TRADES_PER_ROUND, UNLIMITED_TRADE_ROUNDS
 from .storage import SnapshotStore
 
@@ -15,9 +16,13 @@ DEFAULT_SQUAD_PATH = PROJECT_ROOT / "config" / "current_squad.json"
 EXAMPLE_SQUAD_PATH = PROJECT_ROOT / "config" / "current_squad.example.json"
 
 
-def search_player_exact_or_single(store: SnapshotStore, query: str) -> dict[str, Any] | None:
-    """Find a single matching player or Head Coach from the latest snapshot by search query."""
-    matches = store.search_latest_players(query)
+def search_player_exact_or_single(
+    store: SnapshotStore,
+    query: str,
+    league_id: int | None = None,
+) -> dict[str, Any] | None:
+    """Find a single matching player or Head Coach from the latest snapshot by search query and optional league_id."""
+    matches = store.search_latest_players(query, league_id=league_id)
     if len(matches) == 1:
         return matches[0]
     if len(matches) > 1:
@@ -31,39 +36,29 @@ def import_squad_from_file(
     players_path: Path = DEFAULT_PLAYERS_PATH,
     squad_path: Path = DEFAULT_SQUAD_PATH,
     database_path: Path = DATABASE_PATH,
+    league_id: int = EUROLEAGUE_LEAGUE_ID,
+    league: str | League | None = None,
 ) -> dict[str, Any]:
     """Read players.txt line-by-line, resolve IDs/prices from SQLite, and update current_squad.json."""
+    if league is not None:
+        norm_lg = League.from_str(league)
+        league_id = get_league_ruleset(norm_lg).league_id
     if not players_path.is_file():
         raise RuntimeError(f"Players file not found: {players_path}")
 
     store = SnapshotStore(database_path)
-    lines = players_path.read_text(encoding="utf-8").splitlines()
-
-    imported_units: list[dict[str, Any]] = []
-    for line in lines:
-        query = line.strip()
-        if not query or query.startswith("#"):
-            continue
-        match = search_player_exact_or_single(store, query)
-        if match is not None:
-            pid = match["id"]
-            name = match["name"]
-            pos = match["position"]
-            team = match["team"]
-            price = match["price_tenths"]
-            print(f"importing id {pid} player {name} pos {pos} team {team} price {price / 10:.1f}Cr")
-            imported_units.append(match)
-        else:
-            print(f"failed importing player {query}")
 
     if squad_path.is_file():
         squad_data = json.loads(squad_path.read_text(encoding="utf-8"))
+        existing_lid = squad_data.get("league_id")
+        if existing_lid is not None and int(existing_lid) != int(league_id):
+            raise ValueError(f"Squad file league ({existing_lid}) does not match target league ({league_id}).")
     elif EXAMPLE_SQUAD_PATH.is_file():
         squad_data = json.loads(EXAMPLE_SQUAD_PATH.read_text(encoding="utf-8"))
     else:
         squad_data = {
             "season": "2026/27",
-            "league_id": EUROLEAGUE_LEAGUE_ID,
+            "league_id": league_id,
             "round_number": 1,
             "player_ids": [],
             "purchase_prices_tenths": {},
@@ -72,13 +67,33 @@ def import_squad_from_file(
             "unlimited_windows_remaining": sorted(UNLIMITED_TRADE_ROUNDS),
         }
 
+    lines = players_path.read_text(encoding="utf-8").splitlines()
+
+    imported_units: list[dict[str, Any]] = []
+    for line in lines:
+        query = line.strip()
+        if not query or query.startswith("#"):
+            continue
+        match = search_player_exact_or_single(store, query, league_id=league_id)
+        if match is not None:
+            pid = match["id"]
+            name = match["name"]
+            pos = match["position"]
+            team = match["team"]
+            price = match["price_tenths"]
+            print(f"importing id {pid} player {name} pos {pos} team {team} price {price / 10:.1f}Cr (league {league_id})")
+            imported_units.append(match)
+        else:
+            print(f"failed importing player {query} (league {league_id})")
+
+    squad_data["league_id"] = league_id
     total_cost_tenths = sum(int(u["price_tenths"]) for u in imported_units)
     squad_data["player_ids"] = [u["id"] for u in imported_units]
     squad_data["purchase_prices_tenths"] = {str(u["id"]): int(u["price_tenths"]) for u in imported_units}
     if total_cost_tenths <= MAX_BUDGET_TENTHS:
         squad_data["bank_tenths"] = MAX_BUDGET_TENTHS - total_cost_tenths
 
-    summary = store.get_latest_summary()
+    summary = store.get_latest_summary(league_id=league_id)
     if summary is not None and "round_number" not in squad_data:
         squad_data["round_number"] = summary.round_number
 

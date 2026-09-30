@@ -79,22 +79,67 @@ def suggest_trades(
     top_k: int = 5,
     unlimited_window: bool = False,
     report_path: Path | None = TRADES_REPORT_PATH,
+    league_id: int | None = None,
 ) -> dict[str, Any]:
     """Search legal 1..4 trade combinations and rank by net gain in Turn-Adjusted Squad xPDK."""
     state: CurrentSquadState = load_current_squad(squad_path)
     store = SnapshotStore(database_path)
-    target_round = round_number if round_number is not None else (state.round_number or get_current_round(store))
+    eff_league_id = league_id if league_id is not None else getattr(state, "league_id", None)
+    target_round = round_number if round_number is not None else (state.round_number or get_current_round(store, league_id=eff_league_id))
 
     unlimited_active = is_unlimited_trade_round(target_round, unlimited_flag=unlimited_window)
     max_legal_trades = len(state.player_ids) if unlimited_active else min(MAX_TRADES_PER_ROUND, state.free_trades)
     k = max(1, min(int(num_trades), max_legal_trades))
 
-    all_players = store.load_latest_players()
+    all_players = store.load_latest_players(league_id=eff_league_id)
     players_by_id = {p.id: p for p in all_players}
-    squad_players = [players_by_id[pid] for pid in state.player_ids if pid in players_by_id]
-    squad_id_set = {p.id for p in squad_players}
+    projections = project_all_players(database_path=database_path, round_number=target_round, league_id=eff_league_id)
 
-    projections = project_all_players(database_path=database_path, round_number=target_round)
+    squad_players: list[Player] = []
+    for pid in state.player_ids:
+        if pid in players_by_id:
+            squad_players.append(players_by_id[pid])
+        else:
+            # BUG-EDGE-002: unit missing / departed -> keep unit, project 0, flag unavailable
+            p_dep = Player(
+                id=pid,
+                first_name="Departed",
+                last_name=f"Unit {pid}",
+                name=f"Unit {pid} (Departed)",
+                position=Position.GUARD,
+                team_id=0,
+                team_code="OUT",
+                team_name="Unavailable",
+                price_tenths=state.purchase_prices_tenths.get(pid, 50),
+                status="unavailable - sell candidate",
+                probability_of_playing=0.0,
+                turn_number=1,
+            )
+            players_by_id[pid] = p_dep
+            squad_players.append(p_dep)
+            if pid not in projections:
+                projections[pid] = PlayerProjection(
+                    player_id=pid,
+                    name=p_dep.name,
+                    position=p_dep.position,
+                    team_id=0,
+                    team_code="OUT",
+                    price_tenths=p_dep.price_tenths,
+                    credits=p_dep.credits,
+                    status=p_dep.status,
+                    turn_number=1,
+                    opponent_code="TBD",
+                    is_home=True,
+                    fdr=5,
+                    win_probability=0.0,
+                    expected_margin=0.0,
+                    availability_factor=0.0,
+                    base_pir=0.0,
+                    expected_pdk=0.0,
+                    sigma_pdk=0.0,
+                )
+
+    squad_id_set = {p.id for p in squad_players}
     baseline_lineup = optimize_court_lineup(squad_players, projections, round_number=target_round)
     baseline_xp = baseline_lineup.total_turn_adjusted_xpdk
 
