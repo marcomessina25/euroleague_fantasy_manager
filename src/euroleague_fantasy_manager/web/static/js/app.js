@@ -19,6 +19,11 @@ let state = {
   teams: [],
   season: "2026/27",
   roundNumber: 1,
+  // Round currently being VIEWED in the Lineup tab. Distinct from roundNumber
+  // (the team's live round) so a past round can be inspected and backfilled
+  // without moving the team's round pointer. null = follow the live round.
+  viewRoundNumber: null,
+  availableRounds: [],
   dashboard: null,
   activeTab: "dashboard",
   transfersOut: [],
@@ -228,13 +233,62 @@ async function submitRenameTeam() {
 }
 
 // Dashboard & Court Rendering
+// When the Lineup tab is showing a past round, every lineup write must carry
+// that round so the backfill lands there instead of on the live round.
+function lineupRoundPayload() {
+  return state.viewRoundNumber === null ? {} : { round_number: state.viewRoundNumber };
+}
+
+function onLineupRoundChange() {
+  const sel = document.getElementById("lineup-round-select");
+  if (!sel) return;
+  const chosen = parseInt(sel.value, 10);
+  state.viewRoundNumber = Number.isNaN(chosen) ? null : chosen;
+  loadDashboard();
+}
+
+// Populates the Lineup tab round selector from the rounds that actually have
+// stored state, and flags when the user is looking at a past round.
+async function loadLineupRounds() {
+  const sel = document.getElementById("lineup-round-select");
+  if (!sel) return;
+  try {
+    const res = await fetch(`/api/teams/${encodeURIComponent(state.activeTeamId)}/rounds`);
+    if (!res.ok) return;
+    const data = await res.json();
+    state.availableRounds = data.rounds || [];
+    const liveRound = data.current_round;
+
+    sel.innerHTML = "";
+    state.availableRounds.forEach((r) => {
+      const opt = document.createElement("option");
+      opt.value = String(r);
+      opt.textContent = r === liveRound ? `R${r} (current)` : `R${r}`;
+      sel.appendChild(opt);
+    });
+
+    const viewing = state.viewRoundNumber === null ? liveRound : state.viewRoundNumber;
+    sel.value = String(viewing);
+
+    const modeEl = document.getElementById("lineup-round-mode");
+    if (modeEl) {
+      modeEl.textContent = viewing !== liveRound ? "⏮ PAST ROUND" : "";
+    }
+  } catch (err) {
+    console.error("Failed to load rounds:", err);
+  }
+}
+
 async function loadDashboard() {
   try {
-    const res = await fetch(`/api/workstation/dashboard?team_id=${state.activeTeamId}&season=${state.season}`);
+    let url = `/api/workstation/dashboard?team_id=${state.activeTeamId}&season=${state.season}`;
+    if (state.viewRoundNumber !== null) url += `&round_number=${state.viewRoundNumber}`;
+    const res = await fetch(url);
     if (!res.ok) return;
     const data = await res.json();
     state.dashboard = data;
     state.roundNumber = data.round_number;
+    await loadLineupRounds();
 
     const activeLineup = data.current_lineup || data.optimal_lineup;
 
@@ -520,6 +574,7 @@ async function setCaptain(playerId) {
         sixth_man_id: sixthManId,
         bench_ids: benchIds,
         coach_id: coachId,
+        ...lineupRoundPayload(),
       }),
     });
     if (res.ok) {
@@ -630,6 +685,7 @@ async function executeDirectSwap(sourceId, targetId) {
         sixth_man_id: newSixthMan ? newSixthMan.player_id : 0,
         bench_ids: newBench.map((p) => p.player_id),
         coach_id: coachId,
+        ...lineupRoundPayload(),
       }),
     });
 
@@ -775,6 +831,7 @@ async function triggerOptimizeLineup() {
         sixth_man_id: lineup.sixth_man ? lineup.sixth_man.player_id : (lineup.sixth_man_id || 0),
         bench_ids: lineup.bench.map((p) => p.player_id),
         coach_id: lineup.coach ? lineup.coach.player_id : (lineup.coach_id || 0),
+        ...lineupRoundPayload(),
       }),
     });
     await loadDashboard();
@@ -791,7 +848,7 @@ async function undoLineupOptimization() {
     const res = await fetch(`/api/teams/${state.activeTeamId}/lineup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(previousLineupSnapshot),
+      body: JSON.stringify({ ...previousLineupSnapshot, ...lineupRoundPayload() }),
     });
     if (res.ok) {
       previousLineupSnapshot = null;
@@ -2143,17 +2200,100 @@ function populateProvidersDropdown(providers) {
   providers.forEach((p) => {
     const opt = document.createElement("option");
     opt.value = p.provider_name;
-    const availMark = p.available ? "✓" : "⚠️";
+    // A provider is usable if the server found an environment key OR the user
+    // has stored one in this browser, so don't warn about a GUI-supplied key.
+    const hasLocalKey = !!localStorage.getItem(`elf_copilot_api_key_${p.provider_name}`);
+    const availMark = (p.available || hasLocalKey) ? "✓" : "⚠️";
     opt.textContent = `${availMark} ${p.display_name} (${p.default_model})`;
     sel.appendChild(opt);
   });
   if (previous && providers.some((p) => p.provider_name === previous)) {
     sel.value = previous;
   }
+  populateCopilotModelDropdown();
+  restoreCopilotApiKey();
+}
+
+// Looks up the server-driven provider catalog entry (with its `models` list) for a provider id.
+function getCopilotProviderEntry(providerName) {
+  return (intelligenceState.providers || []).find((p) => p.provider_name === providerName);
+}
+
+// Repopulates the sub-model selector from the provider catalog returned by
+// GET /api/workstation/copilot/providers, marking paid models with a trailing "*".
+function populateCopilotModelDropdown() {
+  const providerSel = document.getElementById("copilot-provider");
+  const modelSel = document.getElementById("copilot-model");
+  if (!providerSel || !modelSel) return;
+
+  const providerName = providerSel.value;
+  const entry = getCopilotProviderEntry(providerName);
+  const models = entry && Array.isArray(entry.models) ? entry.models : [];
+
+  modelSel.innerHTML = "";
+  if (models.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "(default)";
+    modelSel.appendChild(opt);
+    modelSel.disabled = true;
+    return;
+  }
+
+  modelSel.disabled = false;
+  models.forEach((m) => {
+    const opt = document.createElement("option");
+    opt.value = m.id;
+    opt.textContent = m.free ? m.name : `${m.name} *`;
+    if (!m.free) opt.title = "Requires paid account credits";
+    modelSel.appendChild(opt);
+  });
+
+  const savedModel = localStorage.getItem(`elf_copilot_model_${providerName}`);
+  if (savedModel && models.some((m) => m.id === savedModel)) {
+    modelSel.value = savedModel;
+  } else if (entry && entry.default_model && models.some((m) => m.id === entry.default_model)) {
+    modelSel.value = entry.default_model;
+  }
+}
+
+function onCopilotModelChanged() {
+  const providerSel = document.getElementById("copilot-provider");
+  const modelSel = document.getElementById("copilot-model");
+  if (!providerSel || !modelSel) return;
+  localStorage.setItem(`elf_copilot_model_${providerSel.value}`, modelSel.value);
+}
+
+// Restores the API key for the currently selected provider from browser localStorage.
+// Keys are never sent anywhere except the advise POST body, and never persisted server-side.
+function restoreCopilotApiKey() {
+  const providerSel = document.getElementById("copilot-provider");
+  const keyInput = document.getElementById("copilot-api-key");
+  if (!providerSel || !keyInput) return;
+  keyInput.value = localStorage.getItem(`elf_copilot_api_key_${providerSel.value}`) || "";
+  const hint = document.getElementById("copilot-key-hint");
+  if (hint) hint.style.display = "none";
+}
+
+function onCopilotApiKeyInput() {
+  const providerSel = document.getElementById("copilot-provider");
+  const keyInput = document.getElementById("copilot-api-key");
+  if (!providerSel || !keyInput) return;
+  localStorage.setItem(`elf_copilot_api_key_${providerSel.value}`, keyInput.value);
+}
+
+function toggleCopilotApiKeyVisibility() {
+  const keyInput = document.getElementById("copilot-api-key");
+  const btn = document.getElementById("copilot-api-key-toggle");
+  if (!keyInput) return;
+  const showing = keyInput.type === "text";
+  keyInput.type = showing ? "password" : "text";
+  if (btn) btn.textContent = showing ? "👁️" : "🙈";
 }
 
 function onProviderSelected() {
-  // Provider selection change hook
+  populateCopilotModelDropdown();
+  restoreCopilotApiKey();
 }
 
 function renderDossierView(dossier) {
@@ -2253,6 +2393,19 @@ async function triggerCopilotAdvise() {
   const persona = document.getElementById("copilot-persona").value;
   const provider = document.getElementById("copilot-provider").value;
   const tier = document.getElementById("copilot-tier").value;
+  const modelSel = document.getElementById("copilot-model");
+  const apiKeyInput = document.getElementById("copilot-api-key");
+  const model = modelSel && !modelSel.disabled && modelSel.value ? modelSel.value : null;
+  const apiKey = apiKeyInput && apiKeyInput.value.trim() ? apiKeyInput.value.trim() : null;
+  const keyHint = document.getElementById("copilot-key-hint");
+  if (keyHint) keyHint.style.display = "none";
+
+  // "auto" resolves credentials from the server environment only and never forwards a
+  // pasted key, so a user typing one here would otherwise see it silently ignored.
+  if (keyHint && provider === "auto" && apiKey) {
+    keyHint.textContent = '"Auto" mode ignores a pasted key and uses server-configured credentials instead — pick the specific provider this key belongs to.';
+    keyHint.style.display = "block";
+  }
 
   if (btn) btn.disabled = true;
   if (spinner) spinner.style.display = "inline";
@@ -2269,6 +2422,8 @@ async function triggerCopilotAdvise() {
         persona: persona,
         provider: provider,
         tier: tier,
+        model: model,
+        api_key: apiKey,
       }),
     });
 
@@ -2297,6 +2452,17 @@ async function triggerCopilotAdvise() {
           fbBanner.style.display = "block";
         } else {
           fbBanner.style.display = "none";
+        }
+      }
+
+      // Auth-failure hint: a failed key surfaces as a fallback whose reason mentions
+      // authentication, not as an HTTP 401/403 (the endpoint always degrades gracefully).
+      if (keyHint && data.is_fallback && provider !== "heuristic" && provider !== "auto") {
+        const reason = data.fallback_reason || "";
+        const looksLikeAuthFailure = /(401|403|auth|unauthorized|forbidden|invalid.*key)/i.test(reason);
+        if (looksLikeAuthFailure) {
+          keyHint.textContent = `Check your API key for ${provider} — the provider rejected the request.`;
+          keyHint.style.display = "block";
         }
       }
 
@@ -2332,6 +2498,10 @@ async function triggerCopilotAdvise() {
       await loadIntelligenceView();
     } else {
       const err = await res.json();
+      if ((res.status === 401 || res.status === 403) && keyHint) {
+        keyHint.textContent = `Check your API key for ${provider} — the provider rejected the request.`;
+        keyHint.style.display = "block";
+      }
       alert(`Copilot advise error: ${err.detail || "Server error"}`);
     }
   } catch (err) {

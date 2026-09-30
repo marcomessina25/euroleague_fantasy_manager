@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from euroleague_fantasy_manager.competition.ruleset import League
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit, TeamSettings
+from euroleague_fantasy_manager.rules import MAX_TRADES_PER_ROUND
 from euroleague_fantasy_manager.optimization.constraints import (
     OptimizationConstraints,
     PlayerProjectionContract,
@@ -59,6 +60,8 @@ class UpdateLineupRequest(BaseModel):
     sixth_man_id: int
     bench_ids: list[int]
     coach_id: int
+    # Omitted means "the team's live round", preserving pre-V0.7 behaviour.
+    round_number: int | None = None
 
 
 @router.get("")
@@ -225,6 +228,23 @@ def set_active_team(team_id: str, service: TeamService = Depends(get_team_servic
         raise HTTPException(status_code=404, detail=f"Team '{team_id}' not found.")
 
 
+@router.get("/{team_id}/rounds")
+def list_team_rounds(team_id: str, service: TeamService = Depends(get_team_service)) -> dict[str, Any]:
+    """Rounds this team has stored state for, backing the Lineup tab selector."""
+    try:
+        team = service.get_team(team_id)
+        return {
+            "team_id": team_id,
+            "season": team.season,
+            "current_round": team.round_number,
+            "rounds": service.get_rounds_with_state(team_id),
+        }
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Team '{team_id}' not found.")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post("/{team_id}/lineup")
 def update_lineup(team_id: str, req: UpdateLineupRequest, service: TeamService = Depends(get_team_service)) -> dict[str, Any]:
     try:
@@ -235,6 +255,7 @@ def update_lineup(team_id: str, req: UpdateLineupRequest, service: TeamService =
             sixth_man_id=req.sixth_man_id,
             bench_ids=req.bench_ids,
             coach_id=req.coach_id,
+            round_number=req.round_number,
         )
         return team.to_dict()
     except KeyError:
@@ -248,6 +269,12 @@ class ExecuteTransfersRequest(BaseModel):
     transfers_in_ids: list[int]
     unlimited: bool = False
     season: str = "2026/27"
+    # Entering trades for a PAST round is deliberately not supported yet: it
+    # requires per-round financial state to propagate into every later round,
+    # which is the point-in-time reconstruction built in V0.7 W6. Accepting the
+    # field and rejecting it is clearer than silently applying the trades to the
+    # live round. See docs/specs/v07.md.
+    round_number: int | None = None
 
 
 @router.post("/{team_id}/transfers")
@@ -259,31 +286,51 @@ def execute_transfers(
     optimization_service: OptimizationService = Depends(get_optimization_service),
     decision_service: DecisionService = Depends(get_decision_service),
 ) -> dict[str, Any]:
-    """Execute one or more transfers (or unlimited overhaul) for a team."""
+    """Execute one or more transfers (or unlimited overhaul) for a team's live round."""
     try:
         team = service.get_team(team_id)
+        target_round = team.round_number
+        if req.round_number is not None and int(req.round_number) != target_round:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Entering trades for a past round (requested {req.round_number}, "
+                    f"live round {target_round}) is not supported yet. A past-round trade "
+                    "changes the bank and trade budget of every later round, which requires "
+                    "the point-in-time state reconstruction planned for V0.7 W6. "
+                    "Past-round LINEUP edits are supported via POST /api/teams/{team_id}/lineup."
+                ),
+            )
+
+        base_squad = team.squad
+        base_bank_tenths = team.bank_tenths
+        base_transfers_remaining = team.transfers_remaining
+
         out_ids = set(req.transfers_out_ids)
         in_ids = list(req.transfers_in_ids)
+        # Preserves request order for out<->in pairing below; also preserves the
+        # existing duplicate-collapse behaviour used by the length check.
+        ordered_out = list(dict.fromkeys(req.transfers_out_ids))
 
         if len(out_ids) != len(in_ids):
             raise HTTPException(status_code=400, detail="Number of players sold must match number of players bought.")
 
-        if not req.unlimited and len(out_ids) > team.transfers_remaining:
+        if not req.unlimited and len(out_ids) > base_transfers_remaining:
             raise HTTPException(
                 status_code=400,
-                detail=f"Requested {len(out_ids)} trades, but only {team.transfers_remaining} transfers remaining.",
+                detail=f"Requested {len(out_ids)} trades, but only {base_transfers_remaining} transfers remaining.",
             )
 
-        current_pids = {u.player_id for u in team.squad}
+        current_pids = {u.player_id for u in base_squad}
         if not out_ids.issubset(current_pids):
             missing = out_ids - current_pids
             raise HTTPException(status_code=400, detail=f"Players {missing} are not in current squad.")
 
         # Resolve projection contracts for market
-        proj_dict = prediction_service.get_projections_dict(req.season, team.round_number, league=team.league or "euroleague")
+        proj_dict = prediction_service.get_projections_dict(req.season, target_round, league=team.league or "euroleague")
 
         # Calculate sale value
-        sell_value_tenths = sum(u.current_price_tenths for u in team.squad if u.player_id in out_ids)
+        sell_value_tenths = sum(u.current_price_tenths for u in base_squad if u.player_id in out_ids)
 
         # Resolve recruits
         new_contracts = []
@@ -293,7 +340,7 @@ def execute_transfers(
             new_contracts.append(proj_dict[pid])
 
         buy_cost_tenths = sum(c.price_tenths for c in new_contracts)
-        new_bank_tenths = team.bank_tenths + sell_value_tenths - buy_cost_tenths
+        new_bank_tenths = base_bank_tenths + sell_value_tenths - buy_cost_tenths
 
         if new_bank_tenths < 0:
             deficit_credits = round(abs(new_bank_tenths) / 10.0, 1)
@@ -303,7 +350,7 @@ def execute_transfers(
             )
 
         # Build candidate squad units
-        kept_units = [u for u in team.squad if u.player_id not in out_ids]
+        kept_units = [u for u in base_squad if u.player_id not in out_ids]
         recruits_units = [
             TeamRosterUnit(
                 player_id=c.player_id,
@@ -333,7 +380,7 @@ def execute_transfers(
             raise HTTPException(status_code=400, detail=f"Invalid squad after trades: {'; '.join(val.errors)}")
 
         # Re-optimize lineup assignment
-        lineup = optimization_service.lineup_optimizer.optimize(full_contracts, round_number=team.round_number)
+        lineup = optimization_service.lineup_optimizer.optimize(full_contracts, round_number=target_round)
         starter_set = set(lineup.starter_ids)
         bench_set = set(lineup.bench_ids)
 
@@ -360,16 +407,38 @@ def execute_transfers(
         # Snapshot current state for rollback in case of audit failure
         prev_bank_tenths = team.bank_tenths
         prev_transfers_remaining = team.transfers_remaining
-        prev_squad = list(team.squad)
+        prev_squad = list(base_squad)
 
         # Update team state
-        rem_trades = team.transfers_remaining if req.unlimited else max(0, team.transfers_remaining - len(out_ids))
+        rem_trades = base_transfers_remaining if req.unlimited else max(0, base_transfers_remaining - len(out_ids))
         service.update_team(
             team_id=team_id,
             bank_tenths=new_bank_tenths,
             transfers_remaining=rem_trades,
         )
-        service.set_squad(team_id, team.round_number, assigned_units, validate=False)
+        service.set_squad(team_id, target_round, assigned_units, validate=False)
+
+        # Record the individual trade events. Only the resulting squad was
+        # persisted before V0.7, which left the trades themselves unrecoverable.
+        # Appended, never cleared: two successive trades in the same round must
+        # both remain in the event log.
+        out_by_id = {u.player_id: u for u in base_squad}
+        new_transfer_ids = service.store.record_transfers(
+            team_id=team_id,
+            round_number=target_round,
+            season=req.season,
+            moves=[
+                {
+                    "player_out_id": out_pid,
+                    "player_out_name": getattr(out_by_id.get(out_pid), "name", ""),
+                    "player_in_id": contract.player_id,
+                    "player_in_name": contract.player_name,
+                    "price_out_tenths": getattr(out_by_id.get(out_pid), "current_price_tenths", 0),
+                    "price_in_tenths": contract.price_tenths,
+                }
+                for out_pid, contract in zip(ordered_out, new_contracts)
+            ],
+        )
 
         # Log decision
         try:
@@ -379,13 +448,13 @@ def execute_transfers(
                 in_player_ids=tuple(in_ids),
                 num_trades=len(in_ids),
                 net_transfer_value=0.0,
-                bank_tenths_before=team.bank_tenths,
+                bank_tenths_before=base_bank_tenths,
                 bank_tenths_after=new_bank_tenths,
             )
             decision_service.log_transfers(
                 team_id=team_id,
                 season=req.season,
-                round_number=team.round_number,
+                round_number=target_round,
                 recommended_transfers=payload,
                 actual_transfers=payload,
                 notes=f"Executed {len(out_ids)} trade(s)" if not req.unlimited else "Executed Unlimited Overhaul",
@@ -397,7 +466,8 @@ def execute_transfers(
                 bank_tenths=prev_bank_tenths,
                 transfers_remaining=prev_transfers_remaining,
             )
-            service.set_squad(team_id, team.round_number, prev_squad, validate=False)
+            service.set_squad(team_id, target_round, prev_squad, validate=False)
+            service.store.delete_transfers_by_ids(new_transfer_ids)
             raise HTTPException(
                 status_code=500,
                 detail=f"Required transfer decision audit log failed: {e}",

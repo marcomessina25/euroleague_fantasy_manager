@@ -17,6 +17,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from .security import redact_secrets
+
 
 class ProviderError(Exception):
     """Base error for LLM provider failures."""
@@ -136,7 +138,7 @@ class GeminiProvider(BaseLLMProvider):
 
     def __init__(self, api_key: str | None = None, default_model: str | None = None) -> None:
         key = api_key or os.environ.get("GEMINI_API_KEY", "") or os.environ.get("GOOGLE_API_KEY", "")
-        super().__init__(name="gemini", api_key=key, default_model=default_model or "gemini-2.0-flash")
+        super().__init__(name="gemini", api_key=key, default_model=default_model or "gemini-1.5-flash-latest")
 
     def is_available(self) -> bool:
         return bool(self.api_key)
@@ -145,7 +147,7 @@ class GeminiProvider(BaseLLMProvider):
         if not self.is_available():
             raise ProviderAuthError("Gemini API key not configured. Set GEMINI_API_KEY or GOOGLE_API_KEY.")
 
-        model = request.model or self.default_model or "gemini-2.0-flash"
+        model = request.model or self.default_model or "gemini-1.5-flash-latest"
         # Key goes in a header, not the URL, so it cannot leak into proxy/access logs.
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{urllib.parse.quote(model, safe='')}:generateContent"
 
@@ -188,12 +190,12 @@ class GeminiProvider(BaseLLMProvider):
                 )
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
-                raise ProviderAuthError(f"Gemini authentication failed (HTTP {e.code}): {e.reason}") from e
+                raise ProviderAuthError(redact_secrets(f"Gemini authentication failed (HTTP {e.code}): {e.reason}")) from e
             elif e.code == 429:
-                raise ProviderRateLimitError(f"Gemini rate limit exceeded: {e.reason}") from e
-            raise ProviderError(f"Gemini API error (HTTP {e.code}): {e.reason}") from e
+                raise ProviderRateLimitError(redact_secrets(f"Gemini rate limit exceeded: {e.reason}")) from e
+            raise ProviderError(redact_secrets(f"Gemini API error (HTTP {e.code}): {e.reason}")) from e
         except urllib.error.URLError as e:
-            raise ProviderTimeoutError(f"Gemini connection error: {e.reason}") from e
+            raise ProviderTimeoutError(redact_secrets(f"Gemini connection error: {e.reason}")) from e
 
 
 class OpenAIProvider(BaseLLMProvider):
@@ -255,12 +257,12 @@ class OpenAIProvider(BaseLLMProvider):
                 )
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
-                raise ProviderAuthError(f"OpenAI authentication failed (HTTP {e.code}): {e.reason}") from e
+                raise ProviderAuthError(redact_secrets(f"OpenAI authentication failed (HTTP {e.code}): {e.reason}")) from e
             elif e.code == 429:
-                raise ProviderRateLimitError(f"OpenAI rate limit exceeded: {e.reason}") from e
-            raise ProviderError(f"OpenAI API error (HTTP {e.code}): {e.reason}") from e
+                raise ProviderRateLimitError(redact_secrets(f"OpenAI rate limit exceeded: {e.reason}")) from e
+            raise ProviderError(redact_secrets(f"OpenAI API error (HTTP {e.code}): {e.reason}")) from e
         except urllib.error.URLError as e:
-            raise ProviderTimeoutError(f"OpenAI connection error: {e.reason}") from e
+            raise ProviderTimeoutError(redact_secrets(f"OpenAI connection error: {e.reason}")) from e
 
 
 class AnthropicClaudeProvider(BaseLLMProvider):
@@ -316,12 +318,12 @@ class AnthropicClaudeProvider(BaseLLMProvider):
                 )
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
-                raise ProviderAuthError(f"Anthropic authentication failed (HTTP {e.code}): {e.reason}") from e
+                raise ProviderAuthError(redact_secrets(f"Anthropic authentication failed (HTTP {e.code}): {e.reason}")) from e
             elif e.code == 429:
-                raise ProviderRateLimitError(f"Anthropic rate limit exceeded: {e.reason}") from e
-            raise ProviderError(f"Anthropic API error (HTTP {e.code}): {e.reason}") from e
+                raise ProviderRateLimitError(redact_secrets(f"Anthropic rate limit exceeded: {e.reason}")) from e
+            raise ProviderError(redact_secrets(f"Anthropic API error (HTTP {e.code}): {e.reason}")) from e
         except urllib.error.URLError as e:
-            raise ProviderTimeoutError(f"Anthropic connection error: {e.reason}") from e
+            raise ProviderTimeoutError(redact_secrets(f"Anthropic connection error: {e.reason}")) from e
 
 
 class OpenRouterProvider(BaseLLMProvider):
@@ -388,12 +390,12 @@ class OpenRouterProvider(BaseLLMProvider):
                 )
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
-                raise ProviderAuthError(f"OpenRouter authentication failed (HTTP {e.code}): {e.reason}") from e
+                raise ProviderAuthError(redact_secrets(f"OpenRouter authentication failed (HTTP {e.code}): {e.reason}")) from e
             elif e.code == 429:
-                raise ProviderRateLimitError(f"OpenRouter rate limit exceeded: {e.reason}") from e
-            raise ProviderError(f"OpenRouter API error (HTTP {e.code}): {e.reason}") from e
+                raise ProviderRateLimitError(redact_secrets(f"OpenRouter rate limit exceeded: {e.reason}")) from e
+            raise ProviderError(redact_secrets(f"OpenRouter API error (HTTP {e.code}): {e.reason}")) from e
         except urllib.error.URLError as e:
-            raise ProviderTimeoutError(f"OpenRouter connection error: {e.reason}") from e
+            raise ProviderTimeoutError(redact_secrets(f"OpenRouter connection error: {e.reason}")) from e
 
 
 class LocalProvider(BaseLLMProvider):
@@ -445,7 +447,47 @@ class LocalProvider(BaseLLMProvider):
                     raw_metadata={},
                 )
         except Exception as e:
-            raise ProviderTimeoutError(f"Local LLM endpoint unreachable at {self.base_url}: {e}") from e
+            raise ProviderTimeoutError(redact_secrets(f"Local LLM endpoint unreachable at {self.base_url}: {e}")) from e
+
+
+# Server-driven sub-model catalog per provider. Kept here as the single source of
+# truth so the GUI never needs its own hardcoded model table (unlike fpl-manager).
+PROVIDER_MODEL_CATALOG: dict[str, list[dict[str, Any]]] = {
+    "heuristic": [],
+    "auto": [],
+    "gemini": [
+        {"id": "gemini-1.5-flash-latest", "name": "Gemini 1.5 Flash", "free": False},
+        {"id": "gemini-1.5-pro-latest", "name": "Gemini 1.5 Pro", "free": False},
+        {"id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash", "free": False},
+    ],
+    "openai": [
+        {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "free": False},
+        {"id": "gpt-4o", "name": "GPT-4o", "free": False},
+        {"id": "o3-mini", "name": "o3-mini", "free": False},
+    ],
+    "claude": [
+        {"id": "claude-3-5-haiku-20241022", "name": "Claude 3.5 Haiku", "free": False},
+        {"id": "claude-3-5-sonnet-20241022", "name": "Claude 3.5 Sonnet", "free": False},
+        {"id": "claude-3-opus-20240229", "name": "Claude 3 Opus", "free": False},
+    ],
+    "openrouter": [
+        {"id": "meta-llama/llama-3.3-70b-instruct:free", "name": "Llama 3.3 70B", "free": True},
+        {"id": "deepseek/deepseek-chat:free", "name": "DeepSeek V3", "free": True},
+        {"id": "google/gemini-2.0-flash-exp:free", "name": "Gemini 2.0 Flash (exp)", "free": True},
+        {"id": "deepseek/deepseek-r1", "name": "DeepSeek R1 (Reasoning)", "free": False},
+    ],
+    "local": [
+        {"id": "llama3.2", "name": "Llama 3.2 (Ollama default)", "free": True},
+    ],
+}
+
+# Priority order for "auto" mode: first provider with a configured key wins.
+_AUTO_PROVIDER_PRIORITY: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("gemini", ("GEMINI_API_KEY", "GOOGLE_API_KEY")),
+    ("openai", ("OPENAI_API_KEY",)),
+    ("claude", ("ANTHROPIC_API_KEY",)),
+    ("openrouter", ("OPENROUTER_API_KEY",)),
+)
 
 
 def get_provider(
@@ -457,6 +499,13 @@ def get_provider(
     norm = (name or "heuristic").strip().lower().replace("-", "_")
 
     if norm in ("heuristic", "offline", "none"):
+        return HeuristicProvider()
+    if norm == "auto":
+        for candidate_name, env_vars in _AUTO_PROVIDER_PRIORITY:
+            if any(os.environ.get(var) for var in env_vars):
+                # "auto" resolves credentials from the environment only; a caller-supplied
+                # key must never be forwarded to a provider auto did not choose.
+                return get_provider(candidate_name, api_key=None, model=model)
         return HeuristicProvider()
     if norm in ("gemini", "google"):
         return GeminiProvider(api_key=api_key, default_model=model)
@@ -477,6 +526,17 @@ def list_available_providers() -> list[dict[str, Any]]:
     """Discover available providers based on environment configuration."""
     providers = [
         {
+            "id": "auto",
+            "provider_name": "auto",
+            "name": "Auto (First Configured Provider)",
+            "display_name": "Auto (First Configured Provider)",
+            "default_model": "auto",
+            "available": True,
+            "requires_key": False,
+            "tier": "fast",
+            "models": PROVIDER_MODEL_CATALOG["auto"],
+        },
+        {
             "id": "heuristic",
             "provider_name": "heuristic",
             "name": "Deterministic Heuristic (Offline)",
@@ -485,16 +545,18 @@ def list_available_providers() -> list[dict[str, Any]]:
             "available": True,
             "requires_key": False,
             "tier": "fast",
+            "models": PROVIDER_MODEL_CATALOG["heuristic"],
         },
         {
             "id": "gemini",
             "provider_name": "gemini",
             "name": "Google Gemini",
             "display_name": "Google Gemini",
-            "default_model": "gemini-2.0-flash",
+            "default_model": "gemini-1.5-flash-latest",
             "available": bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")),
             "requires_key": True,
             "tier": "standard",
+            "models": PROVIDER_MODEL_CATALOG["gemini"],
         },
         {
             "id": "openai",
@@ -505,6 +567,7 @@ def list_available_providers() -> list[dict[str, Any]]:
             "available": bool(os.environ.get("OPENAI_API_KEY")),
             "requires_key": True,
             "tier": "standard",
+            "models": PROVIDER_MODEL_CATALOG["openai"],
         },
         {
             "id": "claude",
@@ -515,6 +578,7 @@ def list_available_providers() -> list[dict[str, Any]]:
             "available": bool(os.environ.get("ANTHROPIC_API_KEY")),
             "requires_key": True,
             "tier": "extended",
+            "models": PROVIDER_MODEL_CATALOG["claude"],
         },
         {
             "id": "openrouter",
@@ -525,6 +589,7 @@ def list_available_providers() -> list[dict[str, Any]]:
             "available": bool(os.environ.get("OPENROUTER_API_KEY")),
             "requires_key": True,
             "tier": "fast",
+            "models": PROVIDER_MODEL_CATALOG["openrouter"],
         },
         {
             "id": "local",
@@ -535,6 +600,7 @@ def list_available_providers() -> list[dict[str, Any]]:
             "available": True,
             "requires_key": False,
             "tier": "fast",
+            "models": PROVIDER_MODEL_CATALOG["local"],
         },
     ]
     return providers

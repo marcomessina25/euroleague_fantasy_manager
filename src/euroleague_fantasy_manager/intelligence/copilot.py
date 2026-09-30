@@ -26,6 +26,7 @@ from .providers import (
     ProviderRequest,
     get_provider,
 )
+from .security import redact_secrets
 from .strategic_analysis import StrategicAnalysisResult, analyze_dossier
 
 logger = logging.getLogger(__name__)
@@ -257,7 +258,7 @@ def generate_copilot_advice(
         used_model = resp.model
         latency = resp.latency_ms
     except Exception as e:
-        logger.warning("Primary provider '%s' failed: %s. Falling back to HeuristicProvider.", provider_name, e)
+        logger.warning("Primary provider '%s' failed: %s. Falling back to HeuristicProvider.", provider_name, redact_secrets(str(e)))
         fallback = HeuristicProvider()
         resp = fallback.generate(req)
         analysis_text = resp.content
@@ -265,7 +266,7 @@ def generate_copilot_advice(
         used_model = fallback.default_model or "deterministic-heuristic"
         latency = resp.latency_ms
         is_fallback = True
-        fallback_reason = str(e)
+        fallback_reason = redact_secrets(str(e))
 
     # 6. Post-generation consistency check
     consistency = verify_consistency(analysis_text, dossier)

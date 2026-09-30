@@ -140,14 +140,24 @@ class TeamService:
         round_number: int,
         roster_units: Sequence[TeamRosterUnit],
         validate: bool = True,
+        advance_team_round: bool = True,
     ) -> Team:
-        """Persist a team's 11-player squad for a round."""
+        """Persist a team's 11-player squad for a round.
+
+        ``advance_team_round=False`` writes the round without moving the team's
+        live round pointer, which is what backfilling a past round requires
+        (V0.7 W5).
+        """
         team = self.get_team(team_id)
         if validate and roster_units:
             self._validate_roster(roster_units)
 
         self.store.save_squad(team_id, round_number, roster_units)
-        if roster_units:
+        if roster_units and advance_team_round:
+            # A backfill (advance_team_round=False) must not fabricate a "round-start"
+            # checkpoint from today's live bank/transfers state; the round may legitimately
+            # have a stored squad with no checkpoint, and get_latest_checkpoint_before_round
+            # would otherwise serve this bogus one as historical truth.
             self.store.save_round_checkpoint(
                 team_id=team_id,
                 round_number=round_number,
@@ -157,9 +167,11 @@ class TeamService:
                 squad=roster_units,
                 overwrite=False,
             )
-        team.round_number = round_number
-        team.squad = list(roster_units)
-        return self.store.update_team(team)
+        if advance_team_round:
+            team.round_number = round_number
+            team.squad = list(roster_units)
+            return self.store.update_team(team)
+        return team
 
     def update_team_squad(
         self,
@@ -183,10 +195,38 @@ class TeamService:
         sixth_man_id: int,
         bench_ids: Sequence[int],
         coach_id: int,
+        round_number: int | None = None,
     ) -> Team:
-        """Update role assignments (starters, captain, sixth man, bench) within current squad."""
+        """Update role assignments (starters, captain, sixth man, bench) within a squad.
+
+        ``round_number`` defaults to the team's live round, preserving pre-V0.7
+        behaviour. Passing an earlier round backfills that round's lineup without
+        moving the team's round pointer.
+        """
         team = self.get_team(team_id)
-        current_squad = team.squad
+        target_round = team.round_number if round_number is None else int(round_number)
+        is_backfill = target_round != team.round_number
+
+        current_squad = (
+            team.squad if not is_backfill else self.store.get_squad(team_id, target_round)
+        )
+        if not current_squad:
+            raise ValueError(
+                f"Team '{team_id}' has no stored squad for round {target_round}; "
+                "record the squad for that round before setting its lineup."
+            )
+
+        if is_backfill:
+            # A backfill silently dropped ids outside the target round's squad and
+            # silently demoted units the request omitted; validate it explicitly instead.
+            squad_pids = {unit.player_id for unit in current_squad}
+            requested_pids = set(starter_ids) | set(bench_ids) | {captain_id, sixth_man_id, coach_id}
+            if not requested_pids.issubset(squad_pids):
+                unknown = requested_pids - squad_pids
+                raise ValueError(
+                    f"Players {sorted(unknown)} are not in round {target_round}'s stored squad for team '{team_id}'."
+                )
+
         starter_set = set(starter_ids)
         bench_set = set(bench_ids)
 
@@ -215,7 +255,39 @@ class TeamService:
             )
             updated_units.append(updated_unit)
 
-        return self.set_squad(team_id, team.round_number, updated_units, validate=False)
+        if is_backfill:
+            # Also validate the resulting shape: a backfill must not persist a
+            # half-formed lineup (silently dropped starters, no captain, etc).
+            num_starters = sum(1 for u in updated_units if u.is_starter)
+            num_captains = sum(1 for u in updated_units if u.is_captain)
+            num_sixth = sum(1 for u in updated_units if u.is_sixth_man)
+            if num_starters != 5:
+                raise ValueError(f"Lineup for round {target_round} must have exactly 5 starters, got {num_starters}.")
+            if num_captains != 1:
+                raise ValueError(f"Lineup for round {target_round} must have exactly one captain, got {num_captains}.")
+            if num_sixth != 1:
+                raise ValueError(f"Lineup for round {target_round} must have exactly one sixth man, got {num_sixth}.")
+
+        # A lineup edit only rewrites role flags (starter/captain/sixth man/bench/
+        # coach). It changes neither squad membership nor the bank, so no later
+        # round's financial state is invalidated and downstream checkpoints stay
+        # valid. Trades are different, which is why past-round trade entry waits
+        # for the state reconstruction in W6.
+        return self.set_squad(
+            team_id,
+            target_round,
+            updated_units,
+            validate=False,
+            advance_team_round=not is_backfill,
+        )
+
+    def get_rounds_with_state(self, team_id: str) -> list[int]:
+        """Rounds this team has stored state for, for the Lineup tab selector."""
+        team = self.get_team(team_id)
+        rounds = self.store.get_rounds_with_state(team_id, team.season)
+        if team.round_number not in rounds:
+            rounds.append(team.round_number)
+        return sorted(rounds)
 
     def import_from_config(
         self,

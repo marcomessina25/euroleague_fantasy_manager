@@ -145,10 +145,15 @@ def get_dashboard(
         option_value_mode=team.settings.option_value_mode,
     )
 
+    # store.get_team always loads the team's LIVE round squad, so a round differing
+    # from the live one must be loaded explicitly or the dashboard renders the wrong roster.
+    is_viewing_past_round = round_number is not None and rnd != team.round_number
+    squad_for_round = team_service.store.get_squad(team_id, rnd) if is_viewing_past_round else team.squad
+
     # Squad units with projections
     proj_dict = prediction_service.get_projections_dict(season, rnd, league=team.league or "euroleague")
     squad_details = []
-    for unit in team.squad:
+    for unit in squad_for_round:
         c = proj_dict.get(unit.player_id)
         has_played = getattr(c, "has_played", False) if c else False
         actual_fp = getattr(c, "actual_fp", None) if c else None
@@ -177,14 +182,16 @@ def get_dashboard(
         })
 
     # Build active current_lineup representing team's actual saved squad roles
-    squad_units = team.squad
+    squad_units = squad_for_round
     starters_units = [u for u in squad_units if u.is_starter]
     bench_units = [u for u in squad_units if u.is_bench]
     sixth_man_unit = next((u for u in squad_units if u.is_sixth_man), None)
     coach_unit = next((u for u in squad_units if u.is_coach or u.position == "HC"), None)
 
     # If team roles have not been assigned yet (e.g. freshly imported or draft without role flags),
-    # sync with opt_lineup so the team gets its starting five, captain, 6th man, bench
+    # sync with opt_lineup so the team gets its starting five, captain, 6th man, bench.
+    # round_number=rnd targets the round being viewed -- omitting it would silently rewrite
+    # the LIVE round's lineup while merely viewing a past round.
     if len(starters_units) != 5 or not sixth_man_unit or not coach_unit:
         team = team_service.update_lineup(
             team_id=team_id,
@@ -193,8 +200,9 @@ def get_dashboard(
             sixth_man_id=opt_lineup.sixth_man_id,
             bench_ids=[p["player_id"] for p in opt_lineup.bench],
             coach_id=opt_lineup.coach_id,
+            round_number=rnd,
         )
-        squad_units = team.squad
+        squad_units = team_service.store.get_squad(team_id, rnd) if is_viewing_past_round else team.squad
         starters_units = [u for u in squad_units if u.is_starter]
         bench_units = [u for u in squad_units if u.is_bench]
         sixth_man_unit = next((u for u in squad_units if u.is_sixth_man), None)
@@ -248,9 +256,18 @@ def get_dashboard(
     c_count = sum(1 for p in starters_formatted if _p_char(p["position"]) == "C")
     formation_str = f"{g_count}-{f_count}-{c_count}"
 
-    captain_id = team.captain_id or (starters_formatted[0]["player_id"] if starters_formatted else 0)
-    sixth_man_id = team.sixth_man_id or (sixth_man_formatted["player_id"] if sixth_man_formatted else 0)
-    coach_id = team.coach_id or (coach_formatted["player_id"] if coach_formatted else 0)
+    captain_id = (
+        next((u.player_id for u in squad_units if u.is_captain), None)
+        or (starters_formatted[0]["player_id"] if starters_formatted else 0)
+    )
+    sixth_man_id = (
+        next((u.player_id for u in squad_units if u.is_sixth_man), None)
+        or (sixth_man_formatted["player_id"] if sixth_man_formatted else 0)
+    )
+    coach_id = (
+        next((u.player_id for u in squad_units if u.is_coach or u.position == "HC"), None)
+        or (coach_formatted["player_id"] if coach_formatted else 0)
+    )
 
     # Compute score breakdown: Realized points for played players + Expected points for unplayed players
     tot_unplayed_expected_fp = 0.0
