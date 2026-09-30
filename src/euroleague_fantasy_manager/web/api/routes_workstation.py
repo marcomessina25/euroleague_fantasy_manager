@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from euroleague_fantasy_manager.competition.ruleset import League
@@ -11,6 +11,20 @@ from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit
 from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
 from euroleague_fantasy_manager.rules import MAX_TRADES_PER_ROUND
+
+# Largest page the player browser will serve in one request. Paging with
+# `offset` reaches the rest of the universe; nothing is ever unreachable.
+MAX_PLAYER_PAGE_SIZE = 1000
+
+# Ordering options for the player browser. Every key breaks ties on player_id so
+# that paging is stable and cannot drop or duplicate a player between pages.
+PLAYER_SORT_KEYS = {
+    "expected_fp": lambda p: (-p["expected_fp"], p["player_id"]),
+    "price_desc": lambda p: (-p["price_tenths"], p["player_id"]),
+    "price_asc": lambda p: (p["price_tenths"], p["player_id"]),
+    "fp_per_credit": lambda p: (-p["fp_per_credit"], p["player_id"]),
+    "name": lambda p: (p["name"].lower(), p["player_id"]),
+}
 from euroleague_fantasy_manager.services.decision_service import DecisionService
 from euroleague_fantasy_manager.services.evaluation_service import EvaluationService
 from euroleague_fantasy_manager.services.optimization_service import (
@@ -639,6 +653,7 @@ def update_scores_endpoint(
 
 @router.get("/players")
 def list_players_endpoint(
+    response: Response,
     season: str = "2026/27",
     round_number: int = 1,
     position: str | None = None,
@@ -646,10 +661,33 @@ def list_players_endpoint(
     min_price: float | None = None,
     max_price: float | None = None,
     league: League = Depends(parse_league),
+    sort: str = "expected_fp",
+    offset: int = 0,
     limit: int = 50,
     prediction_service: PredictionService = Depends(get_prediction_service),
 ) -> list[dict[str, Any]]:
-    """Player browser for Trade Studio with valuation metrics (Phase G)."""
+    """Player browser for Trade Studio with valuation metrics.
+
+    Truncation is a display concern, never an existence concern (V0.7 W3). Before
+    V0.7 this endpoint sorted by expected FP and then sliced, which made the
+    cheapest players permanently unreachable from the manual-transfer picker.
+    The result set is now addressable: ``offset`` pages through the *whole*
+    filtered universe and ``sort`` selects the ordering, while the total count
+    before truncation is reported via the ``X-Total-Count`` response header.
+    """
+    if limit < 1 or limit > MAX_PLAYER_PAGE_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"limit must be between 1 and {MAX_PLAYER_PAGE_SIZE}.",
+        )
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0.")
+    if sort not in PLAYER_SORT_KEYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"sort must be one of: {', '.join(sorted(PLAYER_SORT_KEYS))}.",
+        )
+
     contracts = prediction_service.get_projections(season, round_number, league=league.value)
     valuations = prediction_service.get_player_valuations(season, round_number, league=league.value)
 
@@ -695,8 +733,18 @@ def list_players_endpoint(
             "is_home": c.is_home,
         })
 
-    filtered.sort(key=lambda x: -x["expected_fp"])
-    return filtered[:limit]
+    # Sort deterministically: the chosen key, then player_id to break ties so
+    # paging can never drop or duplicate a player across pages.
+    filtered.sort(key=PLAYER_SORT_KEYS[sort])
+
+    total = len(filtered)
+    page = filtered[offset : offset + limit]
+
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["X-Offset"] = str(offset)
+    response.headers["X-Limit"] = str(limit)
+    response.headers["Access-Control-Expose-Headers"] = "X-Total-Count, X-Offset, X-Limit"
+    return page
 
 
 @router.get("/players/{player_id}")

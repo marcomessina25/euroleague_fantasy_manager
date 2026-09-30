@@ -277,6 +277,13 @@
                   <option value="C">Center (C)</option>
                   <option value="HC">Coach (HC)</option>
                 </select>
+                <select id="market-filter-sort" onchange="loadPlayerPool()" title="Ordering of the market list" style="padding:0.25rem 0.5rem; font-size:0.8rem;">
+                  <option value="expected_fp">Exp FP ↓</option>
+                  <option value="fp_per_credit">FP / Credit ↓</option>
+                  <option value="price_desc">Price ↓</option>
+                  <option value="price_asc">Price ↑ (cheapest)</option>
+                  <option value="name">Name A–Z</option>
+                </select>
                 <input type="text" id="market-filter-search" placeholder="Search..." oninput="loadPlayerPool()" style="padding:0.25rem 0.5rem; font-size:0.8rem; width:130px;">
               </div>
             </div>
@@ -296,6 +303,13 @@
                   <!-- Populated by JS -->
                 </tbody>
               </table>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:0.5rem; margin-top:0.5rem; padding-top:0.4rem; border-top:1px solid var(--border-color);">
+              <span id="player-pool-count" style="font-size:0.75rem; color:var(--text-muted);"></span>
+              <div style="display:flex; gap:0.35rem;">
+                <button id="player-pool-prev" class="btn btn-secondary" style="padding:0.2rem 0.55rem; font-size:0.75rem;" onclick="playerPoolPrevPage()">← Prev</button>
+                <button id="player-pool-next" class="btn btn-secondary" style="padding:0.2rem 0.55rem; font-size:0.75rem;" onclick="playerPoolNextPage()">Next →</button>
+              </div>
             </div>
           </div>
         </div>

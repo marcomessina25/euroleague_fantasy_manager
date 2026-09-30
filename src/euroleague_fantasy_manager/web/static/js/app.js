@@ -1395,11 +1395,41 @@ async function submitExecuteTransfers() {
 }
 
 // Trade Studio & Player Pool
-async function loadPlayerPool() {
+// Page size for the market browser. The full filtered universe is reachable by
+// paging (V0.7 W3) — the list is never silently truncated to the top by value.
+const PLAYER_POOL_PAGE_SIZE = 100;
+let playerPoolOffset = 0;
+let playerPoolTotal = 0;
+let playerPoolLastQueryKey = "";
+
+function playerPoolNextPage() {
+  if (playerPoolOffset + PLAYER_POOL_PAGE_SIZE >= playerPoolTotal) return;
+  playerPoolOffset += PLAYER_POOL_PAGE_SIZE;
+  loadPlayerPool({ keepOffset: true });
+}
+
+function playerPoolPrevPage() {
+  if (playerPoolOffset <= 0) return;
+  playerPoolOffset = Math.max(0, playerPoolOffset - PLAYER_POOL_PAGE_SIZE);
+  loadPlayerPool({ keepOffset: true });
+}
+
+async function loadPlayerPool(opts) {
   const pos = document.getElementById("market-filter-pos")?.value || "";
   const search = document.getElementById("market-filter-search")?.value || "";
+  const sort = document.getElementById("market-filter-sort")?.value || "expected_fp";
 
-  let url = `/api/workstation/players?season=${state.season}&round_number=${state.roundNumber}&limit=40&league=${encodeURIComponent(activeTeamLeague())}`;
+  // Any change to the filters restarts paging from the first page, otherwise
+  // the user could be left stranded on an offset beyond the new result set.
+  const queryKey = `${pos}|${search}|${sort}`;
+  if (!opts || !opts.keepOffset || queryKey !== playerPoolLastQueryKey) {
+    if (queryKey !== playerPoolLastQueryKey) playerPoolOffset = 0;
+    playerPoolLastQueryKey = queryKey;
+  }
+
+  let url = `/api/workstation/players?season=${state.season}&round_number=${state.roundNumber}`
+    + `&sort=${encodeURIComponent(sort)}&offset=${playerPoolOffset}&limit=${PLAYER_POOL_PAGE_SIZE}`
+    + `&league=${encodeURIComponent(activeTeamLeague())}`;
   if (pos) url += `&position=${pos}`;
   if (search) url += `&search=${encodeURIComponent(search)}`;
 
@@ -1407,6 +1437,7 @@ async function loadPlayerPool() {
     const res = await fetch(url);
     if (res.ok) {
       const players = await res.json();
+      playerPoolTotal = parseInt(res.headers.get("X-Total-Count") || "0", 10) || players.length;
       const tbody = document.getElementById("player-pool-tbody");
       if (!tbody) return;
       tbody.innerHTML = "";
@@ -1437,10 +1468,29 @@ async function loadPlayerPool() {
         `;
         tbody.appendChild(tr);
       });
+      renderPlayerPoolPaging(players.length);
     }
   } catch (err) {
     console.error("Failed to load player pool:", err);
   }
+}
+
+function renderPlayerPoolPaging(shownCount) {
+  const label = document.getElementById("player-pool-count");
+  const prev = document.getElementById("player-pool-prev");
+  const next = document.getElementById("player-pool-next");
+
+  if (label) {
+    if (playerPoolTotal === 0) {
+      label.textContent = "No players match these filters.";
+    } else {
+      const first = playerPoolOffset + 1;
+      const last = playerPoolOffset + shownCount;
+      label.textContent = `Showing ${first}–${last} of ${playerPoolTotal}`;
+    }
+  }
+  if (prev) prev.disabled = playerPoolOffset <= 0;
+  if (next) next.disabled = playerPoolOffset + PLAYER_POOL_PAGE_SIZE >= playerPoolTotal;
 }
 
 // Multi-Round Planner
