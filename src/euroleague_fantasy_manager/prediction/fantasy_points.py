@@ -12,6 +12,7 @@ from .production import (
     predict_expected_coach_conditional_fp,
     predict_expected_fp_per_min_if_play,
 )
+from .rotation_context import compute_rotation_profile
 from .uncertainty import estimate_prediction_uncertainty
 
 
@@ -40,6 +41,11 @@ class DecomposedProjection:
     expected_fp_per_credit: float
     points_above_replacement: float
     risk_adjusted_value: float
+    rotation_tier: str = "core_rotation"
+    blowout_risk: bool = False
+    foul_fragility: str = "LOW"
+    congestion_index: float = 0.0
+    context_badges: tuple[str, ...] = ()
 
 
 def predict_player_fantasy_points(
@@ -100,6 +106,9 @@ def predict_player_fantasy_points(
         risk_lambda=risk_lambda,
     )
 
+    # Rotation and basketball context profile
+    rot_prof = compute_rotation_profile(f, base_expected_minutes=exp_minutes)
+
     return DecomposedProjection(
         player_id=f.player_id,
         player_name=f.player_name,
@@ -122,6 +131,11 @@ def predict_player_fantasy_points(
         expected_fp_per_credit=val.expected_fp_per_credit,
         points_above_replacement=val.points_above_replacement,
         risk_adjusted_value=val.risk_adjusted_value,
+        rotation_tier=rot_prof.role_tier,
+        blowout_risk=rot_prof.blowout_risk,
+        foul_fragility=rot_prof.foul_fragility_tier,
+        congestion_index=rot_prof.congestion_index,
+        context_badges=rot_prof.badges,
     )
 
 
