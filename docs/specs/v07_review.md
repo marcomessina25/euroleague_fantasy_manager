@@ -3,7 +3,9 @@
 > **Branch:** `v07` @ `f7f4dec` → `main`
 > **Review date:** 2026-09-30
 > **Reviewed against:** [`v07.md`](v07.md) (the authority) and [`v07_handoff.md`](v07_handoff.md)
-> **Verdict:** **Not ready to merge.** 2 blocking items, 5 non-blocking gaps.
+> **Verdict at review:** **Not ready to merge.** 2 blocking items, 5 non-blocking gaps.
+> **Status:** **RESOLVED** in commit `b863b1a`. All 2 blocking items (B1, B2) and 5 non-blocking gaps (G1–G5)
+> were fully remediated, verified, and audited with 212 tests passing.
 > **Method:** full-suite run in the `elf` env, `node --check`, targeted greps, and empirical
 > verification against seeded temporary databases. Findings that were confirmed by execution rather
 > than by reading alone are marked **[verified empirically]**.

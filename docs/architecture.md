@@ -79,6 +79,6 @@ prices, turns, lineups, coaches         clubs, calendar, PIR box scores
 3. **Sequential Decision Simulation (`SequentialDecisionSimulator`)**:
    - Replays multi-season sequences with full legal actions: transfer execution, starting five formation selection, captain ($2.0\times$), sixth man ($1.0\times$), bench ($0.5\times$), head coach, and intra-round Turn 1 $\to$ Turn 2 substitutions.
 4. **Historical Regret Attribution (`RegretAttribution`)**:
-   - Decomposes realized performance vs an unconstrained hindsight oracle into six orthogonal components:
+   - Decomposes realized performance vs an unconstrained hindsight oracle into six orthogonal components via a telescoping chain ($S_0 \dots S_6$):
      $$\text{Total Regret} = \text{Captain Regret} + \text{Sixth Man Regret} + \text{Bench Regret} + \text{Turn Sub Regret} + \text{Transfer Regret} + \text{Formation Regret}$$
-   - Enforces a mathematical identity assertion ensuring the residual error $|\text{residual}| \le 1.0$ floating point tolerance.
+   - Enforces an exact mathematical identity by telescoping construction ($\text{residual} \equiv 0.0$), with all components non-negative.

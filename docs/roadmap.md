@@ -1,7 +1,7 @@
 # EuroLeague Fantasy Manager — Roadmap
 
-> **Current planning baseline:** 2026-09-30  
-> **Current baseline:** V0.7 is completed, verified with 205 passing tests (branch `v07`).  
+> **Current planning baseline:** 2026-10-01  
+> **Current baseline:** V0.7 is completed and review-remediated, verified with 212 passing tests (branch `v07`).  
 > **Next release:** V0.8 (Basketball Context Modeling, Participation & Rotation Dynamics, Rank-Aware Decisions & Risk Profiling).
 
 ## 1. Vision
@@ -276,7 +276,7 @@ Following the release hardening pattern established in `fpl-manager`, V0.6.5 imp
 
 **Status: Completed (v0.7.0 on branch `v07`, 2026-09-30)**
 
-V0.7 un-throttled the decision engine to its full legal action space, opened the reachable player universe, brought LLM provider parity with `fpl-manager` v0.6+, and delivered the sequential historical decision replay foundation with regret attribution and forward trade propagation across 205 passing automated tests.
+V0.7 un-throttled the decision engine to its full legal action space, opened the reachable player universe, brought LLM provider parity with `fpl-manager` v0.6+, and delivered the sequential historical decision replay foundation with regret attribution and forward trade propagation across 212 passing automated tests.
 
 ## Core deliverables
 
