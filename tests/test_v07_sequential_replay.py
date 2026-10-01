@@ -21,14 +21,23 @@ from euroleague_fantasy_manager.evaluation.dataset import (
     EvaluationDatasetStore,
     build_historical_dataset,
 )
+from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.multi_team.models import PointInTimeTeamState, TeamRosterUnit
 from euroleague_fantasy_manager.multi_team.store import TeamStore
+from euroleague_fantasy_manager.optimization.constraints import (
+    OptimizationConstraints,
+    PlayerProjectionContract,
+)
+from euroleague_fantasy_manager.optimization.lineup import OptimalLineupDecision
+from euroleague_fantasy_manager.optimization.objective import LineupScoreBreakdown
 from euroleague_fantasy_manager.optimization.sequential_replay import (
     ModelComparisonLedger,
     RegretAttribution,
     SequentialDecisionSimulator,
     SequentialSeasonReplayLedger,
 )
+from euroleague_fantasy_manager.services.optimization_service import OptimizationService
+from euroleague_fantasy_manager.services.prediction_service import PredictionService
 from euroleague_fantasy_manager.services.team_service import TeamService
 from euroleague_fantasy_manager.storage import SnapshotStore, seed_historical_snapshots
 
@@ -278,7 +287,7 @@ def test_f4_model_version_comparison_ledger(test_db: Path) -> None:
 
 
 def test_f5_f7_regret_attribution_tolerance(test_db: Path) -> None:
-    """F5 & F7: Decompose regret into Captain, 6th Man, Bench, Turn Sub, Transfer regret with |residual| <= 1.0."""
+    """F5 & F7: Decompose regret into Captain, 6th Man, Bench, Turn Sub, Transfer regret with exact residual == 0."""
     sim = SequentialDecisionSimulator()
     ledger = sim.simulate_season(
         season="E2024",
@@ -297,7 +306,7 @@ def test_f5_f7_regret_attribution_tolerance(test_db: Path) -> None:
         assert rg.transfer_regret >= 0.0
         assert rg.formation_regret >= 0.0
 
-        # Mathematical decomposition summation:
+        # Mathematical decomposition summation without escape hatch:
         comp_sum = (
             rg.captain_regret
             + rg.sixth_man_regret
@@ -305,12 +314,11 @@ def test_f5_f7_regret_attribution_tolerance(test_db: Path) -> None:
             + rg.turn_substitution_regret
             + rg.transfer_regret
             + rg.formation_regret
-            + rg.residual
         )
-        assert comp_sum == pytest.approx(rg.total_regret, abs=0.05)
+        assert comp_sum == pytest.approx(rg.total_regret, abs=0.01)
 
-        # Regret attribution tolerance requirement (|residual| <= 1.0 FP):
-        assert abs(rg.residual) <= 1.0
+        # Regret attribution exact telescoping residual requirement (residual == 0.0):
+        assert rg.residual == pytest.approx(0.0, abs=1e-9)
 
     # Season-level regret attribution
     s_rg = ledger.regret_attribution
@@ -321,10 +329,9 @@ def test_f5_f7_regret_attribution_tolerance(test_db: Path) -> None:
         + s_rg.turn_substitution_regret
         + s_rg.transfer_regret
         + s_rg.formation_regret
-        + s_rg.residual
     )
-    assert s_sum == pytest.approx(ledger.avg_regret, abs=0.05)
-    assert abs(s_rg.residual) <= 1.0
+    assert s_sum == pytest.approx(ledger.avg_regret, abs=0.01)
+    assert s_rg.residual == pytest.approx(0.0, abs=0.01)
 
 
 def test_f8_zero_mutation_invariant(test_db: Path) -> None:
@@ -416,3 +423,361 @@ def test_cli_round_aware_entry(test_db: Path) -> None:
     pids = {u.player_id for u in team_r1_post}
     assert 111 in pids
     assert 104 not in pids
+
+
+def test_regret_attribution_non_negativity_in_small_total_regime() -> None:
+    """B1.3 / Step 3.2: Non-negativity in small-total regime (total_regret < 0.2).
+
+    In the previous implementation with rescaling, total_regret < 0.2 resulted in negative scale
+    and negative regret components (e.g. transfer_regret = -0.15).
+    Under the telescoping chain, every component must remain >= 0.0 with residual == 0.
+    """
+    sim = SequentialDecisionSimulator()
+    dummy_breakdown = LineupScoreBreakdown(
+        formation="2G-2F-1C",
+        starter_score=100.0,
+        captain_bonus=0.0,
+        sixth_man_score=0.0,
+        bench_score=0.0,
+        head_coach_score=0.0,
+        raw_expected_total=100.0,
+        risk_adjustment=0.0,
+        option_value_bonus=0.0,
+        objective_value=100.0,
+    )
+    # Lineup where captain is player 1 (scored 10.05), but player 2 scored 10.15 (diff = 0.10 FP)
+    lineup = OptimalLineupDecision(
+        round_number=1,
+        formation="2G-2F-1C",
+        starter_ids=(1, 2, 3, 4, 5),
+        captain_id=1,
+        vice_captain_id=2,
+        sixth_man_id=6,
+        bench_ids=(7, 8, 9, 10),
+        head_coach_id=11,
+        breakdown=dummy_breakdown,
+        is_valid=True,
+        validation_errors=(),
+    )
+    oracle_lineup = OptimalLineupDecision(
+        round_number=1,
+        formation="2G-2F-1C",
+        starter_ids=(1, 2, 3, 4, 5),
+        captain_id=2,
+        vice_captain_id=1,
+        sixth_man_id=6,
+        bench_ids=(7, 8, 9, 10),
+        head_coach_id=11,
+        breakdown=dummy_breakdown,
+        is_valid=True,
+        validation_errors=(),
+    )
+    actuals = {
+        1: 10.05,
+        2: 10.15,
+        3: 8.0,
+        4: 8.0,
+        5: 8.0,
+        6: 7.0,
+        7: 5.0,
+        8: 5.0,
+        9: 5.0,
+        10: 5.0,
+        11: 10.0,
+    }
+    s0 = 10.05 * 2.0 + 10.15 + 8.0 * 3 + 7.0 + 5.0 * 4 * 0.5 + 10.0
+
+    rg = sim._compute_regret_attribution(
+        pre_lineup=lineup,
+        chosen_lineup=lineup,
+        model_squad_oracle_lineup=oracle_lineup,
+        oracle_lineup=oracle_lineup,
+        actuals=actuals,
+        pre_sub_score=s0,
+        post_sub_score=s0,
+    )
+    assert rg.total_regret < 0.20
+    assert rg.total_regret == pytest.approx(0.10, abs=0.01)
+    assert rg.captain_regret >= 0.0
+    assert rg.sixth_man_regret >= 0.0
+    assert rg.bench_regret >= 0.0
+    assert rg.turn_substitution_regret >= 0.0
+    assert rg.transfer_regret >= 0.0
+    assert rg.formation_regret >= 0.0
+    assert rg.residual == pytest.approx(0.0, abs=1e-9)
+    # Sum without escape hatch:
+    comp_sum = (
+        rg.captain_regret
+        + rg.sixth_man_regret
+        + rg.bench_regret
+        + rg.turn_substitution_regret
+        + rg.transfer_regret
+        + rg.formation_regret
+    )
+    assert comp_sum == pytest.approx(rg.total_regret, abs=0.01)
+
+
+def test_transfer_regret_is_responsive() -> None:
+    """B1.1 / Step 3.3: Transfer regret must respond to transfer quality, not return a fixed 1.5 constant."""
+    sim = SequentialDecisionSimulator()
+    dummy_breakdown = LineupScoreBreakdown(
+        formation="2G-2F-1C",
+        starter_score=100.0,
+        captain_bonus=0.0,
+        sixth_man_score=0.0,
+        bench_score=0.0,
+        head_coach_score=0.0,
+        raw_expected_total=100.0,
+        risk_adjustment=0.0,
+        option_value_bonus=0.0,
+        objective_value=100.0,
+    )
+    actuals = {i: 10.0 for i in range(1, 20)}
+    actuals[1] = 25.0
+    actuals[12] = 30.0  # high-scoring transfer target
+    actuals[13] = 40.0  # even higher transfer target
+
+    base_lineup = OptimalLineupDecision(
+        round_number=1,
+        formation="2G-2F-1C",
+        starter_ids=(1, 2, 3, 4, 5),
+        captain_id=1,
+        vice_captain_id=2,
+        sixth_man_id=6,
+        bench_ids=(7, 8, 9, 10),
+        head_coach_id=11,
+        breakdown=dummy_breakdown,
+        is_valid=True,
+        validation_errors=(),
+    )
+
+    # Scenario 1: Model squad is identical to oracle squad -> transfer regret is 0.0
+    rg_optimal = sim._compute_regret_attribution(
+        pre_lineup=base_lineup,
+        chosen_lineup=base_lineup,
+        model_squad_oracle_lineup=base_lineup,
+        oracle_lineup=base_lineup,
+        actuals=actuals,
+        pre_sub_score=100.0,
+        post_sub_score=100.0,
+    )
+    assert rg_optimal.transfer_regret == 0.0, "Optimal transfers must have 0.0 transfer regret, not 1.5"
+
+    # Scenario 2: Oracle squad replaced player 5 with player 12 (+20 FP gain)
+    oracle_1 = OptimalLineupDecision(
+        round_number=1,
+        formation="2G-2F-1C",
+        starter_ids=(1, 2, 3, 4, 12),
+        captain_id=1,
+        vice_captain_id=2,
+        sixth_man_id=6,
+        bench_ids=(7, 8, 9, 10),
+        head_coach_id=11,
+        breakdown=dummy_breakdown,
+        is_valid=True,
+        validation_errors=(),
+    )
+    rg_diff1 = sim._compute_regret_attribution(
+        pre_lineup=base_lineup,
+        chosen_lineup=base_lineup,
+        model_squad_oracle_lineup=base_lineup,
+        oracle_lineup=oracle_1,
+        actuals=actuals,
+        pre_sub_score=100.0,
+        post_sub_score=100.0,
+    )
+
+    # Scenario 3: Oracle squad replaced player 5 with player 13 (+30 FP gain)
+    oracle_2 = OptimalLineupDecision(
+        round_number=1,
+        formation="2G-2F-1C",
+        starter_ids=(1, 2, 3, 4, 13),
+        captain_id=1,
+        vice_captain_id=2,
+        sixth_man_id=6,
+        bench_ids=(7, 8, 9, 10),
+        head_coach_id=11,
+        breakdown=dummy_breakdown,
+        is_valid=True,
+        validation_errors=(),
+    )
+    rg_diff2 = sim._compute_regret_attribution(
+        pre_lineup=base_lineup,
+        chosen_lineup=base_lineup,
+        model_squad_oracle_lineup=base_lineup,
+        oracle_lineup=oracle_2,
+        actuals=actuals,
+        pre_sub_score=100.0,
+        post_sub_score=100.0,
+    )
+
+    assert rg_diff1.transfer_regret > 0.0
+    assert rg_diff2.transfer_regret > rg_diff1.transfer_regret
+    assert rg_diff1.transfer_regret != rg_diff2.transfer_regret
+
+
+def test_regret_attribution_per_component_sensitivity() -> None:
+    """B1.4 / Step 3.4: Sensitivity check: when only one decision is sub-optimal, that component dominates."""
+    sim = SequentialDecisionSimulator()
+    dummy_breakdown = LineupScoreBreakdown(
+        formation="2G-2F-1C",
+        starter_score=100.0,
+        captain_bonus=0.0,
+        sixth_man_score=0.0,
+        bench_score=0.0,
+        head_coach_score=0.0,
+        raw_expected_total=100.0,
+        risk_adjustment=0.0,
+        option_value_bonus=0.0,
+        objective_value=100.0,
+    )
+
+    # Base: optimal lineup
+    actuals = {1: 30.0, 2: 10.0, 3: 10.0, 4: 10.0, 5: 10.0, 6: 20.0, 7: 5.0, 8: 5.0, 9: 5.0, 10: 5.0, 11: 10.0}
+    optimal_lineup = OptimalLineupDecision(
+        round_number=1,
+        formation="2G-2F-1C",
+        starter_ids=(1, 2, 3, 4, 5),
+        captain_id=1,  # 30.0 (best)
+        vice_captain_id=2,
+        sixth_man_id=6,  # 20.0 (best bench)
+        bench_ids=(7, 8, 9, 10),
+        head_coach_id=11,
+        breakdown=dummy_breakdown,
+        is_valid=True,
+        validation_errors=(),
+    )
+
+    # 1. Only captain is sub-optimal (picked player 2 instead of 1 -> 20 FP lost)
+    bad_captain = OptimalLineupDecision(
+        round_number=1,
+        formation="2G-2F-1C",
+        starter_ids=(1, 2, 3, 4, 5),
+        captain_id=2,
+        vice_captain_id=1,
+        sixth_man_id=6,
+        bench_ids=(7, 8, 9, 10),
+        head_coach_id=11,
+        breakdown=dummy_breakdown,
+        is_valid=True,
+        validation_errors=(),
+    )
+    rg_cap = sim._compute_regret_attribution(
+        pre_lineup=bad_captain,
+        chosen_lineup=bad_captain,
+        model_squad_oracle_lineup=optimal_lineup,
+        oracle_lineup=optimal_lineup,
+        actuals=actuals,
+        pre_sub_score=100.0,
+        post_sub_score=100.0,
+    )
+    assert rg_cap.captain_regret == pytest.approx(20.0, abs=0.1)
+    assert rg_cap.sixth_man_regret == 0.0
+    assert rg_cap.transfer_regret == 0.0
+    assert rg_cap.turn_substitution_regret == 0.0
+
+    # 2. Only sixth man is sub-optimal (picked player 7 instead of 6 -> 0.5 * (20 - 5) = 7.5 FP lost)
+    bad_sixth = OptimalLineupDecision(
+        round_number=1,
+        formation="2G-2F-1C",
+        starter_ids=(1, 2, 3, 4, 5),
+        captain_id=1,
+        vice_captain_id=2,
+        sixth_man_id=7,
+        bench_ids=(6, 8, 9, 10),
+        head_coach_id=11,
+        breakdown=dummy_breakdown,
+        is_valid=True,
+        validation_errors=(),
+    )
+    rg_sixth = sim._compute_regret_attribution(
+        pre_lineup=bad_sixth,
+        chosen_lineup=bad_sixth,
+        model_squad_oracle_lineup=optimal_lineup,
+        oracle_lineup=optimal_lineup,
+        actuals=actuals,
+        pre_sub_score=100.0,
+        post_sub_score=100.0,
+    )
+    assert rg_sixth.sixth_man_regret == pytest.approx(7.5, abs=0.1)
+    assert rg_sixth.captain_regret == 0.0
+    assert rg_sixth.transfer_regret == 0.0
+    assert rg_sixth.turn_substitution_regret == 0.0
+
+
+def test_optimization_service_clamps_max_trades_to_transfers_remaining(test_db: Path) -> None:
+    """G2 / Step 5: OptimizationService clamps max_trades to team.transfers_remaining."""
+    team_store = TeamStore(db_path=test_db)
+    team_service = TeamService(store=team_store)
+    pred_service = PredictionService(database_path=test_db)
+    opt_service = OptimizationService(team_service=team_service, prediction_service=pred_service)
+
+    squad_units = [
+        TeamRosterUnit(101, "G", "G1", "PAO", 80, 80, is_starter=True, is_captain=True),
+        TeamRosterUnit(102, "G", "G2", "OLY", 80, 80, is_starter=True),
+        TeamRosterUnit(103, "G", "G3", "RMB", 80, 80, is_bench=True),
+        TeamRosterUnit(104, "G", "G4", "BAR", 80, 80, is_bench=True),
+        TeamRosterUnit(105, "F", "F1", "FBD", 80, 80, is_starter=True),
+        TeamRosterUnit(106, "F", "F2", "EFS", 80, 80, is_starter=True),
+        TeamRosterUnit(107, "F", "F3", "MTA", 80, 80, is_sixth_man=True),
+        TeamRosterUnit(108, "F", "F4", "ZAL", 80, 80, is_bench=True),
+        TeamRosterUnit(109, "C", "C1", "ASV", 80, 80, is_starter=True),
+        TeamRosterUnit(110, "C", "C2", "BER", 80, 80, is_bench=True),
+        TeamRosterUnit(1001, "HC", "HC1", "PAO", 80, 80, is_coach=True),
+    ]
+    team_service.create_team(
+        team_id="clamp_test_team",
+        name="Clamp Test Team",
+        season="2024/25",
+        round_number=1,
+        bank_tenths=100,
+        squad=squad_units,
+    )
+    team = team_service.get_team("clamp_test_team")
+    team.transfers_remaining = 1
+    team_service.store.update_team(team)
+
+    res = opt_service.optimize_transfers("clamp_test_team", season="2024/25", round_number=1, max_trades=4)
+    for rec in res.recommendations:
+        assert rec.trade_count <= 1, f"Expected at most 1 trade, got {rec.trade_count}"
+
+
+def test_season_replay_is_deterministic(test_db: Path) -> None:
+    """G3 / Step 7: simulate_season produces identical ledgers field-by-field across runs."""
+    sim = SequentialDecisionSimulator()
+    run1 = sim.simulate_season(season="E2024", database_path=test_db, model_name="season_mean", rounds=[1, 2, 3])
+    run2 = sim.simulate_season(season="E2024", database_path=test_db, model_name="season_mean", rounds=[1, 2, 3])
+
+    assert run1.to_dict() == run2.to_dict()
+
+
+def test_transfer_optimizer_k4_is_deterministic(test_db: Path) -> None:
+    """G4 / Step 7: optimize_transfers with max_trades=4 is fully deterministic across runs."""
+    sim = SequentialDecisionSimulator()
+    contracts, actuals, _ = sim._load_round_data("E2024", 1, test_db, "season_mean")
+    squad = sim._select_initial_squad(contracts)
+
+    sq1, bank1, moves1, gain1 = sim._optimize_transfers(squad, contracts, 0, 1, max_transfers=4)
+    sq2, bank2, moves2, gain2 = sim._optimize_transfers(squad, contracts, 0, 1, max_transfers=4)
+
+    assert [p.player_id for p in sq1] == [p.player_id for p in sq2]
+    assert bank1 == bank2
+    assert moves1 == moves2
+    assert gain1 == gain2
+
+
+def test_lengthened_season_replay_34_rounds(tmp_path: Path) -> None:
+    """G3 / Step 7: Realistic full 34-round season replay executes cleanly without drift or float error."""
+    db_path = tmp_path / "season_34.sqlite3"
+    build_historical_dataset(database_path=db_path, seasons=("E2024",), rounds_per_season=34)
+    seed_historical_snapshots(database_path=db_path, seasons=("E2024",), rounds_per_season=34)
+
+    sim = SequentialDecisionSimulator()
+    ledger = sim.simulate_season(season="E2024", database_path=db_path, model_name="season_mean")
+
+    assert ledger.rounds_evaluated == 34
+    assert len(ledger.round_results) == 34
+    for r in ledger.round_results:
+        assert r.regret.residual == pytest.approx(0.0, abs=1e-9)
+        assert r.regret.total_regret >= 0.0
+

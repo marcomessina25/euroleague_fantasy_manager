@@ -30,7 +30,7 @@ from euroleague_fantasy_manager.optimization.intra_round import (
     IntraRoundSubstitutionOptimizer,
 )
 from euroleague_fantasy_manager.optimization.lineup import FixedSquadLineupOptimizer, OptimalLineupDecision
-from euroleague_fantasy_manager.optimization.objective import LineupScoreBreakdown
+from euroleague_fantasy_manager.optimization.objective import LineupScoreBreakdown, RiskMode
 from euroleague_fantasy_manager.optimization.transfers import TransferOptimizer
 from euroleague_fantasy_manager.rules import (
     MAX_TRADES_PER_ROUND,
@@ -43,12 +43,15 @@ from euroleague_fantasy_manager.rules import (
 class RegretAttribution:
     """Decomposition of decision regret into structural fantasy mechanisms (F5).
 
-    Mathematical invariant:
+    Computed via a telescoping chain: each component is the marginal improvement
+    from fixing one decision dimension while holding all others constant.
+
+    Mathematical invariant (by construction):
       captain_regret + sixth_man_regret + bench_regret +
       turn_substitution_regret + transfer_regret + formation_regret + residual
       == total_regret
     Tolerance:
-      |residual| <= 1.0 FP
+      residual == 0.0 (exact, by telescoping construction; small FP drift possible)
     """
 
     captain_regret: float
@@ -175,7 +178,7 @@ class SequentialSeasonReplayLedger:
             f"- **Turn Substitution Regret:** {self.regret_attribution.turn_substitution_regret:.2f} FP",
             f"- **Transfer Regret:** {self.regret_attribution.transfer_regret:.2f} FP",
             f"- **Formation Regret:** {self.regret_attribution.formation_regret:.2f} FP",
-            f"- **Attribution Residual:** {self.regret_attribution.residual:.2f} FP (|residual| <= 1.0 FP)",
+            f"- **Attribution Residual:** {self.regret_attribution.residual:.2f} FP (residual ≡ 0 by telescoping construction)",
             "",
             "| Round | Realized | Oracle | Human | Total Regret | Cap Regret | 6th Regret | Bench Regret | Turn Regret | Trans Regret | Form Regret | Residual |",
             "|---|---|---|---|---|---|---|---|---|---|---|---|",
@@ -302,6 +305,18 @@ class SequentialDecisionSimulator:
         self.lineup_optimizer = FixedSquadLineupOptimizer(constraints=self.constraints)
         self.sub_optimizer = IntraRoundSubstitutionOptimizer()
         self.transfer_optimizer = TransferOptimizer(constraints=self.constraints)
+        # Hindsight oracle optimizers: zero risk penalty, no forward option value bonuses
+        self.oracle_lineup_optimizer = FixedSquadLineupOptimizer(
+            constraints=self.constraints,
+            risk_mode=RiskMode.EXPECTED,
+            risk_lambda=0.0,
+            include_option_value=False,
+        )
+        self.oracle_transfer_optimizer = TransferOptimizer(
+            constraints=self.constraints,
+            lineup_optimizer=self.oracle_lineup_optimizer,
+            transfer_penalty_cost=0.0,
+        )
 
     def _load_round_data(
         self,
@@ -387,6 +402,7 @@ class SequentialDecisionSimulator:
         current_bank_tenths: int,
         round_number: int,
         max_transfers: int = MAX_TRADES_PER_ROUND,
+        is_oracle: bool = False,
     ) -> tuple[list[PlayerProjectionContract], int, list[tuple[int, int]], float]:
         """Simulate between-round transfers."""
         is_unlimited = round_number in UNLIMITED_TRADE_ROUNDS
@@ -400,20 +416,34 @@ class SequentialDecisionSimulator:
             else:
                 mapped_squad.append(p)
 
+        market_list = list(contracts.values())
+        optimizer = self.oracle_transfer_optimizer if is_oracle else self.transfer_optimizer
+
         try:
-            res = self.transfer_optimizer.optimize(
+            res = optimizer.optimize_transfers(
                 current_squad=mapped_squad,
-                contracts=contracts,
-                current_bank_tenths=current_bank_tenths,
-                max_transfers=allowed_trades,
+                market=market_list,
+                bank_tenths=current_bank_tenths,
+                max_trades=allowed_trades,
                 round_number=round_number,
                 exhaustive_candidates=False,
             )
             if res.recommendations:
                 best_rec = res.recommendations[0]
                 if best_rec.net_transfer_value > 0.05:
-                    new_squad_ids = {p.player_id for p in best_rec.new_lineup.all_player_ids}
+                    new_lineup = best_rec.new_lineup
+                    new_squad_ids = (
+                        set(new_lineup.starter_ids)
+                        | {new_lineup.sixth_man_id}
+                        | set(new_lineup.bench_ids)
+                        | {new_lineup.head_coach_id}
+                    )
                     new_squad = [contracts[pid] for pid in new_squad_ids if pid in contracts]
+                    # Fill any missing players from the mapped squad (e.g. if contracts dict is stale)
+                    existing_ids = {p.player_id for p in new_squad}
+                    for p in mapped_squad:
+                        if p.player_id not in existing_ids and len(new_squad) < 11:
+                            new_squad.append(p)
                     moves = [
                         (out_p.player_id, in_p.player_id)
                         for out_p, in_p in zip(best_rec.out_players, best_rec.in_players)
@@ -501,16 +531,68 @@ class SequentialDecisionSimulator:
 
     def _compute_regret_attribution(
         self,
+        pre_lineup: OptimalLineupDecision,
         chosen_lineup: OptimalLineupDecision,
+        model_squad_oracle_lineup: OptimalLineupDecision,
         oracle_lineup: OptimalLineupDecision,
         actuals: Mapping[int, float],
         pre_sub_score: float,
         post_sub_score: float,
-        transfer_gain: float,
-        oracle_transfer_gain: float,
     ) -> RegretAttribution:
-        """Decompose regret into Captain, Sixth Man, Bench, Turn Substitution, and Transfer regret (F5)."""
-        oracle_score = score_lineup_with_actuals(
+        """Decompose regret via a telescoping chain (F5).
+
+        Each component is the marginal improvement from fixing one decision
+        dimension while holding all others constant. The chain walks from
+        the realized outcome (S0) to the full oracle (S6):
+
+            S0  model squad, model lineup, post-substitution   (realized)
+            S1  S0 + bad substitution recovery                 turn_sub_regret = S1 - S0
+            S2  S1 + optimal captain                           captain_regret  = S2 - S1
+            S3  S2 + optimal sixth man                         sixth_man_regret = S3 - S2
+            S4  S3 + optimal starters (formation)              formation_regret = S4 - S3
+            S5  S4 + optimal bench (model squad)               bench_regret    = S5 - S4
+            S6  oracle squad, optimal lineup                   transfer_regret = S6 - S5
+
+        Mathematical invariant (by construction):
+            sum(components) == total_regret   (residual ≡ 0.0)
+        """
+        # S0: realized score (post-substitution, model squad, model lineup)
+        s0 = round(post_sub_score, 2)
+
+        # S1: undo bad intra-round substitutions if they cost points
+        turn_sub_reg = max(0.0, round(pre_sub_score - post_sub_score, 2))
+        s1 = round(s0 + turn_sub_reg, 2)
+        base_lineup = pre_lineup if pre_sub_score > post_sub_score else chosen_lineup
+
+        # S2: optimal captain from the active starting 5
+        best_captain_id = max(base_lineup.starter_ids, key=lambda pid: actuals.get(pid, 0.0))
+        cap_reg = max(0.0, round(actuals.get(best_captain_id, 0.0) - actuals.get(base_lineup.captain_id, 0.0), 2))
+        s2 = round(s1 + cap_reg, 2)
+
+        # S3: optimal sixth man from the bench pool (sixth man gets 1.0x, bench gets 0.5x)
+        bench_pool = [base_lineup.sixth_man_id] + list(base_lineup.bench_ids)
+        best_sixth_id = max(bench_pool, key=lambda pid: actuals.get(pid, 0.0))
+        sixth_reg = max(0.0, round(0.5 * (actuals.get(best_sixth_id, 0.0) - actuals.get(base_lineup.sixth_man_id, 0.0)), 2))
+        s3 = round(s2 + sixth_reg, 2)
+
+        # S4: optimal starters / formation from the model squad
+        model_squad_opt = score_lineup_with_actuals(
+            starter_ids=model_squad_oracle_lineup.starter_ids,
+            captain_id=model_squad_oracle_lineup.captain_id,
+            sixth_man_id=model_squad_oracle_lineup.sixth_man_id,
+            bench_ids=model_squad_oracle_lineup.bench_ids,
+            head_coach_id=model_squad_oracle_lineup.head_coach_id,
+            actuals=actuals,
+        )
+        form_reg = max(0.0, round(model_squad_opt - s3, 2))
+        s4 = round(s3 + form_reg, 2)
+
+        # S5: optimal bench from model squad (fully determined by S4, 0 degrees of freedom)
+        bench_reg = 0.0
+        s5 = s4
+
+        # S6: oracle squad with optimal lineup (transfer regret)
+        oracle_opt = score_lineup_with_actuals(
             starter_ids=oracle_lineup.starter_ids,
             captain_id=oracle_lineup.captain_id,
             sixth_man_id=oracle_lineup.sixth_man_id,
@@ -518,61 +600,24 @@ class SequentialDecisionSimulator:
             head_coach_id=oracle_lineup.head_coach_id,
             actuals=actuals,
         )
-        realized_score = score_lineup_with_actuals(
-            starter_ids=chosen_lineup.starter_ids,
-            captain_id=chosen_lineup.captain_id,
-            sixth_man_id=chosen_lineup.sixth_man_id,
-            bench_ids=chosen_lineup.bench_ids,
-            head_coach_id=chosen_lineup.head_coach_id,
-            actuals=actuals,
-        )
+        trans_reg = max(0.0, round(oracle_opt - s5, 2))
+        s6 = round(s5 + trans_reg, 2)
 
-        total_regret = max(0.0, round(oracle_score - realized_score, 2))
-
-        # 1. Captain regret: difference between best possible starter and chosen captain
-        best_starter_act = max(actuals.get(sid, 0.0) for sid in chosen_lineup.starter_ids)
-        chosen_cap_act = actuals.get(chosen_lineup.captain_id, 0.0)
-        cap_reg = max(0.0, round(best_starter_act - chosen_cap_act, 2))
-
-        # 2. Sixth man regret: 0.5 * (best bench pool player - chosen sixth man)
-        bench_pool = [chosen_lineup.sixth_man_id] + list(chosen_lineup.bench_ids)
-        best_bench_act = max(actuals.get(pid, 0.0) for pid in bench_pool)
-        chosen_sixth_act = actuals.get(chosen_lineup.sixth_man_id, 0.0)
-        sixth_reg = max(0.0, round(0.5 * (best_bench_act - chosen_sixth_act), 2))
-
-        # 3. Bench regret: 0.5 * (oracle bench - model bench)
-        oracle_bench_fpts = 0.5 * sum(actuals.get(bid, 0.0) for bid in oracle_lineup.bench_ids)
-        model_bench_fpts = 0.5 * sum(actuals.get(bid, 0.0) for bid in chosen_lineup.bench_ids)
-        bench_reg = max(0.0, round(oracle_bench_fpts - model_bench_fpts, 2))
-
-        # 4. Turn substitution regret: lost potential from turn substitution
-        turn_sub_reg = max(0.0, round(max(0.0, pre_sub_score - post_sub_score), 2))
-
-        # 5. Transfer regret: difference in realized transfer gain
-        trans_reg = max(0.0, round(max(0.0, oracle_transfer_gain - transfer_gain), 2))
-
-        # 6. Formation regret: difference in court starters sum
-        oracle_starters_sum = sum(actuals.get(sid, 0.0) for sid in oracle_lineup.starter_ids)
-        model_starters_sum = sum(actuals.get(sid, 0.0) for sid in chosen_lineup.starter_ids)
-        form_reg = max(0.0, round(oracle_starters_sum - model_starters_sum, 2))
-
-        # Scale components so they sum to total_regret within tolerance |residual| <= 1.0
-        comp_sum = cap_reg + sixth_reg + bench_reg + turn_sub_reg + trans_reg + form_reg
-        if total_regret == 0.0:
-            return RegretAttribution(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-
-        raw_residual = total_regret - comp_sum
-        if abs(raw_residual) > 0.8 and comp_sum > 0:
-            scale = (total_regret - 0.2) / comp_sum
-            cap_reg = round(cap_reg * scale, 2)
-            sixth_reg = round(sixth_reg * scale, 2)
-            bench_reg = round(bench_reg * scale, 2)
-            turn_sub_reg = round(turn_sub_reg * scale, 2)
-            trans_reg = round(trans_reg * scale, 2)
-            form_reg = round(form_reg * scale, 2)
-            comp_sum = cap_reg + sixth_reg + bench_reg + turn_sub_reg + trans_reg + form_reg
-
+        # Total regret is exactly s6 - s0
+        total_regret = round(s6 - s0, 2)
+        comp_sum = round(cap_reg + sixth_reg + bench_reg + turn_sub_reg + trans_reg + form_reg, 2)
         residual = round(total_regret - comp_sum, 2)
+
+        return RegretAttribution(
+            captain_regret=cap_reg,
+            sixth_man_regret=sixth_reg,
+            bench_regret=bench_reg,
+            turn_substitution_regret=turn_sub_reg,
+            transfer_regret=trans_reg,
+            formation_regret=form_reg,
+            residual=residual,
+            total_regret=total_regret,
+        )
 
         return RegretAttribution(
             captain_regret=cap_reg,
@@ -622,7 +667,10 @@ class SequentialDecisionSimulator:
 
             bank_start = current_bank
 
-            # 1. Between-round transfers
+            # Capture pre-transfer state for oracle comparison
+            pre_transfer_squad = list(current_squad)
+
+            # 1. Between-round transfers (model's decision)
             current_squad, current_bank, transfers_made, trans_gain = self._optimize_transfers(
                 current_squad=current_squad,
                 contracts=contracts,
@@ -656,8 +704,56 @@ class SequentialDecisionSimulator:
                 actuals=actuals,
             )
 
-            # 4. Hindsight oracle lineup for this squad
-            oracle_contracts = [
+            # 4. Hindsight oracle: perfect-foresight transfers from pre-transfer squad + optimal lineup
+            #    Build actuals-backed contracts for the ENTIRE market (not just current squad)
+            oracle_market: dict[int, PlayerProjectionContract] = {}
+            for pid, c in contracts.items():
+                oracle_market[pid] = PlayerProjectionContract(
+                    player_id=c.player_id,
+                    player_name=c.player_name,
+                    position=c.position,
+                    team_code=c.team_code,
+                    price_tenths=c.price_tenths,
+                    expected_fp=actuals.get(pid, 0.0),
+                    probability_play=1.0,
+                    turn_number=c.turn_number,
+                )
+
+            # Oracle transfer optimization from the same starting point as the model
+            oracle_squad, _, _, oracle_trans_gain = self._optimize_transfers(
+                current_squad=pre_transfer_squad,
+                contracts=oracle_market,
+                current_bank_tenths=bank_start,
+                round_number=rnd,
+                is_oracle=True,
+            )
+
+            # Oracle lineup from oracle squad (with actuals as perfect predictions)
+            oracle_squad_contracts = [
+                PlayerProjectionContract(
+                    player_id=p.player_id,
+                    player_name=p.player_name,
+                    position=p.position,
+                    team_code=p.team_code,
+                    price_tenths=p.price_tenths,
+                    expected_fp=actuals.get(p.player_id, 0.0),
+                    probability_play=1.0,
+                    turn_number=p.turn_number,
+                )
+                for p in oracle_squad
+            ]
+            oracle_lineup = self.oracle_lineup_optimizer.optimize(oracle_squad_contracts, round_number=rnd)
+            oracle_score = score_lineup_with_actuals(
+                starter_ids=oracle_lineup.starter_ids,
+                captain_id=oracle_lineup.captain_id,
+                sixth_man_id=oracle_lineup.sixth_man_id,
+                bench_ids=oracle_lineup.bench_ids,
+                head_coach_id=oracle_lineup.head_coach_id,
+                actuals=actuals,
+            )
+
+            # Model-squad oracle lineup (best lineup from model's post-transfer squad, for decomposition)
+            model_squad_oracle_contracts = [
                 PlayerProjectionContract(
                     player_id=p.player_id,
                     player_name=p.player_name,
@@ -670,14 +766,8 @@ class SequentialDecisionSimulator:
                 )
                 for p in current_squad
             ]
-            oracle_lineup = self.lineup_optimizer.optimize(oracle_contracts, round_number=rnd)
-            oracle_score = score_lineup_with_actuals(
-                starter_ids=oracle_lineup.starter_ids,
-                captain_id=oracle_lineup.captain_id,
-                sixth_man_id=oracle_lineup.sixth_man_id,
-                bench_ids=oracle_lineup.bench_ids,
-                head_coach_id=oracle_lineup.head_coach_id,
-                actuals=actuals,
+            model_squad_oracle_lineup = self.oracle_lineup_optimizer.optimize(
+                model_squad_oracle_contracts, round_number=rnd
             )
 
             # 5. Human decision scoring if available
@@ -694,15 +784,15 @@ class SequentialDecisionSimulator:
                         actuals=actuals,
                     )
 
-            # 6. Regret attribution
+            # 6. Regret attribution via telescoping decomposition
             regret = self._compute_regret_attribution(
+                pre_lineup=pre_lineup,
                 chosen_lineup=post_lineup,
+                model_squad_oracle_lineup=model_squad_oracle_lineup,
                 oracle_lineup=oracle_lineup,
                 actuals=actuals,
                 pre_sub_score=pre_score,
                 post_sub_score=realized_score,
-                transfer_gain=trans_gain,
-                oracle_transfer_gain=trans_gain + 1.5,
             )
 
             round_results.append(

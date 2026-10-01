@@ -293,10 +293,10 @@ V0.7 un-throttled the decision engine to its full legal action space, opened the
    - Lineup editing for past rounds via GUI round selector and CLI (`elf team set-lineup --round N`), updating role flags without invalidating checkpoints.
    - Forward trade propagation: applying trades in past round $n$ logs immutable events to `team_transfers`, updates round-start checkpoints for $n+1 \dots$, and propagates roster updates forward while preserving `revert-round-start`.
 5. **Sequential Decision Simulation & Regret Attribution (W6 / F1–F8)**:
-   - Multi-season historical datasets for EuroLeague and EuroCup across 2022-23 … 2025-26.
+   - Synthetic multi-season replay fixtures for EuroLeague and EuroCup across 2022-23 … 2025-26 for offline regression replay (live historical box-score ingestion scheduled for V0.8).
    - Point-in-time financial, availability, and valuation reconstruction (`reconstruct_point_in_time_state`).
    - `SequentialDecisionSimulator` simulating transfers, starting five, captain, sixth man, and T1 $\to$ T2 turn substitutions under a verified zero-mutation invariant.
-   - `RegretAttribution` decomposing manager regret into Captain, Sixth Man, Bench, Turn Substitution, Transfer, and Formation regret, enforcing mathematical identity within $|\text{residual}| \le 1.0$ floating point tolerance.
+   - `RegretAttribution` decomposing decision regret into Captain, Sixth Man, Bench, Turn Substitution, Transfer, and Formation regret, satisfying exact summation ($\text{residual} \equiv 0.0$) by telescoping construction.
    - `ModelComparisonLedger` benchmarking multi-model strategies against human manager decisions and hindsight oracle.
 6. **CLI Round-Aware Entry (§3.3)**:
    - Added `elf team set-lineup --round N` and `elf team trade --round N` commands wired to `TeamService`.
@@ -322,6 +322,8 @@ Aligning with `fpl-manager` V0.8, introduce basketball-specific contextual facto
    - Classify players into Core (high ownership, high floor), Shield (defensive rank protection), and Sword (differential ceiling plays).
 4. **Intra-Round Turn Real-Option Modeling**:
    - Quantify the mathematical value of scheduling flexibility: holding T2 bench assets to insure against T1 underperformance.
+5. **Live Historical Box-Score Ingestion**:
+   - Ingestion connectors for verified historical 2022-23 … 2025-26 EuroLeague and EuroCup box scores, transitioning from the V0.7 synthetic fixtures to real-world ground truth.
 
 ---
 

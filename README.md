@@ -374,7 +374,8 @@ V0.7 un-throttles the decision engine to its full legal action space, makes the 
 ### 4. Sequential Decision Simulation & Regret Attribution
 
 - **Deterministic Season Simulation**: `SequentialDecisionSimulator` replays entire multi-round seasons end-to-end with transfer, lineup, captaincy, sixth man, and T1 $\to$ T2 turn substitutions under a zero-mutation invariant.
-- **Regret Decomposition**: `RegretAttribution` decomposes manager regret into Captain, Sixth Man, Bench, Turn Substitution, Transfer, and Formation regret, enforcing mathematical identity within $|\text{residual}| \le 1.0$ floating point tolerance.
+- **Synthetic Multi-Season Fixtures**: Deterministic synthetic multi-season replay fixtures across EuroLeague and EuroCup (`E2022`-`E2025`, `U2022`-`U2025`) enable offline replay evaluation with zero network dependencies (genuine live box-score ingestion scheduled for V0.8).
+- **Telescoping Regret Decomposition**: `RegretAttribution` decomposes decision regret into Captain, Sixth Man, Bench, Turn Substitution, Transfer, and Formation regret, satisfying exact summation ($\text{residual} \equiv 0$) by telescoping construction.
 - **Multi-Model Comparison Ledgers**: Benchmark decision strategies (Heuristic, Decomposed Models, Oracle, Human) with exportable Markdown and CSV comparison tables.
 
 ## License

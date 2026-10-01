@@ -258,6 +258,10 @@ class OptimizationService:
         team = self.team_service.get_team(team_id)
         rnd = round_number or team.round_number
 
+        # G2: Clamp max_trades against the team's actual transfers_remaining
+        # so direct API callers cannot receive suggestions exceeding budget.
+        effective_max = min(max_trades, team.transfers_remaining, MAX_TRADES_PER_ROUND)
+
         league = _team_league(team)
         squad_contracts = self._resolve_squad_contracts(team.squad, season, rnd, league=league)
         market = (
@@ -271,7 +275,7 @@ class OptimizationService:
             market=market,
             bank_tenths=team.bank_tenths,
             round_number=rnd,
-            max_trades=max_trades,
+            max_trades=effective_max,
             unlimited=unlimited,
             exhaustive_candidates=exhaustive,
         )

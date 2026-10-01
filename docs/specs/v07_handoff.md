@@ -1,9 +1,8 @@
 # V0.7 Handoff — Remaining Work
 
-> **For:** the next AI agent (or human) continuing V0.7.
-> **Branch:** `v07` (pushed to `origin/v07`, branched from `main` after PR #11 merged V0.6.5).
-> **State at handoff:** 2026-09-30. **197 tests pass**, `node --check` clean.
-> **Spec:** [`v07.md`](v07.md) is the authority. This file only tracks what is left.
+> **Superseded.** This handoff document is a historical record. All tasks were delivered in commit `f7f4dec`
+> on branch `v07` and refined during PR review remediation. See [`v07.md`](v07.md) and [`v07_review.md`](v07_review.md)
+> for current specifications and findings.
 
 ---
 
@@ -37,69 +36,44 @@
 | `8c29a42` | **W3** Player universe | `/api/workstation/players` sorted by value then sliced, making cheap players unreachable. Added `offset` + `sort` + `X-Total-Count`; GUI paginates at 100 with a sort selector. |
 | `1127f26` | **W4** LLM provider parity | Server-driven model catalog, GUI API-key input (localStorage, never server-side), sub-model selector with `*` paid marker, `auto` mode, and `intelligence/security.py::redact_secrets`. |
 | `1127f26` | **W5** Past-round lineups | `round_number` on the lineup write path, `team_transfers` event table (append-only), `GET /api/teams/{id}/rounds`, round selector on the Lineup tab. |
+| `f7f4dec` | **W6** Sequential replay & forward trade replay | Point-in-time reconstruction, past-round forward trade replay with 4-trade cap, sequential decision simulator, model comparison ledgers, telescoping regret attribution, CLI round-aware entry. |
 
 Test modules added: `tests/test_v07_trade_capacity.py`, `tests/test_v07_player_universe.py`,
-`tests/test_v07_llm_providers.py`, `tests/test_v07_past_rounds.py`.
+`tests/test_v07_llm_providers.py`, `tests/test_v07_past_rounds.py`, `tests/test_v07_sequential_replay.py`.
 
 ---
 
-## 3. What is LEFT
+## 3. Delivered scope summary
 
-### 3.1 W6 — Sequential historical replay & multi-season backtesting  ← the big one
+### 3.1 W6 — Sequential historical replay & multi-season backtesting (Delivered in `f7f4dec`)
 
-This is the roadmap's original V0.7 scope ([`../roadmap.md`](../roadmap.md) §7) and is **not started**.
-Deliverables, from the spec:
+Delivered and audited:
+1. **F1 Synthetic multi-season fixtures** — deterministic multi-season fixtures for EuroLeague and EuroCup
+   across 2022-23 … 2025-26 in `evaluation/dataset.py` and `storage.py`. (Real historical box score ingestion
+   is scheduled for V0.8).
+2. **F2 Point-in-time state reconstruction** — `reconstruct_point_in_time_state` rebuilds valuation, bank,
+   availability, and price changes at round boundaries from `team_transfers` and checkpoints.
+3. **F3 Sequential decision simulation** — `SequentialDecisionSimulator` in `optimization/sequential_replay.py`
+   simulates transfers, lineups, captaincy, sixth man, and T1→T2 turn substitutions across seasons.
+4. **F4 Model-version comparison ledgers** — `ModelComparisonLedger` compares multiple models, human play,
+   and hindsight oracle.
+5. **F5 & F7 Historical regret attribution** — decomposed via a telescoping chain (Captain, Sixth Man, Bench,
+   Turn Substitution, Transfer, Formation) with exact residual (`residual ≡ 0.0`).
 
-1. **F1 Multi-season historical datasets** — ingest historical round snapshots for EuroLeague **and** EuroCup
-   across 2022-23 … 2025-26. Look at the existing ingestion in `api.py` / `storage.py` (schema v3,
-   league-partitioned) and the dataset tooling in `evaluation/dataset.py`.
-2. **F2 Point-in-time state reconstruction** — rebuild squad valuation, bank, availability and price changes at
-   every historical round boundary. `multi_team/store.py` already stores squads per round
-   (`PRIMARY KEY (team_id, round_number, player_id)`) and round-start checkpoints
-   (`team_round_checkpoints`), plus the new `team_transfers` event log.
-3. **F3 Sequential decision simulation** — lineup, captaincy, sixth man, T1→T2 turn substitution and transfers
-   across whole seasons. Reuse `optimization/backtest.py` and `evaluation/backtest.py` rather than starting fresh.
-4. **F4 Model-version comparison ledgers** — compare decision versions against actual human decisions and a
-   hindsight oracle.
-5. **F5 Historical regret attribution** — decompose season regret into Captain / Sixth Man / Bench / Turn
-   Substitution / Transfer regret.
+### 3.2 Past-round TRADE entry with forward replay (Delivered in `f7f4dec`)
 
-Acceptance: a full season replays **deterministically with no network access in tests**; regret components sum
-to total measured regret within a documented tolerance; replay is strictly read-only w.r.t. live team state.
+Implemented with full forward propagation:
+- Past-round trades execute via `execute_transfers` and propagate forward through later rounds and checkpoints
+  using `replay_transfers_forward`.
+- Live round start checkpoint is preserved and updated (`overwrite=True`), never deleted; `revert-round-start`
+  remains functional.
+- The 4-trade cap is strictly enforced per round via point-in-time reconstruction.
 
-### 3.2 Past-round TRADE entry (deliberately deferred into W6)
+### 3.3 CLI round-aware entry (Delivered in `f7f4dec`)
 
-**Do not re-attempt this as a standalone feature — it was prototyped and rejected in review.**
-
-Why: unlike a lineup edit (which rewrites only role flags), a past-round trade changes the bank *and* the trade
-budget of that round **and every round after it**. Per-round financial state exists only as round-**start**
-checkpoints, so editing round *n* requires recomputing *n+1…* — which is precisely F2 above.
-
-The rejected prototype failed two ways, both verified by the reviewer against a seeded DB:
-- it computed `new_bank_tenths` / `rem_trades` and then **discarded them**, so the same round accepted
-  unlimited repeated trades (8 trades applied to a 4-trade round);
-- invalidating "downstream" checkpoints also deleted the **live round's** checkpoint, permanently breaking
-  `POST /api/teams/{id}/revert-round-start`.
-
-Current behaviour: `POST /api/teams/{team_id}/transfers` accepts `round_number` but returns **HTTP 400** for any
-value other than the live round, with an explanatory message. Pinned by
-`tests/test_v07_past_rounds.py::test_trades_for_a_past_round_are_rejected_not_silently_misapplied`.
-
-**When implementing in W6:** apply the trade to round *n*, then write the resulting bank/budget as the
-round-start checkpoint of *n+1*, and replay forward through the recorded `team_transfers` events to rebuild
-every later round. Keep `revert-round-start` working throughout.
-
-### 3.3 CLI round-aware entry (spec E6)
-
-The CLI has **no lineup/trade write command at all** today — only optimizer *advice*
-(`elf optimize-lineup`, `elf suggest-trades`) and team CRUD (`elf team create|show|select|delete`).
-So this is new surface, not a flag:
-
+Delivered in `cli.py`:
 - `elf team set-lineup --round N --starters … --captain … --sixth-man … --bench … --coach …`
-- `elf team trade --round N --out … --in …` (blocked on §3.2)
-
-Both should go through `TeamService` so the GUI and CLI share validation. Note `cli.py` already threads
-`--round` through `log-decision`, `update-scores` and `advise`; follow that pattern.
+- `elf team trade --round N --out … --in …`
 
 ### 3.4 Release tasks (W7)
 
