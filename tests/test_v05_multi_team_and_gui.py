@@ -1644,8 +1644,8 @@ def test_transfer_optimizer_performance_budget():
 
     opt = TransferOptimizer()
 
-    # Trade counts 1, 2, 3 and unlimited
-    for trades in (1, 2, 3):
+    # Trade counts 1..4 (the full legal action space) and unlimited
+    for trades in (1, 2, 3, 4):
         t0 = time.perf_counter()
         res = opt.optimize_transfers(current_squad=squad, market=market, bank_tenths=100, max_trades=trades)
         elapsed = time.perf_counter() - t0

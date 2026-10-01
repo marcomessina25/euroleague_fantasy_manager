@@ -8,6 +8,7 @@ from typing import Any, Mapping, Sequence
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.rules import (
     COURT_STARTERS_SIZE,
+    MAX_TRADES_PER_ROUND,
     SQUAD_QUOTAS,
     SQUAD_SIZE,
 )
@@ -248,7 +249,7 @@ class OptimizationService:
         team_id: str,
         season: str = "2026/27",
         round_number: int | None = None,
-        max_trades: int = 1,
+        max_trades: int = MAX_TRADES_PER_ROUND,
         unlimited: bool = False,
         candidate_pool: Sequence[PlayerProjectionContract] | None = None,
         exhaustive: bool = False,
@@ -256,6 +257,10 @@ class OptimizationService:
         """Find optimal trade combinations for the team."""
         team = self.team_service.get_team(team_id)
         rnd = round_number or team.round_number
+
+        # G2: Clamp max_trades against the team's actual transfers_remaining
+        # so direct API callers cannot receive suggestions exceeding budget.
+        effective_max = min(max_trades, team.transfers_remaining, MAX_TRADES_PER_ROUND)
 
         league = _team_league(team)
         squad_contracts = self._resolve_squad_contracts(team.squad, season, rnd, league=league)
@@ -270,7 +275,7 @@ class OptimizationService:
             market=market,
             bank_tenths=team.bank_tenths,
             round_number=rnd,
-            max_trades=max_trades,
+            max_trades=effective_max,
             unlimited=unlimited,
             exhaustive_candidates=exhaustive,
         )

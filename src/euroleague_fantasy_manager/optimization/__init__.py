@@ -49,6 +49,14 @@ from .transfers import (
     TransferOptimizer,
     TransferRecommendation,
 )
+from .sequential_replay import (
+    ModelComparisonLedger,
+    ModelComparisonRow,
+    RegretAttribution,
+    SequentialDecisionSimulator,
+    SequentialRoundResult,
+    SequentialSeasonReplayLedger,
+)
 
 __all__ = [
     "ConstraintValidationResult",
@@ -82,4 +90,10 @@ __all__ = [
     "OptimizationBacktestSummary",
     "RoundBacktestResult",
     "score_lineup_with_actuals",
+    "RegretAttribution",
+    "SequentialRoundResult",
+    "SequentialSeasonReplayLedger",
+    "ModelComparisonRow",
+    "ModelComparisonLedger",
+    "SequentialDecisionSimulator",
 ]

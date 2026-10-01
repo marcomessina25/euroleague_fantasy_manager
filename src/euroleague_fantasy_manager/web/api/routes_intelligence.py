@@ -16,6 +16,7 @@ from euroleague_fantasy_manager.intelligence.dossier import (
     generate_manager_dossier,
 )
 from euroleague_fantasy_manager.intelligence.providers import list_available_providers
+from euroleague_fantasy_manager.intelligence.security import redact_secrets
 from euroleague_fantasy_manager.intelligence.strategic_analysis import (
     StrategicAnalysisResult,
     analyze_dossier,
@@ -134,7 +135,7 @@ def copilot_advise_endpoint(
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Team '{req.team_id}' not found.")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Copilot advice error: {e}")
+        raise HTTPException(status_code=500, detail=redact_secrets(f"Copilot advice error: {e}"))
 
 
 @router.get("/copilot/providers")

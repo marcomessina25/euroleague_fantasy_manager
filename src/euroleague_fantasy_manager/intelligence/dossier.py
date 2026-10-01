@@ -14,6 +14,7 @@ import uuid
 from ..competition.ruleset import League, get_league_ruleset
 from ..models import Position
 from ..optimization.constraints import PlayerProjectionContract
+from ..rules import MAX_TRADES_PER_ROUND
 from ..services.optimization_service import OptimizationService
 from ..services.prediction_service import PredictionService
 from ..services.team_service import TeamService
@@ -392,7 +393,7 @@ def generate_manager_dossier(
         }
 
     transfer_options: list[DossierTransferOption] = []
-    max_trades = min(team.transfers_remaining, 3)
+    max_trades = min(team.transfers_remaining, MAX_TRADES_PER_ROUND)
     if max_trades > 0:
         try:
             tx_res = opt.optimize_transfers(

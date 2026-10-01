@@ -75,7 +75,14 @@
         <div class="card">
           <div class="card-header">
             <h2>🏀 Starting Five (Court Layout)</h2>
-            <div id="provenance-badges"></div>
+            <div style="display:flex; align-items:center; gap:0.6rem;">
+              <label for="lineup-round-select" style="font-size:0.8rem; color:var(--text-muted);">Round</label>
+              <select id="lineup-round-select" onchange="onLineupRoundChange()" title="View or backfill a past round" style="padding:0.25rem 0.5rem; font-size:0.8rem;">
+                <!-- Populated by JS from /api/teams/{id}/rounds -->
+              </select>
+              <span id="lineup-round-mode" style="font-size:0.75rem; color:var(--accent-orange); font-weight:700;"></span>
+              <div id="provenance-badges"></div>
+            </div>
           </div>
 
           <!-- Direct-Click Substitution Banner -->
@@ -277,6 +284,13 @@
                   <option value="C">Center (C)</option>
                   <option value="HC">Coach (HC)</option>
                 </select>
+                <select id="market-filter-sort" onchange="loadPlayerPool()" title="Ordering of the market list" style="padding:0.25rem 0.5rem; font-size:0.8rem;">
+                  <option value="expected_fp">Exp FP ↓</option>
+                  <option value="fp_per_credit">FP / Credit ↓</option>
+                  <option value="price_desc">Price ↓</option>
+                  <option value="price_asc">Price ↑ (cheapest)</option>
+                  <option value="name">Name A–Z</option>
+                </select>
                 <input type="text" id="market-filter-search" placeholder="Search..." oninput="loadPlayerPool()" style="padding:0.25rem 0.5rem; font-size:0.8rem; width:130px;">
               </div>
             </div>
@@ -296,6 +310,13 @@
                   <!-- Populated by JS -->
                 </tbody>
               </table>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:0.5rem; margin-top:0.5rem; padding-top:0.4rem; border-top:1px solid var(--border-color);">
+              <span id="player-pool-count" style="font-size:0.75rem; color:var(--text-muted);"></span>
+              <div style="display:flex; gap:0.35rem;">
+                <button id="player-pool-prev" class="btn btn-secondary" style="padding:0.2rem 0.55rem; font-size:0.75rem;" onclick="playerPoolPrevPage()">← Prev</button>
+                <button id="player-pool-next" class="btn btn-secondary" style="padding:0.2rem 0.55rem; font-size:0.75rem;" onclick="playerPoolNextPage()">Next →</button>
+              </div>
             </div>
           </div>
         </div>
@@ -439,7 +460,8 @@
 
           <div class="form-group">
             <label for="copilot-provider">LLM Provider</label>
-            <select id="copilot-provider" class="form-control">
+            <select id="copilot-provider" class="form-control" onchange="onProviderSelected()">
+              <option value="auto">Auto (First Configured Provider)</option>
               <option value="heuristic">Heuristic (100% Offline Fallback)</option>
               <option value="gemini">Google Gemini</option>
               <option value="openai">OpenAI (ChatGPT / GPT-4o)</option>
@@ -447,6 +469,25 @@
               <option value="openrouter">OpenRouter</option>
               <option value="local">Local LLM (Ollama / vLLM)</option>
             </select>
+          </div>
+
+          <div class="form-group">
+            <label for="copilot-model">Sub-Model</label>
+            <select id="copilot-model" class="form-control" onchange="onCopilotModelChanged()">
+              <option value="">(default)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="copilot-api-key">API Key (stored locally only)</label>
+            <div style="display:flex; gap:0.35rem;">
+              <input type="password" id="copilot-api-key" class="form-control" style="flex:1;"
+                     placeholder="Paste provider API key" autocomplete="off" spellcheck="false"
+                     oninput="onCopilotApiKeyInput()">
+              <button type="button" class="btn btn-secondary" id="copilot-api-key-toggle"
+                      onclick="toggleCopilotApiKeyVisibility()" title="Show/hide key" style="padding:0.45rem 0.65rem;">👁️</button>
+            </div>
+            <span id="copilot-key-hint" style="display:none; font-size:0.75rem; color:var(--accent-red); margin-top:0.25rem;"></span>
           </div>
 
           <div class="form-group">

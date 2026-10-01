@@ -244,7 +244,8 @@ def build_features(
     ]
     cur_season_missed = len(cur_season_all) - len(cur_season_played)
 
-    prev_season_code = f"E{int(target_season[1:]) - 1}" if target_season[1:].isdigit() else ""
+    prefix = target_season[0] if (target_season and target_season[0] in ("E", "U")) else "E"
+    prev_season_code = f"{prefix}{int(target_season[1:]) - 1}" if target_season[1:].isdigit() else ""
     prev_season_played = [
         r for r in history_rows
         if str(r["season"]) == prev_season_code

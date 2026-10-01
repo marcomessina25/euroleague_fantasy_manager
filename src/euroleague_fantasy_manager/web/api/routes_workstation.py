@@ -3,13 +3,28 @@
 from __future__ import annotations
 
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from euroleague_fantasy_manager.competition.ruleset import League
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit
 from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
+from euroleague_fantasy_manager.rules import MAX_TRADES_PER_ROUND
+
+# Largest page the player browser will serve in one request. Paging with
+# `offset` reaches the rest of the universe; nothing is ever unreachable.
+MAX_PLAYER_PAGE_SIZE = 1000
+
+# Ordering options for the player browser. Every key breaks ties on player_id so
+# that paging is stable and cannot drop or duplicate a player between pages.
+PLAYER_SORT_KEYS = {
+    "expected_fp": lambda p: (-p["expected_fp"], p["player_id"]),
+    "price_desc": lambda p: (-p["price_tenths"], p["player_id"]),
+    "price_asc": lambda p: (p["price_tenths"], p["player_id"]),
+    "fp_per_credit": lambda p: (-p["fp_per_credit"], p["player_id"]),
+    "name": lambda p: (p["name"].lower(), p["player_id"]),
+}
 from euroleague_fantasy_manager.services.decision_service import DecisionService
 from euroleague_fantasy_manager.services.evaluation_service import EvaluationService
 from euroleague_fantasy_manager.services.optimization_service import (
@@ -48,7 +63,7 @@ class OptimizeTransfersRequest(BaseModel):
     team_id: str
     season: str = "2026/27"
     round_number: int | None = None
-    max_trades: int = 1
+    max_trades: int = MAX_TRADES_PER_ROUND
     unlimited: bool = False
     exhaustive: bool = False
 
@@ -130,10 +145,15 @@ def get_dashboard(
         option_value_mode=team.settings.option_value_mode,
     )
 
+    # store.get_team always loads the team's LIVE round squad, so a round differing
+    # from the live one must be loaded explicitly or the dashboard renders the wrong roster.
+    is_viewing_past_round = round_number is not None and rnd != team.round_number
+    squad_for_round = team_service.store.get_squad(team_id, rnd) if is_viewing_past_round else team.squad
+
     # Squad units with projections
     proj_dict = prediction_service.get_projections_dict(season, rnd, league=team.league or "euroleague")
     squad_details = []
-    for unit in team.squad:
+    for unit in squad_for_round:
         c = proj_dict.get(unit.player_id)
         has_played = getattr(c, "has_played", False) if c else False
         actual_fp = getattr(c, "actual_fp", None) if c else None
@@ -162,14 +182,16 @@ def get_dashboard(
         })
 
     # Build active current_lineup representing team's actual saved squad roles
-    squad_units = team.squad
+    squad_units = squad_for_round
     starters_units = [u for u in squad_units if u.is_starter]
     bench_units = [u for u in squad_units if u.is_bench]
     sixth_man_unit = next((u for u in squad_units if u.is_sixth_man), None)
     coach_unit = next((u for u in squad_units if u.is_coach or u.position == "HC"), None)
 
     # If team roles have not been assigned yet (e.g. freshly imported or draft without role flags),
-    # sync with opt_lineup so the team gets its starting five, captain, 6th man, bench
+    # sync with opt_lineup so the team gets its starting five, captain, 6th man, bench.
+    # round_number=rnd targets the round being viewed -- omitting it would silently rewrite
+    # the LIVE round's lineup while merely viewing a past round.
     if len(starters_units) != 5 or not sixth_man_unit or not coach_unit:
         team = team_service.update_lineup(
             team_id=team_id,
@@ -178,8 +200,9 @@ def get_dashboard(
             sixth_man_id=opt_lineup.sixth_man_id,
             bench_ids=[p["player_id"] for p in opt_lineup.bench],
             coach_id=opt_lineup.coach_id,
+            round_number=rnd,
         )
-        squad_units = team.squad
+        squad_units = team_service.store.get_squad(team_id, rnd) if is_viewing_past_round else team.squad
         starters_units = [u for u in squad_units if u.is_starter]
         bench_units = [u for u in squad_units if u.is_bench]
         sixth_man_unit = next((u for u in squad_units if u.is_sixth_man), None)
@@ -233,9 +256,18 @@ def get_dashboard(
     c_count = sum(1 for p in starters_formatted if _p_char(p["position"]) == "C")
     formation_str = f"{g_count}-{f_count}-{c_count}"
 
-    captain_id = team.captain_id or (starters_formatted[0]["player_id"] if starters_formatted else 0)
-    sixth_man_id = team.sixth_man_id or (sixth_man_formatted["player_id"] if sixth_man_formatted else 0)
-    coach_id = team.coach_id or (coach_formatted["player_id"] if coach_formatted else 0)
+    captain_id = (
+        next((u.player_id for u in squad_units if u.is_captain), None)
+        or (starters_formatted[0]["player_id"] if starters_formatted else 0)
+    )
+    sixth_man_id = (
+        next((u.player_id for u in squad_units if u.is_sixth_man), None)
+        or (sixth_man_formatted["player_id"] if sixth_man_formatted else 0)
+    )
+    coach_id = (
+        next((u.player_id for u in squad_units if u.is_coach or u.position == "HC"), None)
+        or (coach_formatted["player_id"] if coach_formatted else 0)
+    )
 
     # Compute score breakdown: Realized points for played players + Expected points for unplayed players
     tot_unplayed_expected_fp = 0.0
@@ -638,6 +670,7 @@ def update_scores_endpoint(
 
 @router.get("/players")
 def list_players_endpoint(
+    response: Response,
     season: str = "2026/27",
     round_number: int = 1,
     position: str | None = None,
@@ -645,10 +678,33 @@ def list_players_endpoint(
     min_price: float | None = None,
     max_price: float | None = None,
     league: League = Depends(parse_league),
+    sort: str = "expected_fp",
+    offset: int = 0,
     limit: int = 50,
     prediction_service: PredictionService = Depends(get_prediction_service),
 ) -> list[dict[str, Any]]:
-    """Player browser for Trade Studio with valuation metrics (Phase G)."""
+    """Player browser for Trade Studio with valuation metrics.
+
+    Truncation is a display concern, never an existence concern (V0.7 W3). Before
+    V0.7 this endpoint sorted by expected FP and then sliced, which made the
+    cheapest players permanently unreachable from the manual-transfer picker.
+    The result set is now addressable: ``offset`` pages through the *whole*
+    filtered universe and ``sort`` selects the ordering, while the total count
+    before truncation is reported via the ``X-Total-Count`` response header.
+    """
+    if limit < 1 or limit > MAX_PLAYER_PAGE_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"limit must be between 1 and {MAX_PLAYER_PAGE_SIZE}.",
+        )
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0.")
+    if sort not in PLAYER_SORT_KEYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"sort must be one of: {', '.join(sorted(PLAYER_SORT_KEYS))}.",
+        )
+
     contracts = prediction_service.get_projections(season, round_number, league=league.value)
     valuations = prediction_service.get_player_valuations(season, round_number, league=league.value)
 
@@ -694,8 +750,18 @@ def list_players_endpoint(
             "is_home": c.is_home,
         })
 
-    filtered.sort(key=lambda x: -x["expected_fp"])
-    return filtered[:limit]
+    # Sort deterministically: the chosen key, then player_id to break ties so
+    # paging can never drop or duplicate a player across pages.
+    filtered.sort(key=PLAYER_SORT_KEYS[sort])
+
+    total = len(filtered)
+    page = filtered[offset : offset + limit]
+
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["X-Offset"] = str(offset)
+    response.headers["X-Limit"] = str(limit)
+    response.headers["Access-Control-Expose-Headers"] = "X-Total-Count, X-Offset, X-Limit"
+    return page
 
 
 @router.get("/players/{player_id}")

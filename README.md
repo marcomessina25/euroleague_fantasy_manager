@@ -2,7 +2,7 @@
 
 A deterministic, local-first **EuroLeague Fantasy Challenge (Classic Mode)** decision engine for the 2026/27 season (`E2026`), architected to share its core engine with **EuroCup Fantasy Challenge** (`U2026`).
 
-![Version](https://img.shields.io/badge/Version-0.6.5-purple) ![Python](https://img.shields.io/badge/Python-3.12-blue) ![CI](https://github.com/marcomessina25/euroleague_fantasy_manager/actions/workflows/ci.yml/badge.svg) ![License](https://img.shields.io/badge/License-MIT-green)
+![Version](https://img.shields.io/badge/Version-0.7.0-purple) ![Python](https://img.shields.io/badge/Python-3.12-blue) ![CI](https://github.com/marcomessina25/euroleague_fantasy_manager/actions/workflows/ci.yml/badge.svg) ![License](https://img.shields.io/badge/License-MIT-green)
 
 ---
 
@@ -20,7 +20,7 @@ This project uses official EuroLeague/EuroCup fantasy data and related public co
 ## Living roadmap
 
 - [`docs/architecture.md`](docs/architecture.md) defines the purpose, architectural boundaries, and responsibilities of each layer.
-- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1`, `V0.2`, `V0.2.5`, `V0.3`, `V0.4`, `0.4.5`, `V0.5`, `V0.5.1`, `V0.6`, and `V0.6.5` completed; `V0.7` next).
+- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1`, `V0.2`, `V0.2.5`, `V0.3`, `V0.4`, `0.4.5`, `V0.5`, `V0.5.1`, `V0.6`, `V0.6.5`, and `V0.7` completed; `V0.8` next).
 - [`docs/specs/v02.md`](docs/specs/v02.md) and [`docs/specs/items_left_for_v02.md`](docs/specs/items_left_for_v02.md) define the **V0.2** heuristic decision-support baseline specification and pre-merge checklist.
 - [`docs/specs/v025.md`](docs/specs/v025.md) and [`docs/specs/v025_cleanup.md`](docs/specs/v025_cleanup.md) define the **V0.2.5** historical evaluation foundation.
 - [`docs/specs/v03.md`](docs/specs/v03.md) and [`docs/specs/items_left_for_v03.md`](docs/specs/items_left_for_v03.md) define the **V0.3** validated predictive projection layer (`0.3.0`) and merge checklist.
@@ -30,6 +30,7 @@ This project uses official EuroLeague/EuroCup fantasy data and related public co
 - [`docs/specs/items_left_for_v051.md`](docs/specs/items_left_for_v051.md) documents **V0.5.1** live score presentation, quantitative decomposed prediction priors, and high-speed transfer optimization (`0.5.1`).
 - [`docs/specs/v06.md`](docs/specs/v06.md) and [`docs/specs/items_left_for_v06.md`](docs/specs/items_left_for_v06.md) define **V0.6** Strategic Intelligence, Manager Dossier, Multi-League Foundation, and Grounded Copilot (`0.6.0`).
 - [`docs/specs/v065.md`](docs/specs/v065.md) and [`docs/specs/v065_potential_bugs.md`](docs/specs/v065_potential_bugs.md) define **V0.6.5** release hardening, EuroCup ingestion pipeline, edge-case audit, and bug register (`0.6.5`).
+- [`docs/specs/v07.md`](docs/specs/v07.md) and [`docs/specs/v07_handoff.md`](docs/specs/v07_handoff.md) define **V0.7** full trade capacity, historical round backfill, point-in-time state reconstruction, and sequential decision replay (`0.7.0`).
 
 Both human contributors and AI agents must read the relevant living documents before making material changes and update them whenever architecture, scope, priorities, or delivery status changes.
 
@@ -341,6 +342,41 @@ elf advise --persona tactical_analyst --provider claude --tier extended
 The workstation features a dedicated strategic dashboard:
 - **Split Dashboard**: Deterministic Strategic Assumptions, Sensitivities, and Devil's Advocate Checklist on the left; Grounded Copilot narrative, provider metadata badges, latency timer, and consistency verification on the right.
 - **Raw Dossier JSON Inspector**: Collapsible full JSON payload inspector for auditability and verification.
+
+## V0.7 Full Trade Capacity, Historical Round Backfill & Sequential Decision Replay
+
+V0.7 un-throttles the decision engine to its full legal action space, makes the full player universe addressable, adds LLM provider parity with secret redaction, and delivers sequential decision simulation with regret attribution across full seasons:
+
+### 1. Full 4-Trade Capacity (Ruleset Parity)
+
+- **Official Ruleset Compliance**: Unlocks all 4 weekly trades granted by EuroLeague rules (`rules.py::MAX_TRADES_PER_ROUND = 4`) across the Trade Studio, transfer suggester, multi-round beam search, and CLI.
+- **Suggester Performance**: Validated $O(1)$ candidate pruning benchmarked under 0.70s for $k=4$ packages on a 200+ player reference market.
+
+### 2. Reachable Player Universe & Server-Driven LLM Catalog
+
+- **Pagination & Sorting**: The Trade Studio player browser supports `offset`, `limit`, and explicit sort order (`expected_fp`, `fp_per_credit`, `price_asc`, `price_desc`, `name`) with `X-Total-Count` headers so the cheapest players are never truncated out of reach.
+- **Provider Parity**: Server-driven model catalog covering Gemini, OpenAI, Claude, OpenRouter, and Local providers. OpenRouter key entry in the browser (`localStorage`), selectable free sub-models, and paid model `*` indicators.
+- **Secret Redaction**: Zero secrets persist on disk or in logs. `intelligence.security.redact_secrets` sanitizes all error and exception traces.
+
+### 3. Historical Round Backfill & Forward Trade Replay
+
+- **Per-Round Lineups**: Record past-round starting lineups, captains, sixth men, and coaches via GUI round selector or CLI (`elf team set-lineup --round N`).
+- **Forward Trade Replay**: Trades made in a historical round $n$ log immutable events to `team_transfers` and automatically forward-replay through later rounds up to the live gameweek, updating checkpoints without destroying the live round's baseline (`revert-round-start`).
+- **CLI Commands**:
+  ```powershell
+  # Set historical lineup for Round 1
+  elf team set-lineup --team my_team --round 1 --starters 101,102,201,202,301 --captain 101 --sixth-man 103 --bench 203,204,104,302 --coach 501
+
+  # Execute a trade for Round 1 with forward propagation
+  elf team trade --team my_team --round 1 --out 101 --in 105
+  ```
+
+### 4. Sequential Decision Simulation & Regret Attribution
+
+- **Deterministic Season Simulation**: `SequentialDecisionSimulator` replays entire multi-round seasons end-to-end with transfer, lineup, captaincy, sixth man, and T1 $\to$ T2 turn substitutions under a zero-mutation invariant.
+- **Synthetic Multi-Season Fixtures**: Deterministic synthetic multi-season replay fixtures across EuroLeague and EuroCup (`E2022`-`E2025`, `U2022`-`U2025`) enable offline replay evaluation with zero network dependencies (genuine live box-score ingestion scheduled for V0.8).
+- **Telescoping Regret Decomposition**: `RegretAttribution` decomposes decision regret into Captain, Sixth Man, Bench, Turn Substitution, Transfer, and Formation regret, satisfying exact summation ($\text{residual} \equiv 0$) by telescoping construction.
+- **Multi-Model Comparison Ledgers**: Benchmark decision strategies (Heuristic, Decomposed Models, Oracle, Human) with exportable Markdown and CSV comparison tables.
 
 ## License
 

@@ -85,6 +85,24 @@ class TeamStore:
                     PRIMARY KEY (team_id, round_number, season),
                     FOREIGN KEY (team_id) REFERENCES managed_teams(team_id) ON DELETE CASCADE
                 );
+
+                CREATE TABLE IF NOT EXISTS team_transfers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    team_id TEXT NOT NULL,
+                    round_number INTEGER NOT NULL,
+                    season TEXT NOT NULL,
+                    player_out_id INTEGER NOT NULL,
+                    player_out_name TEXT NOT NULL DEFAULT '',
+                    player_in_id INTEGER NOT NULL,
+                    player_in_name TEXT NOT NULL DEFAULT '',
+                    price_out_tenths INTEGER NOT NULL DEFAULT 0,
+                    price_in_tenths INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (team_id) REFERENCES managed_teams(team_id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_team_transfers_lookup
+                ON team_transfers(team_id, season, round_number);
                 """
             )
             # Safe migration: ensure league column exists
@@ -429,6 +447,145 @@ class TeamStore:
                 (team_id, round_number, season, bank_tenths, transfers_remaining, squad_json, now),
             )
 
+    def record_transfers(
+        self,
+        team_id: str,
+        round_number: int,
+        season: str,
+        moves: Sequence[dict[str, Any]],
+    ) -> list[int]:
+        """Record the individual trade events that produced a round's squad.
+
+        Only the resulting squad was persisted before V0.7, which made the trades
+        themselves unrecoverable. Sequential replay (W6) needs the events, not just
+        the outcome. Returns the inserted row ids so a caller can roll back exactly
+        these events (and no others) if a later step in the same request fails.
+        """
+        if not moves:
+            return []
+        now = datetime.now(timezone.utc).isoformat()
+        inserted_ids: list[int] = []
+        with self._get_connection() as conn:
+            for m in moves:
+                cur = conn.execute(
+                    """
+                    INSERT INTO team_transfers (
+                        team_id, round_number, season, player_out_id, player_out_name,
+                        player_in_id, player_in_name, price_out_tenths, price_in_tenths, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    """,
+                    (
+                        team_id,
+                        round_number,
+                        season,
+                        int(m["player_out_id"]),
+                        str(m.get("player_out_name", "")),
+                        int(m["player_in_id"]),
+                        str(m.get("player_in_name", "")),
+                        int(m.get("price_out_tenths", 0)),
+                        int(m.get("price_in_tenths", 0)),
+                        now,
+                    ),
+                )
+                inserted_ids.append(int(cur.lastrowid))
+        return inserted_ids
+
+    def delete_transfers_by_ids(self, transfer_ids: Sequence[int]) -> None:
+        """Delete exactly the given trade events, e.g. to roll back a failed request.
+
+        Unlike ``clear_transfers`` this never touches events from other, already
+        successful requests in the same round.
+        """
+        if not transfer_ids:
+            return
+        placeholders = ",".join("?" for _ in transfer_ids)
+        with self._get_connection() as conn:
+            conn.execute(
+                f"DELETE FROM team_transfers WHERE id IN ({placeholders});",
+                tuple(int(i) for i in transfer_ids),
+            )
+
+    def get_transfers(
+        self,
+        team_id: str,
+        season: str,
+        round_number: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return recorded trade events, optionally scoped to a single round."""
+        query = (
+            "SELECT * FROM team_transfers WHERE team_id = ? AND season = ?"
+        )
+        params: list[Any] = [team_id, season]
+        if round_number is not None:
+            query += " AND round_number = ?"
+            params.append(round_number)
+        query += " ORDER BY round_number ASC, id ASC;"
+
+        with self._get_connection() as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "team_id": row["team_id"],
+                "round_number": row["round_number"],
+                "season": row["season"],
+                "player_out_id": row["player_out_id"],
+                "player_out_name": row["player_out_name"],
+                "player_in_id": row["player_in_id"],
+                "player_in_name": row["player_in_name"],
+                "price_out_tenths": row["price_out_tenths"],
+                "price_in_tenths": row["price_in_tenths"],
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def clear_transfers(self, team_id: str, round_number: int, season: str) -> None:
+        """Drop recorded trade events for a round before rewriting it."""
+        with self._get_connection() as conn:
+            conn.execute(
+                "DELETE FROM team_transfers WHERE team_id = ? AND round_number = ? AND season = ?;",
+                (team_id, round_number, season),
+            )
+
+    def get_rounds_with_state(self, team_id: str, season: str) -> list[int]:
+        """Return every round this team has stored state for, ascending.
+
+        Backs the Lineup tab's round selector: a round is selectable if it has a
+        stored squad or a checkpoint.
+        """
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT round_number FROM managed_team_squads WHERE team_id = ?
+                UNION
+                SELECT round_number FROM team_round_checkpoints WHERE team_id = ? AND season = ?
+                ORDER BY round_number ASC;
+                """,
+                (team_id, team_id, season),
+            ).fetchall()
+        return [int(r["round_number"]) for r in rows]
+
+    def delete_checkpoints_after_round(
+        self,
+        team_id: str,
+        round_number: int,
+        season: str,
+    ) -> int:
+        """Invalidate checkpoints that a past-round edit has made inconsistent.
+
+        Checkpoints are only ever written forward and
+        ``get_latest_checkpoint_before_round`` assumes chronological consistency,
+        so editing round *n* invalidates every checkpoint strictly after it.
+        Returns the number of checkpoints removed.
+        """
+        with self._get_connection() as conn:
+            cur = conn.execute(
+                "DELETE FROM team_round_checkpoints WHERE team_id = ? AND season = ? AND round_number > ?;",
+                (team_id, season, round_number),
+            )
+            return cur.rowcount or 0
+
     def get_round_checkpoint(
         self,
         team_id: str,
@@ -502,16 +659,21 @@ class TeamStore:
         restored_transfers = 4  # Standard fresh round transfers
 
         with self._get_connection() as conn:
-            conn.execute(
-                """
-                UPDATE managed_teams SET
-                    bank_tenths = ?,
-                    transfers_remaining = ?,
-                    updated_at = ?
-                WHERE team_id = ?;
-                """,
-                (restored_bank, restored_transfers, datetime.now(timezone.utc).isoformat(), team_id),
-            )
+            if rnd == team.round_number:
+                conn.execute(
+                    """
+                    UPDATE managed_teams SET
+                        bank_tenths = ?,
+                        transfers_remaining = ?,
+                        updated_at = ?
+                    WHERE team_id = ?;
+                    """,
+                    (restored_bank, restored_transfers, datetime.now(timezone.utc).isoformat(), team_id),
+                )
             self._save_squad_conn(conn, team_id, rnd, restored_squad)
+            conn.execute(
+                "DELETE FROM team_transfers WHERE team_id = ? AND round_number = ? AND season = ?;",
+                (team_id, rnd, season),
+            )
 
         return self.get_team(team_id)

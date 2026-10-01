@@ -6,7 +6,7 @@ import json
 import logging
 from pathlib import Path
 import sqlite3
-from typing import Any
+from typing import Any, Sequence
 
 from .models import Player, Position
 from .rules import EUROLEAGUE_LEAGUE_ID
@@ -602,3 +602,342 @@ class SnapshotStore:
                 }
                 for r in rows
             ]
+
+    def get_snapshot_by_round(
+        self,
+        round_number: int,
+        season_code: str | None = None,
+        league_id: int | None = None,
+    ) -> SnapshotSummary | None:
+        """Fetch a specific historical snapshot by round, season, and league."""
+        query = "SELECT * FROM snapshots WHERE round_number = ?"
+        params: list[Any] = [int(round_number)]
+        if season_code:
+            query += " AND season_code = ?"
+            params.append(season_code)
+        if league_id is not None:
+            query += " AND league_id = ?"
+            params.append(int(league_id))
+        query += " ORDER BY id DESC LIMIT 1"
+
+        with self._connect() as conn:
+            row = conn.execute(query, tuple(params)).fetchone()
+            if not row:
+                return None
+            sid = int(row["id"])
+            team_count = int(conn.execute("SELECT COUNT(*) FROM teams WHERE snapshot_id = ?", (sid,)).fetchone()[0])
+            fixture_count = int(conn.execute("SELECT COUNT(*) FROM fixtures WHERE snapshot_id = ?", (sid,)).fetchone()[0])
+            coach_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM players WHERE snapshot_id = ? AND position = ?",
+                    (sid, int(Position.HEAD_COACH)),
+                ).fetchone()[0]
+            )
+            total_units = int(conn.execute("SELECT COUNT(*) FROM players WHERE snapshot_id = ?", (sid,)).fetchone()[0])
+            row_keys = row.keys() if hasattr(row, "keys") else []
+            club_count = int(row["club_count"]) if "club_count" in row_keys else team_count
+            season_code_source = str(row["season_code_source"]) if "season_code_source" in row_keys else "config"
+            return SnapshotSummary(
+                snapshot_id=sid,
+                created_at=str(row["created_at"]),
+                league_id=int(row["league_id"]),
+                season_code=str(row["season_code"]),
+                round_number=int(row["round_number"]),
+                num_turns=int(row["num_turns"]),
+                team_count=team_count,
+                player_count=total_units - coach_count,
+                coach_count=coach_count,
+                fixture_count=fixture_count,
+                club_count=club_count,
+                season_code_source=season_code_source,
+            )
+
+    def list_snapshots(
+        self,
+        league_id: int | None = None,
+        season_code: str | None = None,
+    ) -> list[SnapshotSummary]:
+        """List historical snapshot summaries filtered by league and season."""
+        query = "SELECT id, round_number, season_code, league_id FROM snapshots WHERE 1=1"
+        params: list[Any] = []
+        if league_id is not None:
+            query += " AND league_id = ?"
+            params.append(int(league_id))
+        if season_code:
+            query += " AND season_code = ?"
+            params.append(season_code)
+        query += " ORDER BY league_id ASC, season_code ASC, round_number ASC, id ASC"
+
+        summaries = []
+        with self._connect() as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+            for r in rows:
+                snap = self.get_snapshot_by_round(
+                    round_number=int(r["round_number"]),
+                    season_code=str(r["season_code"]),
+                    league_id=int(r["league_id"]),
+                )
+                if snap:
+                    summaries.append(snap)
+        return summaries
+
+    def load_players_for_snapshot(self, snapshot_id: int) -> list[Player]:
+        """Load player domain models for a specific historical snapshot ID."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM players WHERE snapshot_id = ? ORDER BY price_tenths DESC, id ASC",
+                (int(snapshot_id),),
+            ).fetchall()
+            return [
+                Player(
+                    id=int(r["id"]),
+                    name=str(r["name"]),
+                    first_name=str(r["first_name"]),
+                    last_name=str(r["last_name"]),
+                    position=Position(int(r["position"])),
+                    team_id=int(r["team_id"]),
+                    team_code=str(r["team_code"]),
+                    team_name=str(r["team_name"]),
+                    price_tenths=int(r["price_tenths"]),
+                    status=str(r["status"]),
+                    probability_of_playing=float(r["probability_of_playing"]),
+                    turn_number=int(r["turn_number"]),
+                    avg_fantasy_pts=float(r["avg_fantasy_pts"]),
+                    last_match_pts=float(r["last_match_pts"]),
+                    total_plus_tenths=int(r["total_plus_tenths"]),
+                    popularity=float(r["popularity"]),
+                    is_injured=bool(r["is_injured"]),
+                    is_on_fire=bool(r["is_on_fire"]),
+                    has_played=bool(r["has_played"]) if "has_played" in r.keys() else False,
+                )
+                for r in rows
+            ]
+
+    def load_teams_for_snapshot(self, snapshot_id: int) -> dict[int, dict[str, str]]:
+        """Return team mapping for a specific historical snapshot ID."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, name, short_name FROM teams WHERE snapshot_id = ? ORDER BY id",
+                (int(snapshot_id),),
+            ).fetchall()
+            return {
+                int(r["id"]): {"name": str(r["name"]), "short_name": str(r["short_name"])}
+                for r in rows
+            }
+
+    def load_fixtures_for_snapshot(
+        self,
+        snapshot_id: int,
+        round_numbers: list[int] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return fixtures for a specific historical snapshot ID."""
+        with self._connect() as conn:
+            if round_numbers:
+                placeholders = ",".join("?" for _ in round_numbers)
+                rows = conn.execute(
+                    f"""
+                    SELECT * FROM fixtures
+                    WHERE snapshot_id = ? AND round_number IN ({placeholders})
+                    ORDER BY round_number ASC, turn_number ASC, started_at ASC, id ASC
+                    """,
+                    (int(snapshot_id), *round_numbers),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM fixtures
+                    WHERE snapshot_id = ?
+                    ORDER BY round_number ASC, turn_number ASC, started_at ASC, id ASC
+                    """,
+                    (int(snapshot_id),),
+                ).fetchall()
+            return [
+                {
+                    "id": int(r["id"]),
+                    "round_number": int(r["round_number"]),
+                    "turn_number": int(r["turn_number"]),
+                    "started_at": r["started_at"],
+                    "status": str(r["status"] or "scheduled"),
+                    "home_team_id": int(r["home_team_id"]),
+                    "home_team_code": str(r["home_team_code"]),
+                    "away_team_id": int(r["away_team_id"]),
+                    "away_team_code": str(r["away_team_code"]),
+                    "home_score": r["home_score"],
+                    "away_score": r["away_score"],
+                }
+                for r in rows
+            ]
+
+
+def seed_historical_snapshots(
+    database_path: Path,
+    seasons: Sequence[str] = ("E2024", "E2025", "U2024", "U2025"),
+    rounds_per_season: int = 5,
+) -> list[SnapshotSummary]:
+    """Seed deterministic historical snapshots for EuroLeague and EuroCup into SnapshotStore."""
+    store = SnapshotStore(database_path)
+
+    el_teams = [
+        {"id": 1, "name": "Panathinaikos AKTOR Athens", "abbreviation": "PAO"},
+        {"id": 2, "name": "Real Madrid", "abbreviation": "RMB"},
+        {"id": 3, "name": "Olympiacos Piraeus", "abbreviation": "OLY"},
+        {"id": 4, "name": "Fenerbahce Beko Istanbul", "abbreviation": "FBB"},
+        {"id": 5, "name": "AS Monaco", "abbreviation": "ASM"},
+        {"id": 6, "name": "ALBA Berlin", "abbreviation": "BER"},
+    ]
+    el_players = [
+        {"id": 1001, "team_id": 1, "first_name": "Kendrick", "last_name": "Nunn", "position": "Guard", "quotation": 16.5, "pts": 21.0},
+        {"id": 1002, "team_id": 1, "first_name": "Kostas", "last_name": "Sloukas", "position": "Guard", "quotation": 13.5, "pts": 15.5},
+        {"id": 1003, "team_id": 1, "first_name": "Juancho", "last_name": "Hernangomez", "position": "Forward", "quotation": 12.5, "pts": 14.0},
+        {"id": 1004, "team_id": 1, "first_name": "Mathias", "last_name": "Lessort", "position": "Center", "quotation": 16.0, "pts": 19.5},
+        {"id": 1091, "team_id": 1, "first_name": "Ergin", "last_name": "Ataman", "position": "Head Coach", "quotation": 9.5, "pts": 14.0},
+        {"id": 2001, "team_id": 2, "first_name": "Facundo", "last_name": "Campazzo", "position": "Guard", "quotation": 15.5, "pts": 18.5},
+        {"id": 2002, "team_id": 2, "first_name": "Mario", "last_name": "Hezonja", "position": "Forward", "quotation": 14.0, "pts": 16.0},
+        {"id": 2003, "team_id": 2, "first_name": "Gabriel", "last_name": "Deck", "position": "Forward", "quotation": 11.5, "pts": 12.0},
+        {"id": 2004, "team_id": 2, "first_name": "Walter", "last_name": "Tavares", "position": "Center", "quotation": 15.0, "pts": 17.5},
+        {"id": 2091, "team_id": 2, "first_name": "Chus", "last_name": "Mateo", "position": "Head Coach", "quotation": 9.0, "pts": 12.0},
+        {"id": 3001, "team_id": 3, "first_name": "Thomas", "last_name": "Walkup", "position": "Guard", "quotation": 11.0, "pts": 12.5},
+        {"id": 3002, "team_id": 3, "first_name": "Sasha", "last_name": "Vezenkov", "position": "Forward", "quotation": 17.5, "pts": 22.5},
+        {"id": 3003, "team_id": 3, "first_name": "Alec", "last_name": "Peters", "position": "Forward", "quotation": 11.5, "pts": 11.5},
+        {"id": 3004, "team_id": 3, "first_name": "Nikola", "last_name": "Milutinov", "position": "Center", "quotation": 14.5, "pts": 16.5},
+        {"id": 3091, "team_id": 3, "first_name": "Georgios", "last_name": "Bartzokas", "position": "Head Coach", "quotation": 9.0, "pts": 12.0},
+        {"id": 4001, "team_id": 4, "first_name": "Scottie", "last_name": "Wilbekin", "position": "Guard", "quotation": 12.5, "pts": 13.5},
+        {"id": 4002, "team_id": 4, "first_name": "Marko", "last_name": "Guduric", "position": "Guard", "quotation": 11.5, "pts": 12.0},
+        {"id": 4003, "team_id": 4, "first_name": "Nigel", "last_name": "Hayes-Davis", "position": "Forward", "quotation": 15.5, "pts": 18.0},
+        {"id": 4004, "team_id": 4, "first_name": "Tarik", "last_name": "Biberovic", "position": "Forward", "quotation": 8.5, "pts": 9.0},
+        {"id": 4091, "team_id": 4, "first_name": "Saras", "last_name": "Jasikevicius", "position": "Head Coach", "quotation": 8.5, "pts": 10.0},
+        {"id": 5001, "team_id": 5, "first_name": "Mike", "last_name": "James", "position": "Guard", "quotation": 17.0, "pts": 21.5},
+        {"id": 5002, "team_id": 5, "first_name": "Elie", "last_name": "Okobo", "position": "Guard", "quotation": 12.5, "pts": 14.0},
+        {"id": 5003, "team_id": 5, "first_name": "Alpha", "last_name": "Diallo", "position": "Forward", "quotation": 13.0, "pts": 15.0},
+        {"id": 5004, "team_id": 5, "first_name": "Donatas", "last_name": "Motiejunas", "position": "Center", "quotation": 10.5, "pts": 11.5},
+        {"id": 5091, "team_id": 5, "first_name": "Sasa", "last_name": "Obradovic", "position": "Head Coach", "quotation": 8.0, "pts": 9.0},
+        {"id": 6001, "team_id": 6, "first_name": "Martin", "last_name": "Hermannsson", "position": "Guard", "quotation": 8.5, "pts": 9.5},
+        {"id": 6002, "team_id": 6, "first_name": "Gabriele", "last_name": "Procida", "position": "Forward", "quotation": 7.5, "pts": 8.5},
+        {"id": 6003, "team_id": 6, "first_name": "Louis", "last_name": "Olinde", "position": "Forward", "quotation": 7.0, "pts": 7.5},
+        {"id": 6004, "team_id": 6, "first_name": "Trevion", "last_name": "Williams", "position": "Center", "quotation": 9.5, "pts": 11.0},
+        {"id": 6091, "team_id": 6, "first_name": "Israel", "last_name": "Gonzalez", "position": "Head Coach", "quotation": 5.5, "pts": 2.0},
+    ]
+
+    ec_teams = [
+        {"id": 11, "name": "Valencia Basket", "abbreviation": "VBC"},
+        {"id": 12, "name": "Hapoel Tel Aviv", "abbreviation": "HAP"},
+        {"id": 13, "name": "Dreamland Gran Canaria", "abbreviation": "GRA"},
+        {"id": 14, "name": "Joventut Badalona", "abbreviation": "CJB"},
+        {"id": 15, "name": "Besiktas Fibabanka Istanbul", "abbreviation": "BES"},
+        {"id": 16, "name": "Dolomiti Energia Trento", "abbreviation": "TRE"},
+    ]
+    ec_players = [
+        {"id": 1101, "team_id": 11, "first_name": "Chris", "last_name": "Jones", "position": "Guard", "quotation": 16.0, "pts": 19.5},
+        {"id": 1102, "team_id": 11, "first_name": "Jean", "last_name": "Montero", "position": "Guard", "quotation": 14.5, "pts": 17.0},
+        {"id": 1103, "team_id": 11, "first_name": "Semi", "last_name": "Ojeleye", "position": "Forward", "quotation": 14.0, "pts": 16.0},
+        {"id": 1104, "team_id": 11, "first_name": "Matt", "last_name": "Costello", "position": "Center", "quotation": 13.0, "pts": 15.0},
+        {"id": 1191, "team_id": 11, "first_name": "Pedro", "last_name": "Martinez", "position": "Head Coach", "quotation": 9.0, "pts": 13.0},
+        {"id": 1201, "team_id": 12, "first_name": "Patrick", "last_name": "Beverley", "position": "Guard", "quotation": 15.5, "pts": 18.0},
+        {"id": 1202, "team_id": 12, "first_name": "Marcus", "last_name": "Foster", "position": "Guard", "quotation": 13.5, "pts": 15.0},
+        {"id": 1203, "team_id": 12, "first_name": "Ish", "last_name": "Wainright", "position": "Forward", "quotation": 12.0, "pts": 12.0},
+        {"id": 1204, "team_id": 12, "first_name": "Johnathan", "last_name": "Motley", "position": "Center", "quotation": 16.5, "pts": 20.0},
+        {"id": 1291, "team_id": 12, "first_name": "Stefanos", "last_name": "Dedas", "position": "Head Coach", "quotation": 8.5, "pts": 11.0},
+        {"id": 1301, "team_id": 13, "first_name": "Andrew", "last_name": "Albicy", "position": "Guard", "quotation": 11.5, "pts": 12.5},
+        {"id": 1302, "team_id": 13, "first_name": "Caleb", "last_name": "Homesley", "position": "Guard", "quotation": 13.0, "pts": 14.5},
+        {"id": 1303, "team_id": 13, "first_name": "John", "last_name": "Shurna", "position": "Forward", "quotation": 11.5, "pts": 11.5},
+        {"id": 1304, "team_id": 13, "first_name": "Mike", "last_name": "Tobey", "position": "Center", "quotation": 13.5, "pts": 15.5},
+        {"id": 1391, "team_id": 13, "first_name": "Jaka", "last_name": "Lakovic", "position": "Head Coach", "quotation": 8.5, "pts": 10.5},
+        {"id": 1401, "team_id": 14, "first_name": "Guillem", "last_name": "Vives", "position": "Guard", "quotation": 10.0, "pts": 11.0},
+        {"id": 1402, "team_id": 14, "first_name": "Devon", "last_name": "Dotson", "position": "Guard", "quotation": 13.0, "pts": 14.0},
+        {"id": 1403, "team_id": 14, "first_name": "Adam", "last_name": "Hanga", "position": "Forward", "quotation": 12.5, "pts": 13.5},
+        {"id": 1404, "team_id": 14, "first_name": "Ante", "last_name": "Tomic", "position": "Center", "quotation": 14.5, "pts": 17.5},
+        {"id": 1491, "team_id": 14, "first_name": "Dani", "last_name": "Miret", "position": "Head Coach", "quotation": 7.5, "pts": 8.5},
+        {"id": 1501, "team_id": 15, "first_name": "Derek", "last_name": "Needham", "position": "Guard", "quotation": 12.0, "pts": 13.0},
+        {"id": 1502, "team_id": 15, "first_name": "Jonah", "last_name": "Mathews", "position": "Guard", "quotation": 13.5, "pts": 15.0},
+        {"id": 1503, "team_id": 15, "first_name": "Matt", "last_name": "Mitchell", "position": "Forward", "quotation": 12.5, "pts": 13.5},
+        {"id": 1504, "team_id": 15, "first_name": "Dustin", "last_name": "Sleva", "position": "Center", "quotation": 11.0, "pts": 12.0},
+        {"id": 1591, "team_id": 15, "first_name": "Dusan", "last_name": "Alimpijevic", "position": "Head Coach", "quotation": 7.5, "pts": 8.0},
+        {"id": 1601, "team_id": 16, "first_name": "Quinn", "last_name": "Ellis", "position": "Guard", "quotation": 9.5, "pts": 10.5},
+        {"id": 1602, "team_id": 16, "first_name": "Jordan", "last_name": "Ford", "position": "Guard", "quotation": 11.0, "pts": 12.0},
+        {"id": 1603, "team_id": 16, "first_name": "Anthony", "last_name": "Lamb", "position": "Forward", "quotation": 12.5, "pts": 14.0},
+        {"id": 1604, "team_id": 16, "first_name": "Selom", "last_name": "Mawugbe", "position": "Center", "quotation": 9.0, "pts": 9.5},
+        {"id": 1691, "team_id": 16, "first_name": "Paolo", "last_name": "Galbiati", "position": "Head Coach", "quotation": 6.0, "pts": 4.0},
+    ]
+
+    summaries = []
+    for season_code in seasons:
+        is_ec = season_code.startswith("U")
+        league_id = 11 if is_ec else 10
+        comp_code = "U" if is_ec else "E"
+        teams = ec_teams if is_ec else el_teams
+        players = ec_players if is_ec else el_players
+
+        team_by_id = {t["id"]: t for t in teams}
+
+        for rnum in range(1, rounds_per_season + 1):
+            matches_t1 = []
+            matches_t2 = []
+            t_ids = [t["id"] for t in teams]
+            for i in range(0, len(t_ids), 2):
+                h_id = t_ids[i]
+                a_id = t_ids[i + 1]
+                mid = (rnum * 100) + (i // 2 + 1)
+                m_obj = {
+                    "id": mid,
+                    "started_at": f"2024-10-{(rnum * 2):02d}T18:00:00Z",
+                    "status": "scheduled",
+                    "home_team": {"id": h_id, "abbreviation": team_by_id[h_id]["abbreviation"], "score": None},
+                    "away_team": {"id": a_id, "abbreviation": team_by_id[a_id]["abbreviation"], "score": None},
+                }
+                if (i // 2) % 2 == 0:
+                    matches_t1.append(m_obj)
+                else:
+                    matches_t2.append(m_obj)
+
+            match_lineups = []
+            for m in (matches_t1 + matches_t2):
+                h_id = m["home_team"]["id"]
+                a_id = m["away_team"]["id"]
+                h_p = [p for p in players if p["team_id"] == h_id]
+                a_p = [p for p in players if p["team_id"] == a_id]
+                turn = 1 if m in matches_t1 else 2
+                match_lineups.append({
+                    "turn_number": turn,
+                    "status": "scheduled",
+                    "home_team": {
+                        "id": h_id,
+                        "name": team_by_id[h_id]["name"],
+                        "abbreviation": team_by_id[h_id]["abbreviation"],
+                        "lineups": h_p,
+                    },
+                    "away_team": {
+                        "id": a_id,
+                        "name": team_by_id[a_id]["name"],
+                        "abbreviation": team_by_id[a_id]["abbreviation"],
+                        "lineups": a_p,
+                    },
+                })
+
+            payload = {
+                "league_id": league_id,
+                "competition_code": comp_code,
+                "season_code": season_code,
+                "config": {
+                    "current_matchday": {"id": rnum, "number": rnum, "num_rounds": 2},
+                    "teams": teams,
+                },
+                "schedules": [
+                    {
+                        "number": rnum,
+                        "rounds": [
+                            {"number": 1, "matches": matches_t1},
+                            {"number": 2, "matches": matches_t2},
+                        ],
+                    }
+                ],
+                "match_lineups": match_lineups,
+            }
+            summary = store.save_snapshot(
+                payload,
+                created_at=f"2024-10-{(rnum * 2):02d}T10:00:00Z",
+            )
+            summaries.append(summary)
+
+    return summaries
+
+

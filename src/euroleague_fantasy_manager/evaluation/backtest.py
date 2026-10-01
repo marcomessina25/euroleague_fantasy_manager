@@ -54,7 +54,8 @@ def parse_rounds_spec(rounds_spec: str | None, available_rounds: Sequence[int]) 
 def _ensure_dataset_present(store: EvaluationDatasetStore, target_season: str) -> None:
     seasons_present = store.list_seasons()
     if target_season not in seasons_present:
-        default_seasons = sorted(set(["E2022", "E2023", "E2024", "E2025", target_season]))
+        prefix = target_season[0] if (target_season and target_season[0] in ("E", "U")) else "E"
+        default_seasons = sorted(set([f"{prefix}2022", f"{prefix}2023", f"{prefix}2024", f"{prefix}2025", target_season]))
         build_historical_dataset(database_path=store.database_path, seasons=default_seasons)
 
 
