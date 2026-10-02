@@ -36,7 +36,9 @@ from .objective import (
 )
 from .option_value import (
     compute_captain_option_value,
+    compute_t2_bench_insurance_value,
     compute_turn_substitution_option_bonus,
+    margrabe_exchange_option,
 )
 from .ownership_strategy import (
     OwnershipArchetype,
@@ -79,7 +81,9 @@ __all__ = [
     "evaluate_lineup_objective",
     "compute_positional_replacement_levels",
     "compute_captain_option_value",
+    "compute_t2_bench_insurance_value",
     "compute_turn_substitution_option_bonus",
+    "margrabe_exchange_option",
     "FixedSquadLineupOptimizer",
     "OptimalLineupDecision",
     "brute_force_exhaustive_lineup",
