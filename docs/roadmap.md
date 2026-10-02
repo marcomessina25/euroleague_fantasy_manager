@@ -1,7 +1,7 @@
 # EuroLeague Fantasy Manager — Roadmap
 
 > **Current planning baseline:** 2026-10-02  
-> **Current baseline:** V0.8 is delivered on branch `v08` (commits `ea86436..bb3325d`), verified with 246 passing tests.  
+> **Current baseline:** V0.8 is delivered on branch `v08` (commits `ea86436..8515607`), verified with 249 passing tests.  
 > **Next release:** V0.9 (Learned Models, EuroCup Full Parity & Cross-League Testing).
 
 ## 1. Vision
