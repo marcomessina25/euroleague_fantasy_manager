@@ -695,6 +695,11 @@ def build_parser() -> argparse.ArgumentParser:
             action="store_true",
             help="Output JSON summary.",
         )
+        p.add_argument(
+            "--dry-run",
+            action="store_true",
+            help="Fetch, parse, and validate feeds without committing records to SQLite database.",
+        )
 
     return parser
 
@@ -1498,6 +1503,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(msg, file=sys.stderr)
 
         _log(f"Starting historical ingestion for competitions {competitions}, seasons {seasons}...")
+        dry_run_flag = getattr(args, "dry_run", False)
         summary = ingest_historical_data(
             competitions=competitions,
             seasons=seasons,
@@ -1506,16 +1512,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_games_per_season=args.max_games,
             delay_seconds=args.delay,
             logger_callback=_log,
+            dry_run=dry_run_flag,
         )
 
         if getattr(args, "json", False):
             print(json.dumps(summary, indent=2))
         else:
+            hdr = "V0.8 HISTORICAL INGESTION SUMMARY (DRY RUN)" if dry_run_flag else "V0.8 HISTORICAL INGESTION SUMMARY"
+            action_verb = "Parsed (not saved)" if dry_run_flag else "Saved"
             print("=" * 60)
-            print("V0.8 HISTORICAL INGESTION SUMMARY")
+            print(hdr)
             print("=" * 60)
-            print(f"Total Completed Games Saved:      {summary['total_games_saved']}")
-            print(f"Total Player Box Scores Saved:    {summary['total_boxscores_saved']}")
+            print(f"Total Completed Games {action_verb}:      {summary['total_games_saved']}")
+            print(f"Total Player Box Scores {action_verb}:    {summary['total_boxscores_saved']}")
             for sc, data in summary.get("season_summaries", {}).items():
                 print(f"  - {sc} ({data['competition']}): {data['games_saved']} games, {data['boxscores_saved']} box scores")
             print("=" * 60)

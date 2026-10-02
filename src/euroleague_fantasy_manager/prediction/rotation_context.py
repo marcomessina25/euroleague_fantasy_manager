@@ -5,6 +5,28 @@ Implements European basketball realities:
 2. 4th-Quarter Blowout Dilution Factor
 3. 5-Foul Rule Fragility Truncation Model
 4. Domestic League & Double-Round Week (DRW) Congestion Discount
+
+Real-World Player Modeling Examples:
+-----------------------------------
+- Blowout Bench Risk (e.g. Mike James / Sasha Vezenkov):
+  A high-usage star (base minutes 28.0m) playing at home against a heavily outmatched
+  opponent (spread proxy +15.5 pts). With a high blowout probability (~73%), European
+  head coaches routinely bench their franchise star for the entire 4th quarter once a
+  15+ point lead is established. The star receives a -2.5m to -3.3m blowout discount,
+  protecting managers from over-projecting ceiling in non-competitive games.
+  Conversely, a deep bench reserve (base minutes 8.0m) receives a garbage-time boost (+1.2m).
+
+- 5-Foul Trouble Fragility (e.g. Mathias Lessort / Walter Tavares):
+  European basketball has 10-minute quarters and a strict 5-personal-foul limit.
+  An aggressive rim-protecting center committing 0.13 fouls/min over 24 projected minutes
+  has an expected foul count of 3.12, leading to a >38% chance of committing 4+ fouls.
+  Classified as 'HIGH' or 'SEVERE' fragility, resulting in an automated -2.5m to -3.5m penalty.
+  A disciplined guard committing 0.05 fouls/min (e.g. Kostas Sloukas) is 'LOW' fragility (0.0m penalty).
+
+- Domestic League & DRW Congestion (e.g. Kendrick Nunn / Nigel Hayes-Davis):
+  When a team plays a grueling weekend domestic fixture (ACB, GBL, BSL) followed by two
+  midweek EuroLeague games in 48 hours, veteran stars face deliberate load management
+  (-1.0m to -2.0m congestion discount and heightened minutes volatility).
 """
 
 from dataclasses import dataclass
@@ -118,8 +140,24 @@ def compute_blowout_context(
 ) -> tuple[bool, float, float]:
     """Model 4th-quarter blowout dilution and rest probability.
 
+    Parameters:
+        team_strength: Power rating of player's team [0.0 .. 1.0].
+        opponent_strength: Power rating of opponent [0.0 .. 1.0].
+        is_home: True if player's team is playing at home.
+        base_minutes: Baseline projected minutes for player.
+
     Returns:
         (is_blowout_risk, blowout_probability, blowout_discount_minutes)
+
+    Example:
+        >>> # Star guard (Mike James, 28.0 mins) at home against heavy underdog (+15.5 pt spread)
+        >>> is_risk, prob, discount = compute_blowout_context(0.85, 0.40, True, 28.0)
+        >>> is_risk
+        True
+        >>> prob > 0.70
+        True
+        >>> discount < -2.0  # Up to -3.3 min bench discount in blowout
+        True
     """
     # European basketball expected margin spread proxy
     strength_diff = team_strength - opponent_strength
@@ -159,8 +197,24 @@ def compute_foul_fragility(
 ) -> tuple[str, float, float]:
     """Model 5-foul trouble fragility under European basketball rules (40-min game).
 
+    Parameters:
+        position: Player position code ('G', 'F', 'C', 'HC').
+        foul_rate_per_min: Historical personal fouls committed per minute played.
+        opp_foul_rate: Opponent's foul-drawing rate (default: 0.10).
+        base_minutes: Baseline projected minutes for player.
+
     Returns:
         (fragility_tier, foul_trouble_probability, foul_discount_minutes)
+
+    Example:
+        >>> # Rim-protecting physical center (Mathias Lessort, 0.13 fouls/min, 24 base minutes)
+        >>> tier, p_foul, discount = compute_foul_fragility("C", 0.13, 0.10, 24.0)
+        >>> tier in ("HIGH", "SEVERE")
+        True
+        >>> p_foul > 0.35  # >35% chance of committing 4+ fouls
+        True
+        >>> discount < -1.5  # Substantial minutes reduction
+        True
     """
     pos = position.upper().strip()
     if pos == "HC":

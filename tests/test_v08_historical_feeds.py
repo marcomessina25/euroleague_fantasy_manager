@@ -225,3 +225,64 @@ def test_cli_ingestion_mock_run(tmp_path, monkeypatch, sample_game_payload, samp
     payload = json.loads(out)
     assert payload["total_games_saved"] == 1
     assert payload["total_boxscores_saved"] == 24
+
+
+def test_ingest_historical_data_dry_run(tmp_path, sample_game_payload, sample_stats_payload):
+    db_file = tmp_path / "dry_run.sqlite3"
+    store = HistoricalStatsStore(db_file)
+
+    mock_client = MagicMock(spec=HistoricalFeedsClient)
+    mock_client.fetch_season_games.return_value = [sample_game_payload]
+    mock_client.fetch_game_stats.return_value = sample_stats_payload
+    mock_client.parse_game_payload = HistoricalFeedsClient.parse_game_payload
+
+    summary = ingest_historical_data(
+        competitions=["E"],
+        seasons=["2024"],
+        store=store,
+        client=mock_client,
+        delay_seconds=0.0,
+        dry_run=True,
+    )
+
+    assert summary["dry_run"] is True
+    assert summary["total_games_saved"] == 1
+    assert summary["total_boxscores_saved"] == 24
+
+    # Crucial: verify NOTHING was written to database
+    assert len(store.get_games(season_code="E2024")) == 0
+    assert len(store.get_boxscores(season_code="E2024")) == 0
+
+
+def test_cli_ingestion_dry_run(tmp_path, monkeypatch, sample_game_payload, sample_stats_payload, capsys):
+    db_file = tmp_path / "cli_dry_run.sqlite3"
+
+    mock_client = MagicMock(spec=HistoricalFeedsClient)
+    mock_client.fetch_season_games.return_value = [sample_game_payload]
+    mock_client.fetch_game_stats.return_value = sample_stats_payload
+    mock_client.parse_game_payload = HistoricalFeedsClient.parse_game_payload
+
+    monkeypatch.setattr(
+        "euroleague_fantasy_manager.ingestion.HistoricalFeedsClient",
+        lambda *args, **kwargs: mock_client,
+    )
+    monkeypatch.setattr(
+        "euroleague_fantasy_manager.ingestion.historical_feeds.HistoricalFeedsClient",
+        lambda *args, **kwargs: mock_client,
+    )
+
+    ret = main([
+        "--db", str(db_file),
+        "fetch-history",
+        "--competitions", "E",
+        "--seasons", "2024",
+        "--dry-run",
+    ])
+    assert ret == 0
+    out = capsys.readouterr().out
+    assert "DRY RUN" in out
+    assert "Total Completed Games Parsed (not saved):      1" in out
+
+    store = HistoricalStatsStore(db_file)
+    assert len(store.get_games(season_code="E2024")) == 0
+

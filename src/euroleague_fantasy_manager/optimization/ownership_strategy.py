@@ -3,14 +3,17 @@
 Implements game theory for competitive fantasy leagues:
 1. Archetype Classification:
    - CORE: High ownership (>=38%), consensus picks with high floor. Owning them shields rank.
+     Example: Sasha Vezenkov (58% ownership, 22.5 xP). High floor, essential template anchor.
    - SHIELD: Moderate-to-high ownership (20-38%), defensive picks matching template rosters.
+     Example: Shane Larkin / Facundo Campazzo (28% ownership, 16.0 xP). Shields against field moves.
    - SWORD: Low ownership (<=15%) with high ceiling. Critical differentials to climb rank.
+     Example: Sylvain Francisco / Carlik Jones (7% ownership, 14.5 xP, ceiling 21.0). High-leverage differential.
    - NEUTRAL: Standard rotation assets without pronounced ownership skew.
 
 2. Strategy Presets:
    - BALANCED_VALUE: Unconstrained expected score (xP) maximization.
-   - RANK_PROTECT: Defensive mode favoring Core and Shield picks, penalizing low-owned volatility.
-   - RANK_CHASE: Aggressive differential mode boosting Sword picks and fading high-owned chalk.
+   - RANK_PROTECT: Defensive mode favoring Core and Shield picks (+2.20/+1.10 delta), penalizing low-owned volatility (-1.25 delta).
+   - RANK_CHASE: Aggressive differential mode boosting Sword picks (+2.50 + ceiling bonus) and fading high-owned chalk (-2.20 delta).
 """
 
 from __future__ import annotations
@@ -84,7 +87,32 @@ def classify_ownership_archetype(
     expected_fp: float = 0.0,
     ceiling: float = 0.0,
 ) -> tuple[OwnershipArchetype, str]:
-    """Classify player into Core, Shield, Sword, or Neutral archetype with badge string."""
+    """Classify player into Core, Shield, Sword, or Neutral archetype with badge string.
+
+    Parameters:
+        ownership_pct: Percentage of fantasy teams owning the player [0.0 .. 100.0].
+        expected_fp: Baseline expected fantasy points projection.
+        ceiling: 90th percentile ceiling projection (default: 0.0).
+
+    Returns:
+        (archetype_enum, badge_string)
+
+    Examples:
+        >>> # Vezenkov at 55% ownership -> CORE
+        >>> arch, badge = classify_ownership_archetype(55.0, expected_fp=22.0)
+        >>> arch.value, badge
+        ('CORE', '[Core 55%]')
+
+        >>> # Larkin at 28% ownership -> SHIELD
+        >>> arch, badge = classify_ownership_archetype(28.0, expected_fp=16.5)
+        >>> arch.value, badge
+        ('SHIELD', '[Shield 28%]')
+
+        >>> # Francisco at 8% ownership with 18.0 ceiling -> SWORD
+        >>> arch, badge = classify_ownership_archetype(8.0, expected_fp=13.0, ceiling=18.0)
+        >>> arch.value, badge
+        ('SWORD', '[Sword 8%]')
+    """
     own = max(0.0, min(100.0, float(ownership_pct)))
     own_int = int(round(own))
 
@@ -135,8 +163,24 @@ def adjust_contract_for_strategy(
 ) -> tuple[PlayerProjectionContract, OwnershipProfile]:
     """Adjust contract expected score based on rank-aware portfolio strategy preset.
 
+    Parameters:
+        contract: Base player projection contract.
+        ownership_pct: Fantasy ownership percentage [0.0 .. 100.0].
+        preset: StrategyPreset ('balanced_value', 'rank_protect', 'rank_chase').
+
     Returns:
         (strategy_adjusted_contract, ownership_profile)
+
+    Behavior:
+        - BALANCED_VALUE: Unaltered baseline projection.
+        - RANK_PROTECT:
+            + CORE players receive +2.20 xP bonus (anchors rank defense).
+            + SHIELD players receive +1.10 xP bonus.
+            + SWORD differentials receive -1.25 xP penalty (discourages unnecessary risk).
+        - RANK_CHASE:
+            + SWORD differentials receive +2.50 xP + 0.25*(ceiling - base_xp) boost.
+            + CORE players receive -2.20 xP chalk discount (template players cannot produce rank leap).
+            + SHIELD players receive -0.75 xP discount.
     """
     preset_enum = StrategyPreset.from_str(preset)
     profile = compute_player_ownership_profile(

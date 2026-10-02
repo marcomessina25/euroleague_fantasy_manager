@@ -160,6 +160,28 @@ def test_player_intel_endpoint_not_found(test_client):
     assert resp.status_code == 404
 
 
+def test_player_intel_input_validation(test_client):
+    # 1. Invalid player_id (non-positive)
+    resp = test_client.get("/api/workstation/player-intel/0?season=2026/27&round_number=1&league=euroleague")
+    assert resp.status_code == 400
+    assert "Invalid player_id" in resp.json()["detail"]
+
+    resp_neg = test_client.get("/api/workstation/player-intel/-5?season=2026/27&round_number=1&league=euroleague")
+    assert resp_neg.status_code == 400
+
+    # 2. Out-of-bounds round_number (< 1 or > 38)
+    resp_r0 = test_client.get("/api/workstation/player-intel/101?season=2026/27&round_number=0&league=euroleague")
+    assert resp_r0.status_code == 400
+    assert "out of bounds" in resp_r0.json()["detail"]
+
+    resp_r50 = test_client.get("/api/workstation/player-intel/101?season=2026/27&round_number=50&league=euroleague")
+    assert resp_r50.status_code == 400
+
+    # 3. Malformed league
+    resp_l = test_client.get("/api/workstation/player-intel/101?season=2026/27&round_number=1&league=nba")
+    assert resp_l.status_code == 400
+
+
 def test_player_browser_includes_v08_badges(test_client):
     resp = test_client.get("/api/workstation/players?season=2026/27&round_number=1&league=euroleague&limit=10")
     assert resp.status_code == 200

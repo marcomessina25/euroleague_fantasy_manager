@@ -698,9 +698,14 @@ def ingest_historical_data(
     max_games_per_season: int | None = None,
     delay_seconds: float = 0.05,
     logger_callback: Any = None,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Ingest completed historical games and detailed player box scores for EuroLeague and EuroCup."""
-    if store is None:
+    """Ingest completed historical games and detailed player box scores for EuroLeague and EuroCup.
+
+    If dry_run is True, games and box scores are fetched, parsed, and validated,
+    but not committed to the SQLite database.
+    """
+    if store is None and not dry_run:
         store = HistoricalStatsStore()
     if client is None:
         client = HistoricalFeedsClient()
@@ -708,6 +713,7 @@ def ingest_historical_data(
     summary: dict[str, Any] = {
         "competitions": list(competitions),
         "seasons": list(seasons),
+        "dry_run": dry_run,
         "total_games_saved": 0,
         "total_boxscores_saved": 0,
         "season_summaries": {},
@@ -717,8 +723,9 @@ def ingest_historical_data(
         comp_code = comp.upper()
         for season_raw in seasons:
             season_code = resolve_feed_season_code(comp_code, season_raw)
+            prefix = "[DRY RUN] " if dry_run else ""
             if logger_callback:
-                logger_callback(f"Fetching games for competition {comp_code}, season {season_code}...")
+                logger_callback(f"{prefix}Fetching games for competition {comp_code}, season {season_code}...")
 
             games = client.fetch_season_games(competition_code=comp_code, season_code=season_code)
             if max_games_per_season is not None and max_games_per_season > 0:
@@ -745,14 +752,15 @@ def ingest_historical_data(
                     continue
 
                 game_rec, boxscores = client.parse_game_payload(g, stats)
-                store.save_games([game_rec])
-                store.save_boxscores(boxscores)
+                if not dry_run and store is not None:
+                    store.save_games([game_rec])
+                    store.save_boxscores(boxscores)
 
                 season_games_saved += 1
                 season_boxscores_saved += len(boxscores)
 
                 if logger_callback and (idx % 25 == 0 or idx == len(games)):
-                    logger_callback(f"[{comp_code} {season_code}] Processed {idx}/{len(games)} games ({season_boxscores_saved} box scores)")
+                    logger_callback(f"{prefix}[{comp_code} {season_code}] Processed {idx}/{len(games)} games ({season_boxscores_saved} box scores)")
 
                 if delay_seconds > 0:
                     import time

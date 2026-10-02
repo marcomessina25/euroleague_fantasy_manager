@@ -912,9 +912,19 @@ def player_intel_endpoint(
     league: League = Depends(parse_league),
     prediction_service: PredictionService = Depends(get_prediction_service),
 ) -> dict[str, Any]:
-    """Provide detailed player intelligence card: rotation, minutes breakdown, ownership, and context."""
+    if player_id <= 0:
+        raise HTTPException(status_code=400, detail="Invalid player_id: must be a positive integer.")
+    if round_number is not None and (round_number < 1 or round_number > 38):
+        raise HTTPException(status_code=400, detail=f"Invalid round_number: {round_number} is out of bounds (1..38).")
+
     rnd = round_number or 1
     contracts = prediction_service.get_projections(season, rnd, league=league.value)
+    if not contracts:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No projection data available for season {season}, round {rnd}, league {league.value}.",
+        )
+
     contract = next((c for c in contracts if c.player_id == player_id), None)
     if contract is None:
         raise HTTPException(status_code=404, detail=f"Player ID {player_id} not found in round {rnd}.")
