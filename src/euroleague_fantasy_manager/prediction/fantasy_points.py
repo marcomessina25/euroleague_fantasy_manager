@@ -12,6 +12,7 @@ from .production import (
     predict_expected_coach_conditional_fp,
     predict_expected_fp_per_min_if_play,
 )
+from .injury_surge import apply_surges_to_projections, compute_round_injury_surges
 from .rotation_context import compute_rotation_profile
 from .uncertainty import estimate_prediction_uncertainty
 
@@ -146,6 +147,7 @@ def predict_round_decomposed(
     production_model: str = "production_ridge_v03",
     calibrator: CalibrationModel | None = None,
     risk_lambda: float = 0.15,
+    apply_injury_surges: bool = True,
 ) -> list[DecomposedProjection]:
     """Compute decomposed projections for all players in a round feature table."""
     projections: list[DecomposedProjection] = []
@@ -160,4 +162,9 @@ def predict_round_decomposed(
             risk_lambda=risk_lambda,
         )
         projections.append(proj)
+
+    if apply_injury_surges and feature_table:
+        surges = compute_round_injury_surges(feature_table)
+        projections = apply_surges_to_projections(projections, surges)
+
     return projections
