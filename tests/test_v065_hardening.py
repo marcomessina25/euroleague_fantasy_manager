@@ -578,9 +578,9 @@ def test_w5_static_app_js_escaping_guard():
 # =========================================================================
 
 def test_w6_version_single_sourcing():
-    """Version must be single-sourced and match 0.7.0."""
-    assert euroleague_fantasy_manager.__version__ == "0.7.0"
-    assert importlib.metadata.version("euroleague-fantasy-manager") == "0.7.0"
+    """Version must be single-sourced and match 0.8.0."""
+    assert euroleague_fantasy_manager.__version__ == "0.8.0"
+    assert importlib.metadata.version("euroleague-fantasy-manager") == "0.8.0"
 
 
 def test_w6_dossier_content_hash_invariance_and_sensitivity(tmp_path: Path):
