@@ -38,6 +38,15 @@ from .option_value import (
     compute_captain_option_value,
     compute_turn_substitution_option_bonus,
 )
+from .ownership_strategy import (
+    OwnershipArchetype,
+    OwnershipProfile,
+    StrategyPreset,
+    adjust_contract_for_strategy,
+    apply_strategy_preset_to_market,
+    classify_ownership_archetype,
+    compute_player_ownership_profile,
+)
 from .initial_team import (
     InitialTeamOptimizationResult,
     InitialTeamRiskMode,
@@ -96,4 +105,11 @@ __all__ = [
     "ModelComparisonRow",
     "ModelComparisonLedger",
     "SequentialDecisionSimulator",
+    "OwnershipArchetype",
+    "OwnershipProfile",
+    "StrategyPreset",
+    "adjust_contract_for_strategy",
+    "apply_strategy_preset_to_market",
+    "classify_ownership_archetype",
+    "compute_player_ownership_profile",
 ]

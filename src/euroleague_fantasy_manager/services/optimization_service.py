@@ -253,6 +253,7 @@ class OptimizationService:
         unlimited: bool = False,
         candidate_pool: Sequence[PlayerProjectionContract] | None = None,
         exhaustive: bool = False,
+        strategy_preset: str = "balanced_value",
     ) -> TransferOptimizationResult:
         """Find optimal trade combinations for the team."""
         team = self.team_service.get_team(team_id)
@@ -269,6 +270,21 @@ class OptimizationService:
             if candidate_pool is not None
             else self.prediction_service.get_projections(season, rnd, league=league)
         )
+
+        if strategy_preset and strategy_preset != "balanced_value":
+            from euroleague_fantasy_manager.optimization.ownership_strategy import (
+                apply_strategy_preset_to_market,
+            )
+            ownership_map: dict[int, float] = {}
+            if hasattr(self.team_service, "store") and hasattr(self.team_service.store, "db_path"):
+                from euroleague_fantasy_manager.storage import SnapshotStore
+                store = SnapshotStore(self.team_service.store.db_path)
+                try:
+                    players = store.load_latest_players()
+                    ownership_map = {p.id: p.popularity for p in players}
+                except Exception:
+                    ownership_map = {}
+            market, _ = apply_strategy_preset_to_market(market, ownership_map, preset=strategy_preset)
 
         return self.transfer_optimizer.optimize_transfers(
             current_squad=squad_contracts,
