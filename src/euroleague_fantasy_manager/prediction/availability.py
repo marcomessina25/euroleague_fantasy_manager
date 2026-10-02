@@ -45,6 +45,10 @@ def predict_play_probability(
         if f.pre_round_status == "out":
             return 0.0
         return round(0.50 * status_prob + 0.50 * rolling_rate, 4)
+    if m in ("availability_learned_v09", "learned_v09", "learned", "learned_availability"):
+        from .learned_models import get_default_learned_pipeline
+        pipe = get_default_learned_pipeline()
+        return pipe.availability_model.predict_play_probability(f)
 
     # Default: availability_logistic_v03 (calibrated regularized logistic log-odds score)
     if f.pre_round_status == "out":

@@ -16,6 +16,14 @@ from .fantasy_points import (
     predict_player_fantasy_points,
     predict_round_decomposed,
 )
+from .learned_models import (
+    LEARNED_FEATURE_NAMES,
+    LearnedAvailabilityModel,
+    LearnedMinutesModel,
+    LearnedModelPipeline,
+    extract_learned_features,
+    get_default_learned_pipeline,
+)
 from .minutes import (
     predict_expected_minutes_if_play,
 )
@@ -57,6 +65,10 @@ __all__ = [
     "CalibrationModel",
     "DecomposedProjection",
     "InjuryVacancy",
+    "LEARNED_FEATURE_NAMES",
+    "LearnedAvailabilityModel",
+    "LearnedMinutesModel",
+    "LearnedModelPipeline",
     "ModelMetadata",
     "ModelRegistry",
     "PredictionUncertainty",
@@ -76,7 +88,9 @@ __all__ = [
     "compute_round_injury_surges",
     "compute_round_rotation_profiles",
     "estimate_prediction_uncertainty",
+    "extract_learned_features",
     "fit_out_of_sample_calibrator",
+    "get_default_learned_pipeline",
     "get_model_registry",
     "identify_team_vacancies",
     "predict_expected_coach_conditional_fp",

@@ -224,6 +224,43 @@ class ModelRegistry:
                 calibration_method="none",
                 created_at=now_iso,
             ),
+            ModelMetadata(
+                model_id="availability_learned_v09",
+                model_version="0.9.0",
+                model_family="classifier",
+                target_type="play_probability",
+                training_window="hist_gradient_boosting_platt",
+                feature_set_version="1.3.0",
+                hyperparameters={"algorithm": "HistGradientBoostingClassifier", "calibration": "platt"},
+                calibration_method="platt",
+                created_at=now_iso,
+            ),
+            ModelMetadata(
+                model_id="minutes_learned_v09",
+                model_version="0.9.0",
+                model_family="component_minutes_learned",
+                target_type="minutes",
+                training_window="hist_gradient_boosting_regressor",
+                feature_set_version="1.3.0",
+                hyperparameters={"algorithm": "HistGradientBoostingRegressor", "max_leaf_nodes": 15},
+                calibration_method="none",
+                created_at=now_iso,
+            ),
+            ModelMetadata(
+                model_id="learned_v09",
+                model_version="0.9.0",
+                model_family="component_decomposed_learned",
+                target_type="fantasy_points",
+                training_window="point_in_time_gradient_boosting",
+                feature_set_version="1.3.0",
+                hyperparameters={
+                    "availability_model": "availability_learned_v09",
+                    "minutes_model": "minutes_learned_v09",
+                    "production_model": "production_ridge_v03",
+                },
+                calibration_method="none",
+                created_at=now_iso,
+            ),
         ]
         for m in defaults:
             self.register(m)

@@ -25,6 +25,7 @@ SUPPORTED_BASELINE_MODELS = (
     "fp_decomposed_v03",
     "fp_decomposed_calibrated_v03",
     "fp_context_v08",
+    "learned_v09",
 )
 
 
@@ -57,6 +58,10 @@ def canonical_model_name(name: str) -> str:
         "context": "fp_context_v08",
         "context_v08": "fp_context_v08",
         "fp_context_v08": "fp_context_v08",
+        "learned": "learned_v09",
+        "learned_v09": "learned_v09",
+        "fp_learned": "learned_v09",
+        "fp_learned_v09": "learned_v09",
     }
     if norm not in aliases:
         raise ValueError(f"Unsupported evaluation baseline model: {name!r}. Supported: {SUPPORTED_BASELINE_MODELS}")
@@ -113,15 +118,21 @@ def predict_single_player_baseline(
     pos_enum = Position.from_raw(feature_row.position)
     credits = round(feature_row.quotation_at_decision_tenths / 10.0, 1)
 
-    # 1. Handle V0.3 & V0.8 Decomposed models
-    if canon in ("fp_decomposed_v03", "fp_decomposed_calibrated_v03", "fp_context_v08"):
+    # 1. Handle V0.3, V0.8 & V0.9 Decomposed models
+    if canon in ("fp_decomposed_v03", "fp_decomposed_calibrated_v03", "fp_context_v08", "learned_v09"):
         from ..prediction.fantasy_points import predict_player_fantasy_points
 
-        min_m = "minutes_context_v08" if canon == "fp_context_v08" else "minutes_ewma_v03"
-        m_version = "0.8.0" if canon == "fp_context_v08" else "0.3.0"
+        avail_m = "availability_learned_v09" if canon == "learned_v09" else "availability_logistic_v03"
+        min_m = (
+            "minutes_learned_v09"
+            if canon == "learned_v09"
+            else ("minutes_context_v08" if canon == "fp_context_v08" else "minutes_ewma_v03")
+        )
+        m_version = "0.9.0" if canon == "learned_v09" else ("0.8.0" if canon == "fp_context_v08" else "0.3.0")
 
         proj = predict_player_fantasy_points(
             f=feature_row,
+            availability_model=avail_m,
             minutes_model=min_m,
             calibrator=calibrator if canon == "fp_decomposed_calibrated_v03" else None,
         )
