@@ -375,9 +375,69 @@ V0.7 un-throttles the decision engine to its full legal action space, makes the 
 ### 4. Sequential Decision Simulation & Regret Attribution
 
 - **Deterministic Season Simulation**: `SequentialDecisionSimulator` replays entire multi-round seasons end-to-end with transfer, lineup, captaincy, sixth man, and T1 $\to$ T2 turn substitutions under a zero-mutation invariant.
-- **Synthetic Multi-Season Fixtures**: Deterministic synthetic multi-season replay fixtures across EuroLeague and EuroCup (`E2022`-`E2025`, `U2022`-`U2025`) enable offline replay evaluation with zero network dependencies (genuine live box-score ingestion scheduled for V0.8).
+- **Synthetic Multi-Season Fixtures**: Deterministic synthetic multi-season replay fixtures across EuroLeague and EuroCup (`E2022`-`E2025`, `U2022`-`U2025`) enable offline replay evaluation with zero network dependencies (genuine live box-score ingestion delivered in V0.8).
 - **Telescoping Regret Decomposition**: `RegretAttribution` decomposes decision regret into Captain, Sixth Man, Bench, Turn Substitution, Transfer, and Formation regret, satisfying exact summation ($\text{residual} \equiv 0$) by telescoping construction.
 - **Multi-Model Comparison Ledgers**: Benchmark decision strategies (Heuristic, Decomposed Models, Oracle, Human) with exportable Markdown and CSV comparison tables.
+
+## V0.8 Basketball Context Modeling, Participation & Rotation Dynamics, Rank-Aware Decisions & Risk Profiling
+
+V0.8 grounds models in verified real-world European basketball dynamics, introduces rank-aware portfolio game theory, formalizes Turn 1 $\to$ Turn 2 dynamic option value, and ingests official historical box scores:
+
+### 1. Real Historical Box-Score Ingestion (`elf fetch-history`)
+
+- **Official IncrowdSports Connector**: Ingests game schedules, quarter scores, team stats, and detailed player box scores (minutes, points, PIR, rebounds, assists, fouls, turnovers, +/-) directly from official IncrowdSports v2 feeds.
+- **Multi-Season Scope**: 4 completed seasons (`2022-23`, `2023-24`, `2024-25`, `2025-26`) across both **EuroLeague** (`E2022`..`E2025`) and **EuroCup** (`U2022`..`U2025`) stored in SQLite schema v4 (`historical_games`, `historical_player_stats`, `historical_quarter_scores`).
+- **Dry-Run Validation**: Safely test feed parsing and counts without writing to SQLite using `--dry-run`.
+- **CLI Commands**:
+  ```powershell
+  # Fetch official box scores for EuroLeague 2024 season
+  elf fetch-history --competitions E --seasons 2024
+
+  # Quick test with dry-run mode (validates without database writes)
+  elf fetch-history --competitions E --seasons 2024 --max-games 5 --dry-run
+  ```
+
+### 2. Basketball Minutes & Context Models (`minutes_context_v08`, `fp_context_v08`)
+
+- **Rotation Role Tiers**: Classifies players into `starter`, `core_rotation`, `bench_rotation`, or `fringe` with tier-calibrated minutes volatility ($\sigma_m$).
+- **European 4th-Quarter Blowout Benches**: Quantifies blowout probability from game win spreads. Stars playing $\ge 22\text{m}$ receive non-linear minutes discounts (up to $-3.3\text{m}$) when games are projected blowouts (15+ pt lead), while deep bench players receive garbage-time boosts.
+- **5-Foul Rule Fragility**: Models 5-foul limit risk under 10-minute European quarters using Poisson foul arrival rates. Centers and high-foul players ($>0.12\text{ fouls/min}$) receive automatic minutes penalties ($-1.5\text{m to } -3.5\text{m}$).
+- **Domestic League & DRW Congestion**: Discounts expected minutes and increases uncertainty for players facing domestic league weekend games ahead of midweek double-round weeks (DRW).
+
+### 3. Positional Vacancy Redistribution & Injury Surges
+
+- **Automated Injury Replacement**: When high-usage starters or core players are ruled out, their vacated minutes and usage are automatically redistributed to same-position teammates.
+- **Physical Minutes Caps**: Enforces realistic physical ceiling caps ($35.0\text{m}$ for guards/forwards, $32.5\text{m}$ for centers) with dynamic usage surge factors ($\Delta \text{Usage}$ up to $+35\%$).
+- Integrated into `predict_round_decomposed(..., apply_injury_surges=True)`.
+
+### 4. Rank-Aware Game Theory (Core / Shield / Sword) & Strategy Presets
+
+- **Archetype Classification**:
+  - **Core** ($\ge 38\%$ ownership): Essential consensus picks with high floor. Owning them shields rank against template peers (e.g. Vezenkov).
+  - **Shield** ($20\%\text{--}38\%$ ownership): High-value assets that defend rank against the field (e.g. Larkin).
+  - **Sword** ($\le 15\%$ ownership): High-ceiling differentials needed to leapfrog rivals and climb leaderboards (e.g. Francisco).
+- **Strategy Presets in Trade Studio & CLI**:
+  - `balanced_value`: Standard unconstrained expected fantasy points maximization.
+  - `rank_protect`: Defensive mode favoring Core and Shield picks (+2.20/+1.10 xP) while penalizing low-owned volatility (-1.25 xP).
+  - `rank_chase`: Aggressive mode boosting Sword differentials with upside multipliers ($+2.50\text{ xP}$ + ceiling bonus) and fading high-owned template chalk.
+
+### 5. Turn 1 $\to$ Turn 2 Option Value Formalization
+
+- **Margrabe Exchange Option Model**: Mathematically evaluates the dynamic substitution option value of holding Turn 2 players on the bench:
+  $$\text{Option Value} = \mathbb{E}\left[\max(0, X_{T2} - X_{T1})\right]$$
+  derived via Black-Scholes / Margrabe closed-form exchange option formula with zero correlation ($\rho = 0$).
+- **Bench Insurance Valuation**: Explicitly values bench insurance based on starter failure probability, T2 starter upside, and official $0.5\times$ bench scoring rules.
+
+### 6. Web Workstation Context Badges & Player Intelligence Drawer
+
+- **Inline Badges & Chips**: Trade Studio and half-court lineups display contextual badges:
+  - `[Core 55%]`, `[Shield 28%]`, `[Sword 8%]`
+  - `[Blowout Risk]`, `[Foul Fragile]`, `[DRW Congestion]`, `[Surge]`
+- **Strategy Preset Selector**: Dropdown above Trade Studio (`Balanced Value | Rank Protect | Rank Chase`) instantly adjusts transfer optimization recommendations.
+- **Player Intelligence Card Modal**: Detailed drawer (`GET /api/workstation/player-intel/{player_id}`) displaying:
+  - Role tier, base vs final expected minutes, minutes volatility ($\sigma_m$).
+  - Blowout probability, foul fragility tier, and congestion index.
+  - Ownership profile, ceiling ($+1.28\sigma$), and floor ($-1.0\sigma$) projections.
 
 ## License
 
