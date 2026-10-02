@@ -10,6 +10,10 @@ from euroleague_fantasy_manager.competition.ruleset import League
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit
 from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
+from euroleague_fantasy_manager.optimization.ownership_strategy import (
+    classify_ownership_archetype,
+    compute_player_ownership_profile,
+)
 from euroleague_fantasy_manager.rules import MAX_TRADES_PER_ROUND
 
 # Largest page the player browser will serve in one request. Paging with
@@ -66,6 +70,7 @@ class OptimizeTransfersRequest(BaseModel):
     max_trades: int = MAX_TRADES_PER_ROUND
     unlimited: bool = False
     exhaustive: bool = False
+    strategy_preset: str = "balanced_value"
 
 
 class MultiRoundRequest(BaseModel):
@@ -390,6 +395,7 @@ def optimize_transfers_endpoint(
             max_trades=req.max_trades,
             unlimited=req.unlimited,
             exhaustive=req.exhaustive,
+            strategy_preset=req.strategy_preset,
         )
 
         recs = []
@@ -708,6 +714,15 @@ def list_players_endpoint(
     contracts = prediction_service.get_projections(season, round_number, league=league.value)
     valuations = prediction_service.get_player_valuations(season, round_number, league=league.value)
 
+    ownership_map: dict[int, float] = {}
+    try:
+        from euroleague_fantasy_manager.storage import SnapshotStore
+        s_store = SnapshotStore(prediction_service.database_path)
+        p_list = s_store.load_latest_players(league_id=league.league_id if hasattr(league, "league_id") else None)
+        ownership_map = {p.id: p.popularity for p in p_list}
+    except Exception:
+        ownership_map = {}
+
     target_pos_code = None
     if position:
         try:
@@ -730,6 +745,12 @@ def list_players_endpoint(
             continue
 
         val = valuations.get(c.player_id, {})
+        own_pct = float(ownership_map.get(c.player_id, 10.0))
+        arch, arch_badge = classify_ownership_archetype(own_pct, expected_fp=c.expected_fp)
+        badges = []
+        if arch_badge:
+            badges.append(arch_badge)
+
         filtered.append({
             "player_id": c.player_id,
             "name": c.player_name,
@@ -748,6 +769,9 @@ def list_players_endpoint(
             "turn_number": c.turn_number,
             "opponent_code": c.opponent_code,
             "is_home": c.is_home,
+            "ownership_pct": round(own_pct, 1),
+            "archetype": arch.value,
+            "badges": badges,
         })
 
     # Sort deterministically: the chosen key, then player_id to break ties so
@@ -878,6 +902,104 @@ def suggest_initial_team_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/player-intel/{player_id}")
+def player_intel_endpoint(
+    player_id: int,
+    season: str = "2026/27",
+    round_number: int | None = None,
+    league: League = Depends(parse_league),
+    prediction_service: PredictionService = Depends(get_prediction_service),
+) -> dict[str, Any]:
+    """Provide detailed player intelligence card: rotation, minutes breakdown, ownership, and context."""
+    rnd = round_number or 1
+    contracts = prediction_service.get_projections(season, rnd, league=league.value)
+    contract = next((c for c in contracts if c.player_id == player_id), None)
+    if contract is None:
+        raise HTTPException(status_code=404, detail=f"Player ID {player_id} not found in round {rnd}.")
+
+    ownership_map: dict[int, float] = {}
+    try:
+        from euroleague_fantasy_manager.storage import SnapshotStore
+        s_store = SnapshotStore(prediction_service.database_path)
+        p_list = s_store.load_latest_players(league_id=league.league_id if hasattr(league, "league_id") else None)
+        ownership_map = {p.id: p.popularity for p in p_list}
+    except Exception:
+        ownership_map = {}
+
+    own_pct = float(ownership_map.get(player_id, 10.0))
+    own_prof = compute_player_ownership_profile(
+        player_id=player_id,
+        player_name=contract.player_name,
+        ownership_pct=own_pct,
+        expected_fp=contract.expected_fp,
+        sigma=contract.uncertainty or 3.5,
+    )
+
+    pos_code = contract.position.short_code if hasattr(contract.position, "short_code") else str(contract.position)
+
+    from euroleague_fantasy_manager.prediction.rotation_context import (
+        classify_rotation_tier,
+        compute_blowout_context,
+        compute_congestion_context,
+        compute_foul_fragility,
+        compute_minutes_volatility,
+    )
+    base_m = contract.expected_minutes if contract.expected_minutes > 0.0 else 20.0
+    role_tier = classify_rotation_tier(0.8 if contract.expected_minutes >= 24 else 0.2, base_m, contract.credits)
+    volatility = compute_minutes_volatility(role_tier, contract.uncertainty or 3.0, 0.8)
+    is_blowout, p_blowout, blowout_disc = compute_blowout_context(0.65, 0.50, contract.is_home, base_m)
+    foul_tier, p_foul, foul_disc = compute_foul_fragility(pos_code, 0.09, 0.10, base_m)
+    c_idx, c_disc = compute_congestion_context(3.0, False, contract.turn_number, base_m)
+
+    badges = []
+    if own_prof.badge:
+        badges.append(own_prof.badge)
+    if role_tier in ("starter", "core_rotation"):
+        badges.append(role_tier.capitalize().replace("_", " "))
+    if is_blowout and abs(blowout_disc) >= 1.0:
+        badges.append("Blowout Risk")
+    if foul_tier in ("HIGH", "SEVERE"):
+        badges.append(f"Foul Fragile ({foul_tier})")
+    if c_idx >= 0.50:
+        badges.append("DRW Congestion")
+
+    return {
+        "player_id": contract.player_id,
+        "name": contract.player_name,
+        "position": pos_code,
+        "team_code": contract.team_code,
+        "credits": contract.credits,
+        "price_tenths": contract.price_tenths,
+        "expected_fp": round(contract.expected_fp, 2),
+        "probability_play": round(contract.probability_play, 2),
+        "turn_number": contract.turn_number,
+        "is_home": contract.is_home,
+        "opponent_code": contract.opponent_code,
+        "badges": badges,
+        "ownership": {
+            "percentage": own_prof.ownership_pct,
+            "archetype": own_prof.archetype.value,
+            "badge": own_prof.badge,
+            "ceiling": own_prof.ceiling_projection,
+            "floor": own_prof.floor_projection,
+        },
+        "rotation": {
+            "role_tier": role_tier,
+            "base_expected_minutes": round(base_m, 1),
+            "minutes_std": volatility,
+            "blowout_risk": is_blowout,
+            "blowout_probability": p_blowout,
+            "blowout_discount_minutes": blowout_disc,
+            "foul_fragility_tier": foul_tier,
+            "foul_trouble_probability": p_foul,
+            "foul_discount_minutes": foul_disc,
+            "congestion_index": c_idx,
+            "congestion_discount_minutes": c_disc,
+            "final_expected_minutes": round(max(4.0, min(37.5, base_m + blowout_disc + foul_disc + c_disc)), 1),
+        },
+    }
 
 
 @router.post("/update-data")
