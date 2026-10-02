@@ -13,10 +13,16 @@
     <div class="brand">
       <span style="font-size:1.5rem;">🏀</span>
       <h1>EuroLeague Fantasy Workstation</h1>
-      <span class="badge-version">v0.6.0</span>
+      <span class="badge-version">v0.9.0</span>
     </div>
 
     <div class="header-controls">
+      <!-- Competition Switcher (EuroLeague / EuroCup) -->
+      <div class="comp-switcher" id="competition-switcher" title="Toggle between EuroLeague and EuroCup Fantasy Competitions">
+        <button id="btn-comp-euroleague" class="comp-toggle-btn active" onclick="switchCompetition('euroleague')">EuroLeague</button>
+        <button id="btn-comp-eurocup" class="comp-toggle-btn" onclick="switchCompetition('eurocup')">EuroCup</button>
+      </div>
+
       <!-- Team Profile Tabs (up to 6) -->
       <div class="team-tabs" id="team-tabs-container">
         <!-- Rendered via JS -->

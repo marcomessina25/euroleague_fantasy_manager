@@ -356,6 +356,46 @@ def build_parser() -> argparse.ArgumentParser:
         help="EWMA decay parameter alpha in (0, 1] (default: 0.25).",
     )
 
+    benchmark_parser = eval_sub.add_parser(
+        "benchmark",
+        help="Run multi-model benchmark ledger across historical model generations (V0.1 through V0.9).",
+    )
+    benchmark_parser.add_argument(
+        "--season",
+        type=str,
+        default="2025",
+        help="Target season (e.g., 2025 or E2025, default: 2025).",
+    )
+    benchmark_parser.add_argument(
+        "--rounds",
+        type=str,
+        default="1:4",
+        help="Round range (e.g., '1:4', default: 1:4).",
+    )
+    benchmark_parser.add_argument(
+        "--models",
+        nargs="*",
+        default=["season_mean,last5,ewma,xpdk_v02,fp_decomposed_v03,fp_context_v08,learned_v09"],
+        help="Models to benchmark (space or comma-separated).",
+    )
+    benchmark_parser.add_argument(
+        "--alpha",
+        type=float,
+        default=0.25,
+        help="EWMA decay parameter alpha in (0, 1] (default: 0.25).",
+    )
+    benchmark_parser.add_argument(
+        "--reports-dir",
+        type=Path,
+        default=None,
+        help="Optional directory to output benchmark markdown report.",
+    )
+    benchmark_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output JSON summary.",
+    )
+
     # V0.3 Prediction and Evaluation Commands
     predict_parser = subparsers.add_parser(
         "predict",
@@ -379,7 +419,7 @@ def build_parser() -> argparse.ArgumentParser:
         "-m",
         type=str,
         default="fp_decomposed_v03",
-        help="Model to use (default: fp_decomposed_v03; also supports fp_decomposed_calibrated_v03, xpdk_v02, ewma, etc.).",
+        help="Model to use (default: fp_decomposed_v03; also supports learned_v09, fp_context_v08, fp_decomposed_calibrated_v03, xpdk_v02, ewma, etc.).",
     )
     predict_parser.add_argument(
         "--position",
@@ -465,7 +505,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--season", type=str, default="2025", help="Season code (default: 2025).")
         p.add_argument("--round", "-r", type=int, default=1, help="Round number (default: 1).")
         p.add_argument("--squad", type=Path, default=DEFAULT_SQUAD_PATH, help="Path to current_squad.json.")
-        p.add_argument("--model", "-m", type=str, default="fp_decomposed_v03", help="Predictive model (default: fp_decomposed_v03).")
+        p.add_argument("--model", "-m", type=str, default="fp_decomposed_v03", help="Predictive model (default: fp_decomposed_v03; also supports learned_v09, fp_context_v08).")
         p.add_argument("--risk-mode", type=str, default="expected", choices=["expected", "conservative", "aggressive"], help="Risk mode (default: expected).")
         p.add_argument("--risk-lambda", type=float, default=0.15, help="Risk lambda (default: 0.15).")
         p.add_argument("--no-option-value", action="store_true", help="Disable Turn 1 -> Turn 2 substitution option value.")
@@ -480,7 +520,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--trades", "-t", type=int, default=4, help="Max number of trades (1..4, default: 4).")
         p.add_argument("--unlimited", action="store_true", help="Allow unlimited trades (Unlimited Trade Window).")
         p.add_argument("--top", type=int, default=5, help="Number of top trade recommendations (default: 5).")
-        p.add_argument("--model", "-m", type=str, default="fp_decomposed_v03", help="Predictive model (default: fp_decomposed_v03).")
+        p.add_argument("--model", "-m", type=str, default="fp_decomposed_v03", help="Predictive model (default: fp_decomposed_v03; also supports learned_v09, fp_context_v08).")
         p.add_argument("--exhaustive", action="store_true", help="Exhaustive candidate search mode.")
         p.add_argument("--risk-mode", type=str, default="expected", choices=["expected", "conservative", "aggressive"], help="Risk mode (default: expected).")
         p.add_argument("--risk-lambda", type=float, default=0.15, help="Risk lambda (default: 0.15).")
@@ -495,7 +535,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--squad", type=Path, default=DEFAULT_SQUAD_PATH, help="Path to current_squad.json.")
         p.add_argument("--max-trades", type=int, default=4, help="Max trades per round (default: 4).")
         p.add_argument("--discount", type=float, default=0.95, help="Discount factor gamma (default: 0.95).")
-        p.add_argument("--model", "-m", type=str, default="fp_decomposed_v03", help="Predictive model (default: fp_decomposed_v03).")
+        p.add_argument("--model", "-m", type=str, default="fp_decomposed_v03", help="Predictive model (default: fp_decomposed_v03; also supports learned_v09, fp_context_v08).")
         p.add_argument("--risk-mode", type=str, default="expected", choices=["expected", "conservative", "aggressive"], help="Risk mode (default: expected).")
         p.add_argument("--risk-lambda", type=float, default=0.15, help="Risk lambda (default: 0.15).")
         p.add_argument("--alpha", type=float, default=0.25, help="EWMA alpha for features (default: 0.25).")
@@ -506,7 +546,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--season", type=str, default="2025", help="Season code (default: 2025).")
         p.add_argument("--rounds", type=str, default="1:4", help="Round range (e.g. 1:4, default: 1:4).")
         p.add_argument("--squad", type=Path, default=DEFAULT_SQUAD_PATH, help="Path to current_squad.json (optional).")
-        p.add_argument("--model", "-m", type=str, default="fp_decomposed_v03", help="Predictive model (default: fp_decomposed_v03).")
+        p.add_argument("--model", "-m", type=str, default="fp_decomposed_v03", help="Predictive model (default: fp_decomposed_v03; also supports learned_v09, fp_context_v08).")
         p.add_argument("--risk-mode", type=str, default="expected", choices=["expected", "conservative", "aggressive"], help="Risk mode (default: expected).")
         p.add_argument("--risk-lambda", type=float, default=0.15, help="Risk lambda (default: 0.15).")
         p.add_argument("--alpha", type=float, default=0.25, help="EWMA alpha for features (default: 0.25).")
@@ -858,6 +898,34 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ewma_alpha=args.alpha,
             )
             print(json.dumps(payload, indent=2, ensure_ascii=False))
+            return 0
+        if args.eval_command == "benchmark":
+            from .evaluation.error_attribution import run_multi_model_benchmark
+
+            models_list = []
+            raw_models = args.models if isinstance(args.models, list) else [args.models]
+            for item in raw_models:
+                for m in str(item).split(","):
+                    if m.strip():
+                        models_list.append(m.strip())
+
+            ledger = run_multi_model_benchmark(
+                season=str(args.season),
+                rounds=str(args.rounds),
+                models=models_list,
+                database_path=args.db,
+                reports_dir=args.reports_dir,
+            )
+            if args.json:
+                print(json.dumps([asdict(e) for e in ledger.entries], indent=2))
+            else:
+                print(f"Multi-Model Benchmark Ledger for Season {ledger.season} Rounds {ledger.rounds_evaluated}:")
+                print(f"{'MODEL':<28} {'MAE':<8} {'RMSE':<8} {'SPEARMAN':<10} {'AVG_LINEUP':<12} {'REGRET':<8}")
+                for entry in ledger.entries:
+                    print(
+                        f"{entry.model_name:<28} {entry.mae:<8.3f} {entry.rmse:<8.3f} "
+                        f"{entry.spearman:<10.3f} {entry.avg_lineup_score:<12.2f} {entry.lineup_regret:<8.2f}"
+                    )
             return 0
 
     if args.command == "predict":

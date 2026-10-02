@@ -470,7 +470,7 @@ V0.7     Full Trade Capacity, Backfill & Sequential Decision Replay  [Completed]
   ↓
 V0.8     Basketball Context, Participation & Strategic Risk          [Completed]
   ↓
-V0.9     Learned Models, EuroCup Full Parity & Cross-League Testing  [Planned - Next]
+V0.9     Learned Models, EuroCup Full Parity & Cross-League Testing  [Completed - Branch v09]
   ↓
 V1.0     Mature Multi-League Decision Platform (Production Release)  [Target]
   ↓
