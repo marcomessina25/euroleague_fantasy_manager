@@ -43,6 +43,8 @@ class PlayerProjectionContract:
     is_home: bool = True
     actual_fp: float | None = None
     has_played: bool = False
+    is_bye: bool = False
+    pre_round_status: str = "available"
 
     @property
     def credits(self) -> float:
