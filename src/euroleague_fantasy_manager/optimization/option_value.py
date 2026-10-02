@@ -22,6 +22,56 @@ def gaussian_call_option(mu_backup: float, mu_primary: float, sigma_primary: flo
     return max(0.0, (mu_backup - mu_primary) * normal_cdf(z) + sigma_primary * normal_pdf(z))
 
 
+def margrabe_exchange_option(
+    mu_1: float,
+    sigma_1: float,
+    mu_2: float,
+    sigma_2: float,
+    rho: float = 0.0,
+) -> float:
+    """Compute E[max(0, S_2 - S_1)] where (S_1, S_2) are bivariate normal with correlation rho.
+
+    Formal Margrabe exchange option formula for Turn 1 -> Turn 2 substitution insurance.
+    Let Delta = S_2 - S_1 ~ N(mu_2 - mu_1, sigma_1^2 + sigma_2^2 - 2 * rho * sigma_1 * sigma_2).
+    """
+    mu_diff = mu_2 - mu_1
+    var_diff = max(0.001, (sigma_1 ** 2) + (sigma_2 ** 2) - 2.0 * rho * sigma_1 * sigma_2)
+    sigma_diff = math.sqrt(var_diff)
+
+    z = mu_diff / sigma_diff
+    ev = mu_diff * normal_cdf(z) + sigma_diff * normal_pdf(z)
+    return round(max(0.0, ev), 3)
+
+
+def compute_t2_bench_insurance_value(
+    t2_player: PlayerProjectionContract,
+    t1_starter: PlayerProjectionContract,
+    realized_t1_score: float | None = None,
+) -> float:
+    """Compute real option insurance value of holding t2_player on bench as fallback for t1_starter.
+
+    Under EuroLeague Fantasy Classic rules:
+    - Starter earns 100% score (1.0x).
+    - Bench player earns 50% score (0.5x).
+    - Subbing in t2_player replaces t1_starter, capturing 0.5 * max(0, t2 - t1).
+    """
+    if realized_t1_score is not None:
+        # Post-Turn 1 realization: deterministic decision
+        gain = max(0.0, t2_player.expected_fp - float(realized_t1_score))
+        return round(0.5 * gain, 2)
+
+    # Pre-round expectation: Margrabe exchange option
+    s1 = t1_starter.uncertainty if t1_starter.uncertainty > 0.0 else 3.8
+    s2 = t2_player.uncertainty if t2_player.uncertainty > 0.0 else 3.8
+    option_ev = margrabe_exchange_option(
+        mu_1=t1_starter.expected_fp,
+        sigma_1=s1,
+        mu_2=t2_player.expected_fp,
+        sigma_2=s2,
+    )
+    return round(0.5 * option_ev, 2)
+
+
 def can_substitute_into_valid_formation(
     starter_positions: Sequence[Position],
     out_position: Position,

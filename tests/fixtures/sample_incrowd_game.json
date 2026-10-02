@@ -1,0 +1,142 @@
+{
+  "id": "a2fdaa37-5555-53d6-a16d-cc73c518ffe5",
+  "identifier": "E2024_330",
+  "code": 330,
+  "season": {
+    "code": "E2024",
+    "name": "EuroLeague 2024-25",
+    "alias": "2024-25",
+    "year": 2024
+  },
+  "competition": {
+    "code": "E",
+    "name": "Euroleague"
+  },
+  "group": {
+    "id": "9d17ecd3-46e0-4d7e-bafd-d3d91b11008d",
+    "name": "Group CHAMPIONSHIP GAME ",
+    "order": 4
+  },
+  "phaseType": {
+    "code": "FF",
+    "name": "Final Four",
+    "alias": "FINAL FOUR",
+    "isGroupPhase": false
+  },
+  "round": {
+    "round": 43,
+    "name": "Round 43",
+    "alias": "Round 43"
+  },
+  "date": "2025-05-25T17:00:00.000Z",
+  "status": "result",
+  "minute": "40:00",
+  "remainingTime": "00:00",
+  "quarter": null,
+  "quarterMinute": null,
+  "home": {
+    "code": "MCO",
+    "name": "AS Monaco",
+    "abbreviatedName": "Monaco",
+    "tla": "ASM",
+    "score": 70,
+    "standingsScore": 70,
+    "quarters": {
+      "q1": 20,
+      "q2": 13,
+      "q3": 18,
+      "q4": 19,
+      "ot1": null,
+      "ot2": null,
+      "ot3": null,
+      "ot4": null,
+      "ot5": null
+    },
+    "coach": {
+      "code": "",
+      "name": "SPANOULIS, VASSILIS"
+    },
+    "imageUrls": {
+      "crest": "https://media-cdn.incrowdsports.com/89ed276a-2ba3-413f-8ea2-b3be209ca129.png"
+    },
+    "editorialName": ""
+  },
+  "away": {
+    "code": "ULK",
+    "name": "Fenerbahce Beko Istanbul",
+    "abbreviatedName": "Fenerbahce",
+    "tla": "FBB",
+    "score": 81,
+    "standingsScore": 81,
+    "quarters": {
+      "q1": 18,
+      "q2": 17,
+      "q3": 19,
+      "q4": 27,
+      "ot1": null,
+      "ot2": null,
+      "ot3": null,
+      "ot4": null,
+      "ot5": null
+    },
+    "coach": {
+      "code": "",
+      "name": "JASIKEVICIUS, SARAS"
+    },
+    "imageUrls": {
+      "crest": "https://media-cdn.incrowdsports.com/0233ebbb-f3a2-49ea-837c-7fd3e661e672.png"
+    },
+    "editorialName": ""
+  },
+  "referees": [
+    {
+      "code": "OJIZ",
+      "name": "PERUGA, CARLOS",
+      "number": 1,
+      "alias": "PERUGA, C.",
+      "country": {
+        "code": "ESP",
+        "name": "Spain"
+      }
+    },
+    {
+      "code": "OJCL",
+      "name": "LOTTERMOSER, ROBERT",
+      "number": 2,
+      "alias": "LOTTERMOSER, R.",
+      "country": {
+        "code": "GER",
+        "name": "Germany"
+      }
+    },
+    {
+      "code": "OJLM",
+      "name": "NEDOVIC, MILAN",
+      "number": 3,
+      "alias": "NEDOVIC, M.",
+      "country": {
+        "code": "SLO",
+        "name": "Slovenia"
+      }
+    }
+  ],
+  "venue": {
+    "code": "AVH1",
+    "name": "ETIHAD ARENA",
+    "capacity": 12000,
+    "address": "",
+    "notes": ""
+  },
+  "confirmedDate": true,
+  "confirmedTime": true,
+  "audience": 0,
+  "audienceConfirmed": true,
+  "broadcasters": [
+    {
+      "name": "EUROLEAGUE.TV",
+      "countryCode": null,
+      "linkUrl": "https://tv.euroleague.net/",
+      "imageUrl": "https://media-cdn.incrowdsports.com/012569cb-88ac-4c9d-aad8-19c8c9501f15.png"
+    }
+  ]
+}

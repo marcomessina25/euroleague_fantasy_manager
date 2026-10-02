@@ -194,6 +194,36 @@ class ModelRegistry:
                 calibration_method="linear",
                 created_at=now_iso,
             ),
+            ModelMetadata(
+                model_id="minutes_context_v08",
+                model_version="0.8.0",
+                model_family="component_minutes_context",
+                target_type="minutes",
+                training_window="point_in_time_rotation_context",
+                feature_set_version="1.2.0",
+                hyperparameters={
+                    "blowout_modeling": True,
+                    "foul_trouble_fragility": True,
+                    "drw_congestion": True,
+                },
+                calibration_method="none",
+                created_at=now_iso,
+            ),
+            ModelMetadata(
+                model_id="fp_context_v08",
+                model_version="0.8.0",
+                model_family="component_decomposed_context",
+                target_type="fantasy_points",
+                training_window="point_in_time_multi_component",
+                feature_set_version="1.2.0",
+                hyperparameters={
+                    "availability_model": "availability_logistic_v03",
+                    "minutes_model": "minutes_context_v08",
+                    "production_model": "production_ridge_v03",
+                },
+                calibration_method="none",
+                created_at=now_iso,
+            ),
         ]
         for m in defaults:
             self.register(m)

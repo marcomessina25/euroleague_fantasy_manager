@@ -777,6 +777,125 @@ function closePlayerModal() {
   if (modal) modal.style.display = "none";
 }
 
+function renderBadgeChip(badgeText, playerId) {
+  if (!badgeText) return "";
+  const b = String(badgeText);
+  let cls = "badge";
+  if (b.includes("Core")) cls += " badge-core";
+  else if (b.includes("Shield")) cls += " badge-shield";
+  else if (b.includes("Sword")) cls += " badge-sword";
+  else if (b.includes("Surge")) cls += " badge-surge";
+  else if (b.includes("Blowout")) cls += " badge-blowout";
+  else if (b.includes("DRW") || b.includes("Congestion")) cls += " badge-drw";
+  else if (b.includes("Foul")) cls += " badge-foul";
+  else cls += " badge-blue";
+
+  const clickAttr = playerId ? `onclick="event.stopPropagation(); openPlayerIntelModal(${playerId})"` : "";
+  return `<span class="${cls}" style="font-size:0.7rem; padding:0.1rem 0.35rem; cursor:pointer;" title="${escapeHtml(b)}" ${clickAttr}>${escapeHtml(b)}</span>`;
+}
+
+async function openPlayerIntelModal(playerId) {
+  const modal = document.getElementById("player-intel-modal");
+  const nameEl = document.getElementById("intel-player-name");
+  const posEl = document.getElementById("intel-pos-badge");
+  const badgesRow = document.getElementById("intel-badges-row");
+  const bodyEl = document.getElementById("intel-content-body");
+
+  if (!modal) return;
+  modal.style.display = "flex";
+  if (nameEl) nameEl.textContent = "Loading Intelligence...";
+  if (bodyEl) bodyEl.innerHTML = `<p style="color:var(--text-muted); font-size:0.85rem;">Fetching minutes, rotation context, and ownership profile...</p>`;
+
+  try {
+    const res = await fetch(`/api/workstation/player-intel/${playerId}?season=${encodeURIComponent(state.season)}&round_number=${state.roundNumber}&league=${encodeURIComponent(activeTeamLeague())}`);
+    if (!res.ok) throw new Error("Failed to load player intelligence");
+    const data = await res.json();
+
+    if (nameEl) nameEl.textContent = `${data.name} (${data.team_code})`;
+    if (posEl) {
+      posEl.textContent = data.position;
+      posEl.className = `player-pos-badge ${data.position.toLowerCase()}`;
+    }
+
+    if (badgesRow) {
+      badgesRow.innerHTML = (data.badges || []).map((b) => renderBadgeChip(b, playerId)).join(" ");
+    }
+
+    if (bodyEl) {
+      const rot = data.rotation || {};
+      const own = data.ownership || {};
+      bodyEl.innerHTML = `
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem; margin-top:0.5rem;">
+          <div style="background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; padding:0.75rem;">
+            <div style="font-size:0.75rem; text-transform:uppercase; color:var(--text-muted); font-weight:700; margin-bottom:0.5rem;">🏀 Rotation & Context</div>
+            <div style="display:flex; justify-content:space-between; font-size:0.85rem; margin-bottom:0.3rem;">
+              <span style="color:var(--text-muted);">Role Tier:</span>
+              <strong style="text-transform:capitalize;">${rot.role_tier || "N/A"}</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:0.85rem; margin-bottom:0.3rem;">
+              <span style="color:var(--text-muted);">Base Minutes:</span>
+              <strong>${rot.base_expected_minutes || 0.0} min</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:0.85rem; margin-bottom:0.3rem;">
+              <span style="color:var(--text-muted);">Blowout Rest Disc.:</span>
+              <strong style="color:${rot.blowout_discount_minutes < 0 ? 'var(--accent-red)' : 'var(--text-primary)'};">${rot.blowout_discount_minutes || 0.0} min</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:0.85rem; margin-bottom:0.3rem;">
+              <span style="color:var(--text-muted);">Foul Trouble Risk:</span>
+              <strong style="color:${rot.foul_fragility_tier === 'HIGH' || rot.foul_fragility_tier === 'SEVERE' ? 'var(--accent-red)' : 'var(--text-primary)'};">${rot.foul_fragility_tier || "LOW"}</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:0.85rem; margin-bottom:0.3rem;">
+              <span style="color:var(--text-muted);">DRW Congestion:</span>
+              <strong>${rot.congestion_discount_minutes || 0.0} min</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:0.9rem; margin-top:0.4rem; padding-top:0.4rem; border-top:1px solid var(--border-color);">
+              <span><strong>Final Projected xM:</strong></span>
+              <strong style="color:var(--accent-orange);">${rot.final_expected_minutes || rot.base_expected_minutes || 0.0} min</strong>
+            </div>
+          </div>
+
+          <div style="background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; padding:0.75rem;">
+            <div style="font-size:0.75rem; text-transform:uppercase; color:var(--text-muted); font-weight:700; margin-bottom:0.5rem;">📊 Ownership & Strategy</div>
+            <div style="display:flex; justify-content:space-between; font-size:0.85rem; margin-bottom:0.3rem;">
+              <span style="color:var(--text-muted);">Ownership:</span>
+              <strong>${own.percentage || 0.0}%</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:0.85rem; margin-bottom:0.3rem;">
+              <span style="color:var(--text-muted);">Archetype:</span>
+              <strong style="color:var(--accent-orange);">${own.archetype || "NEUTRAL"}</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:0.85rem; margin-bottom:0.3rem;">
+              <span style="color:var(--text-muted);">Expected xP:</span>
+              <strong>${data.expected_fp || 0.0} FP</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:0.85rem; margin-bottom:0.3rem;">
+              <span style="color:var(--text-muted);">Ceiling (80%):</span>
+              <strong style="color:var(--accent-green);">${own.ceiling || 0.0} FP</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:0.85rem; margin-bottom:0.3rem;">
+              <span style="color:var(--text-muted);">Floor (80%):</span>
+              <strong style="color:var(--text-muted);">${own.floor || 0.0} FP</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:0.9rem; margin-top:0.4rem; padding-top:0.4rem; border-top:1px solid var(--border-color);">
+              <span><strong>Price:</strong></span>
+              <strong>${data.credits || 0.0} cr</strong>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+  } catch (err) {
+    if (bodyEl) {
+      bodyEl.innerHTML = `<p style="color:var(--accent-red); font-size:0.85rem;">Error loading player intelligence: ${escapeHtml(err.message)}</p>`;
+    }
+  }
+}
+
+function closePlayerIntelModal() {
+  const modal = document.getElementById("player-intel-modal");
+  if (modal) modal.style.display = "none";
+}
+
 function onModalMakeCaptain() {
   if (currentModalPlayerId) {
     setCaptain(currentModalPlayerId);
@@ -1324,10 +1443,20 @@ function updateTradeStudioUI() {
   }
 }
 
+function onStrategyPresetChange() {
+  const presetSelect = document.getElementById("ts-strategy-preset");
+  if (presetSelect) {
+    triggerSuggestTransfers();
+  }
+}
+
 async function triggerSuggestTransfers() {
   const btn = document.getElementById("btn-suggest-trades");
   const banner = document.getElementById("trade-rec-banner");
   if (btn) btn.textContent = "⏳ Finding Best Trades...";
+
+  const presetSelect = document.getElementById("ts-strategy-preset");
+  const strategyPreset = presetSelect ? presetSelect.value : "balanced_value";
 
   try {
     const res = await fetch("/api/workstation/optimize/transfers", {
@@ -1341,6 +1470,7 @@ async function triggerSuggestTransfers() {
           ? MAX_TRADES_PER_ROUND
           : Math.min(MAX_TRADES_PER_ROUND, tradeStudioState.transfersRemaining || 1),
         unlimited: tradeStudioState.unlimited,
+        strategy_preset: strategyPreset,
       }),
     });
 
@@ -1512,10 +1642,18 @@ async function loadPlayerPool(opts) {
           actionBtn = `<button class="btn btn-primary" style="padding:0.2rem 0.5rem; font-size:0.75rem;" onclick="addTradeIn(${p.player_id}, '${escapeHtml(p.name).replace(/'/g, "\\'")}', ${p.credits})">+ Buy</button>`;
         }
 
+        let badgesHtml = "";
+        if (p.badges && p.badges.length > 0) {
+          badgesHtml = p.badges.map((b) => renderBadgeChip(b, p.player_id)).join(" ");
+        }
+
         tr.innerHTML = `
           <td>
-            <strong style="cursor:pointer;" onclick="openPlayerModal(${p.player_id})">${escapeHtml(p.name)}</strong>
-            <span style="color:var(--text-muted); font-size:0.75rem;">(${escapeHtml(p.team_code || "UNK")})</span>
+            <div style="display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap;">
+              <strong style="cursor:pointer;" onclick="openPlayerIntelModal(${p.player_id})" title="Click to view basketball intelligence">${escapeHtml(p.name)}</strong>
+              <span style="color:var(--text-muted); font-size:0.75rem;">(${escapeHtml(p.team_code || "UNK")})</span>
+              ${badgesHtml}
+            </div>
           </td>
           <td><span class="player-pos-badge">${p.position}</span></td>
           <td>${p.credits} cr</td>

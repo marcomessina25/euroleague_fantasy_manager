@@ -649,6 +649,58 @@ def build_parser() -> argparse.ArgumentParser:
     advise_parser.add_argument("--json", action="store_true", help="Output full JSON payload.")
     advise_parser.add_argument("--output", "-o", type=Path, default=None, help="Export advice report to file.")
 
+    # V0.8 Historical Ingestion & Box Scores
+    ingest_parser = subparsers.add_parser(
+        "ingestion",
+        help="V0.8 Ingestion of official IncrowdSports historical games and box scores.",
+    )
+    ingest_sub = ingest_parser.add_subparsers(dest="ingest_command", required=True)
+
+    fetch_hist_sub = ingest_sub.add_parser(
+        "fetch-history",
+        help="Fetch official games and player box-score feeds for completed seasons.",
+    )
+    fetch_hist_alias = subparsers.add_parser(
+        "fetch-history",
+        help="Fetch official games and player box-score feeds for completed seasons (alias for `elf ingestion fetch-history`).",
+    )
+
+    for p in (fetch_hist_sub, fetch_hist_alias):
+        p.add_argument(
+            "--competitions",
+            nargs="+",
+            default=["E", "U"],
+            help="Competitions to fetch (E=EuroLeague, U=EuroCup, default: E U).",
+        )
+        p.add_argument(
+            "--seasons",
+            nargs="+",
+            default=["2022", "2023", "2024", "2025"],
+            help="Completed seasons to fetch (default: 2022 2023 2024 2025).",
+        )
+        p.add_argument(
+            "--max-games",
+            type=int,
+            default=None,
+            help="Maximum games per season to fetch (optional limit for quick runs).",
+        )
+        p.add_argument(
+            "--delay",
+            type=float,
+            default=0.05,
+            help="Polite request delay between game stats fetches in seconds (default: 0.05).",
+        )
+        p.add_argument(
+            "--json",
+            action="store_true",
+            help="Output JSON summary.",
+        )
+        p.add_argument(
+            "--dry-run",
+            action="store_true",
+            help="Fetch, parse, and validate feeds without committing records to SQLite database.",
+        )
+
     return parser
 
 
@@ -1435,6 +1487,47 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Advice report written to {args.output}")
         else:
             print(out_str)
+        return 0
+
+    if args.command in ("ingestion", "fetch-history"):
+        from .ingestion import HistoricalFeedsClient, HistoricalStatsStore, ingest_historical_data
+
+        store_hist = HistoricalStatsStore(database_path=args.db)
+        client_hist = HistoricalFeedsClient()
+
+        competitions = [c.strip().upper() for c in args.competitions]
+        seasons = [str(s).strip() for s in args.seasons]
+
+        def _log(msg: str) -> None:
+            if not getattr(args, "json", False):
+                print(msg, file=sys.stderr)
+
+        _log(f"Starting historical ingestion for competitions {competitions}, seasons {seasons}...")
+        dry_run_flag = getattr(args, "dry_run", False)
+        summary = ingest_historical_data(
+            competitions=competitions,
+            seasons=seasons,
+            store=store_hist,
+            client=client_hist,
+            max_games_per_season=args.max_games,
+            delay_seconds=args.delay,
+            logger_callback=_log,
+            dry_run=dry_run_flag,
+        )
+
+        if getattr(args, "json", False):
+            print(json.dumps(summary, indent=2))
+        else:
+            hdr = "V0.8 HISTORICAL INGESTION SUMMARY (DRY RUN)" if dry_run_flag else "V0.8 HISTORICAL INGESTION SUMMARY"
+            action_verb = "Parsed (not saved)" if dry_run_flag else "Saved"
+            print("=" * 60)
+            print(hdr)
+            print("=" * 60)
+            print(f"Total Completed Games {action_verb}:      {summary['total_games_saved']}")
+            print(f"Total Player Box Scores {action_verb}:    {summary['total_boxscores_saved']}")
+            for sc, data in summary.get("season_summaries", {}).items():
+                print(f"  - {sc} ({data['competition']}): {data['games_saved']} games, {data['boxscores_saved']} box scores")
+            print("=" * 60)
         return 0
 
     return 0

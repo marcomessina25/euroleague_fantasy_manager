@@ -24,6 +24,11 @@ def predict_expected_minutes_if_play(
     if m == "role_starter_minutes":
         return round(0.55 * f.season_avg_minutes + 0.45 * role_prior_min, 2)
 
+    if m in ("minutes_context_v08", "minutes_context", "contextual"):
+        from .rotation_context import compute_rotation_profile
+        prof = compute_rotation_profile(f)
+        return prof.final_expected_minutes
+
     # Default: minutes_ewma_v03
     # Combine EWMA minutes, last-5 average, season average, and empirical Bayes role shrinkage
     n_gp = max(0, f.games_played)

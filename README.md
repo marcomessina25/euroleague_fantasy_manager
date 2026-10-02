@@ -2,7 +2,7 @@
 
 A deterministic, local-first **EuroLeague Fantasy Challenge (Classic Mode)** decision engine for the 2026/27 season (`E2026`), architected to share its core engine with **EuroCup Fantasy Challenge** (`U2026`).
 
-![Version](https://img.shields.io/badge/Version-0.7.0-purple) ![Python](https://img.shields.io/badge/Python-3.12-blue) ![CI](https://github.com/marcomessina25/euroleague_fantasy_manager/actions/workflows/ci.yml/badge.svg) ![License](https://img.shields.io/badge/License-MIT-green)
+![Version](https://img.shields.io/badge/Version-0.8.0-purple) ![Python](https://img.shields.io/badge/Python-3.12-blue) ![CI](https://github.com/marcomessina25/euroleague_fantasy_manager/actions/workflows/ci.yml/badge.svg) ![License](https://img.shields.io/badge/License-MIT-green)
 
 ---
 
@@ -20,7 +20,7 @@ This project uses official EuroLeague/EuroCup fantasy data and related public co
 ## Living roadmap
 
 - [`docs/architecture.md`](docs/architecture.md) defines the purpose, architectural boundaries, and responsibilities of each layer.
-- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1`, `V0.2`, `V0.2.5`, `V0.3`, `V0.4`, `0.4.5`, `V0.5`, `V0.5.1`, `V0.6`, `V0.6.5`, and `V0.7` completed; `V0.8` next).
+- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1` through `V0.8` completed; `V0.9` next).
 - [`docs/specs/v02.md`](docs/specs/v02.md) and [`docs/specs/items_left_for_v02.md`](docs/specs/items_left_for_v02.md) define the **V0.2** heuristic decision-support baseline specification and pre-merge checklist.
 - [`docs/specs/v025.md`](docs/specs/v025.md) and [`docs/specs/v025_cleanup.md`](docs/specs/v025_cleanup.md) define the **V0.2.5** historical evaluation foundation.
 - [`docs/specs/v03.md`](docs/specs/v03.md) and [`docs/specs/items_left_for_v03.md`](docs/specs/items_left_for_v03.md) define the **V0.3** validated predictive projection layer (`0.3.0`) and merge checklist.
@@ -31,6 +31,7 @@ This project uses official EuroLeague/EuroCup fantasy data and related public co
 - [`docs/specs/v06.md`](docs/specs/v06.md) and [`docs/specs/items_left_for_v06.md`](docs/specs/items_left_for_v06.md) define **V0.6** Strategic Intelligence, Manager Dossier, Multi-League Foundation, and Grounded Copilot (`0.6.0`).
 - [`docs/specs/v065.md`](docs/specs/v065.md) and [`docs/specs/v065_potential_bugs.md`](docs/specs/v065_potential_bugs.md) define **V0.6.5** release hardening, EuroCup ingestion pipeline, edge-case audit, and bug register (`0.6.5`).
 - [`docs/specs/v07.md`](docs/specs/v07.md) and [`docs/specs/v07_handoff.md`](docs/specs/v07_handoff.md) define **V0.7** full trade capacity, historical round backfill, point-in-time state reconstruction, and sequential decision replay (`0.7.0`).
+- [`docs/specs/v08.md`](docs/specs/v08.md) defines **V0.8** basketball context modeling, rotation tiers, injury vacancy usage surges, rank-aware decisions (Core/Shield/Sword), and option value formalization (`0.8.0`).
 
 Both human contributors and AI agents must read the relevant living documents before making material changes and update them whenever architecture, scope, priorities, or delivery status changes.
 
@@ -374,9 +375,69 @@ V0.7 un-throttles the decision engine to its full legal action space, makes the 
 ### 4. Sequential Decision Simulation & Regret Attribution
 
 - **Deterministic Season Simulation**: `SequentialDecisionSimulator` replays entire multi-round seasons end-to-end with transfer, lineup, captaincy, sixth man, and T1 $\to$ T2 turn substitutions under a zero-mutation invariant.
-- **Synthetic Multi-Season Fixtures**: Deterministic synthetic multi-season replay fixtures across EuroLeague and EuroCup (`E2022`-`E2025`, `U2022`-`U2025`) enable offline replay evaluation with zero network dependencies (genuine live box-score ingestion scheduled for V0.8).
+- **Synthetic Multi-Season Fixtures**: Deterministic synthetic multi-season replay fixtures across EuroLeague and EuroCup (`E2022`-`E2025`, `U2022`-`U2025`) enable offline replay evaluation with zero network dependencies (genuine live box-score ingestion delivered in V0.8).
 - **Telescoping Regret Decomposition**: `RegretAttribution` decomposes decision regret into Captain, Sixth Man, Bench, Turn Substitution, Transfer, and Formation regret, satisfying exact summation ($\text{residual} \equiv 0$) by telescoping construction.
 - **Multi-Model Comparison Ledgers**: Benchmark decision strategies (Heuristic, Decomposed Models, Oracle, Human) with exportable Markdown and CSV comparison tables.
+
+## V0.8 Basketball Context Modeling, Participation & Rotation Dynamics, Rank-Aware Decisions & Risk Profiling
+
+V0.8 grounds models in verified real-world European basketball dynamics, introduces rank-aware portfolio game theory, formalizes Turn 1 $\to$ Turn 2 dynamic option value, and ingests official historical box scores:
+
+### 1. Real Historical Box-Score Ingestion (`elf fetch-history`)
+
+- **Official IncrowdSports Connector**: Ingests game schedules, quarter scores, team stats, and detailed player box scores (minutes, points, PIR, rebounds, assists, fouls, turnovers, +/-) directly from official IncrowdSports v2 feeds.
+- **Multi-Season Scope**: 4 completed seasons (`2022-23`, `2023-24`, `2024-25`, `2025-26`) across both **EuroLeague** (`E2022`..`E2025`) and **EuroCup** (`U2022`..`U2025`) stored in SQLite schema v4 (`historical_games`, `historical_player_stats`, `historical_quarter_scores`).
+- **Dry-Run Validation**: Safely test feed parsing and counts without writing to SQLite using `--dry-run`.
+- **CLI Commands**:
+  ```powershell
+  # Fetch official box scores for EuroLeague 2024 season
+  elf fetch-history --competitions E --seasons 2024
+
+  # Quick test with dry-run mode (validates without database writes)
+  elf fetch-history --competitions E --seasons 2024 --max-games 5 --dry-run
+  ```
+
+### 2. Basketball Minutes & Context Models (`minutes_context_v08`, `fp_context_v08`)
+
+- **Rotation Role Tiers**: Classifies players into `starter`, `core_rotation`, `bench_rotation`, or `fringe` with tier-calibrated minutes volatility ($\sigma_m$).
+- **European 4th-Quarter Blowout Benches**: Quantifies blowout probability from game win spreads. Stars playing $\ge 22\text{m}$ receive non-linear minutes discounts (up to $-3.3\text{m}$) when games are projected blowouts (15+ pt lead), while deep bench players receive garbage-time boosts.
+- **5-Foul Rule Fragility**: Models 5-foul limit risk under 10-minute European quarters using Poisson foul arrival rates. Centers and high-foul players ($>0.12\text{ fouls/min}$) receive automatic minutes penalties ($-1.5\text{m to } -3.5\text{m}$).
+- **Domestic League & DRW Congestion**: Discounts expected minutes and increases uncertainty for players facing domestic league weekend games ahead of midweek double-round weeks (DRW).
+
+### 3. Positional Vacancy Redistribution & Injury Surges
+
+- **Automated Injury Replacement**: When high-usage starters or core players are ruled out, their vacated minutes and usage are automatically redistributed to same-position teammates.
+- **Physical Minutes Caps**: Enforces realistic physical ceiling caps ($35.0\text{m}$ for guards/forwards, $32.5\text{m}$ for centers) with dynamic usage surge factors ($\Delta \text{Usage}$ up to $+35\%$).
+- Integrated into `predict_round_decomposed(..., apply_injury_surges=True)`.
+
+### 4. Rank-Aware Game Theory (Core / Shield / Sword) & Strategy Presets
+
+- **Archetype Classification**:
+  - **Core** ($\ge 38\%$ ownership): Essential consensus picks with high floor. Owning them shields rank against template peers (e.g. Vezenkov).
+  - **Shield** ($20\%\text{--}38\%$ ownership): High-value assets that defend rank against the field (e.g. Larkin).
+  - **Sword** ($\le 15\%$ ownership): High-ceiling differentials needed to leapfrog rivals and climb leaderboards (e.g. Francisco).
+- **Strategy Presets in Trade Studio & CLI**:
+  - `balanced_value`: Standard unconstrained expected fantasy points maximization.
+  - `rank_protect`: Defensive mode favoring Core and Shield picks (+2.20/+1.10 xP) while penalizing low-owned volatility (-1.25 xP).
+  - `rank_chase`: Aggressive mode boosting Sword differentials with upside multipliers ($+2.50\text{ xP}$ + ceiling bonus) and fading high-owned template chalk.
+
+### 5. Turn 1 $\to$ Turn 2 Option Value Formalization
+
+- **Margrabe Exchange Option Model**: Mathematically evaluates the dynamic substitution option value of holding Turn 2 players on the bench:
+  $$\text{Option Value} = \mathbb{E}\left[\max(0, X_{T2} - X_{T1})\right]$$
+  derived via Black-Scholes / Margrabe closed-form exchange option formula with zero correlation ($\rho = 0$).
+- **Bench Insurance Valuation**: Explicitly values bench insurance based on starter failure probability, T2 starter upside, and official $0.5\times$ bench scoring rules.
+
+### 6. Web Workstation Context Badges & Player Intelligence Drawer
+
+- **Inline Badges & Chips**: Trade Studio and half-court lineups display contextual badges:
+  - `[Core 55%]`, `[Shield 28%]`, `[Sword 8%]`
+  - `[Blowout Risk]`, `[Foul Fragile]`, `[DRW Congestion]`, `[Surge]`
+- **Strategy Preset Selector**: Dropdown above Trade Studio (`Balanced Value | Rank Protect | Rank Chase`) instantly adjusts transfer optimization recommendations.
+- **Player Intelligence Card Modal**: Detailed drawer (`GET /api/workstation/player-intel/{player_id}`) displaying:
+  - Role tier, base vs final expected minutes, minutes volatility ($\sigma_m$).
+  - Blowout probability, foul fragility tier, and congestion index.
+  - Ownership profile, ceiling ($+1.28\sigma$), and floor ($-1.0\sigma$) projections.
 
 ## License
 

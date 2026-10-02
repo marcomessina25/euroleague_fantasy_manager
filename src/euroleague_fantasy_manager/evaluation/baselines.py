@@ -24,6 +24,7 @@ SUPPORTED_BASELINE_MODELS = (
     "xpdk_calibrated_v03",
     "fp_decomposed_v03",
     "fp_decomposed_calibrated_v03",
+    "fp_context_v08",
 )
 
 
@@ -52,6 +53,10 @@ def canonical_model_name(name: str) -> str:
         "fp_calibrated": "fp_decomposed_calibrated_v03",
         "decomposed_calibrated": "fp_decomposed_calibrated_v03",
         "fp_decomposed_calibrated_v03": "fp_decomposed_calibrated_v03",
+        "fp_context": "fp_context_v08",
+        "context": "fp_context_v08",
+        "context_v08": "fp_context_v08",
+        "fp_context_v08": "fp_context_v08",
     }
     if norm not in aliases:
         raise ValueError(f"Unsupported evaluation baseline model: {name!r}. Supported: {SUPPORTED_BASELINE_MODELS}")
@@ -108,17 +113,21 @@ def predict_single_player_baseline(
     pos_enum = Position.from_raw(feature_row.position)
     credits = round(feature_row.quotation_at_decision_tenths / 10.0, 1)
 
-    # 1. Handle V0.3 Decomposed models
-    if canon in ("fp_decomposed_v03", "fp_decomposed_calibrated_v03"):
+    # 1. Handle V0.3 & V0.8 Decomposed models
+    if canon in ("fp_decomposed_v03", "fp_decomposed_calibrated_v03", "fp_context_v08"):
         from ..prediction.fantasy_points import predict_player_fantasy_points
+
+        min_m = "minutes_context_v08" if canon == "fp_context_v08" else "minutes_ewma_v03"
+        m_version = "0.8.0" if canon == "fp_context_v08" else "0.3.0"
 
         proj = predict_player_fantasy_points(
             f=feature_row,
+            minutes_model=min_m,
             calibrator=calibrator if canon == "fp_decomposed_calibrated_v03" else None,
         )
         return PredictionRecord(
             model_name=canon,
-            model_version="0.3.0",
+            model_version=m_version,
             dataset_version=dataset_version,
             decision_cutoff=feature_row.decision_cutoff,
             season=feature_row.season,

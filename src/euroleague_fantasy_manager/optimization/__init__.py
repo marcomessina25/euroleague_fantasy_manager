@@ -36,7 +36,18 @@ from .objective import (
 )
 from .option_value import (
     compute_captain_option_value,
+    compute_t2_bench_insurance_value,
     compute_turn_substitution_option_bonus,
+    margrabe_exchange_option,
+)
+from .ownership_strategy import (
+    OwnershipArchetype,
+    OwnershipProfile,
+    StrategyPreset,
+    adjust_contract_for_strategy,
+    apply_strategy_preset_to_market,
+    classify_ownership_archetype,
+    compute_player_ownership_profile,
 )
 from .initial_team import (
     InitialTeamOptimizationResult,
@@ -70,7 +81,9 @@ __all__ = [
     "evaluate_lineup_objective",
     "compute_positional_replacement_levels",
     "compute_captain_option_value",
+    "compute_t2_bench_insurance_value",
     "compute_turn_substitution_option_bonus",
+    "margrabe_exchange_option",
     "FixedSquadLineupOptimizer",
     "OptimalLineupDecision",
     "brute_force_exhaustive_lineup",
@@ -96,4 +109,11 @@ __all__ = [
     "ModelComparisonRow",
     "ModelComparisonLedger",
     "SequentialDecisionSimulator",
+    "OwnershipArchetype",
+    "OwnershipProfile",
+    "StrategyPreset",
+    "adjust_contract_for_strategy",
+    "apply_strategy_preset_to_market",
+    "classify_ownership_archetype",
+    "compute_player_ownership_profile",
 ]
