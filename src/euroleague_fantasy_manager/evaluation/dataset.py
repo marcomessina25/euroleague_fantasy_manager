@@ -216,7 +216,16 @@ class EvaluationDatasetStore:
                     feature_set_version TEXT NOT NULL,
                     hyperparameters_json TEXT NOT NULL,
                     calibration_method TEXT NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    dataset_hash TEXT NOT NULL DEFAULT '',
+                    feature_schema_hash TEXT NOT NULL DEFAULT '',
+                    model_config_hash TEXT NOT NULL DEFAULT '',
+                    git_sha TEXT NOT NULL DEFAULT '',
+                    random_seed INTEGER NOT NULL DEFAULT 42,
+                    league_id TEXT NOT NULL DEFAULT 'euroleague',
+                    season TEXT NOT NULL DEFAULT '',
+                    round_number INTEGER NOT NULL DEFAULT 1,
+                    decision_cutoff TEXT NOT NULL DEFAULT ''
                 );
 
                 CREATE TABLE IF NOT EXISTS player_predictions (
@@ -278,6 +287,24 @@ class EvaluationDatasetStore:
                 conn.execute(
                     "ALTER TABLE eval_player_games ADD COLUMN price_provenance TEXT NOT NULL DEFAULT 'reconstructed'"
                 )
+
+            run_cols = {
+                str(r["name"])
+                for r in conn.execute("PRAGMA table_info(prediction_runs)").fetchall()
+            }
+            for col, col_type, def_val in [
+                ("dataset_hash", "TEXT NOT NULL", "''"),
+                ("feature_schema_hash", "TEXT NOT NULL", "''"),
+                ("model_config_hash", "TEXT NOT NULL", "''"),
+                ("git_sha", "TEXT NOT NULL", "''"),
+                ("random_seed", "INTEGER NOT NULL", "42"),
+                ("league_id", "TEXT NOT NULL", "'euroleague'"),
+                ("season", "TEXT NOT NULL", "''"),
+                ("round_number", "INTEGER NOT NULL", "1"),
+                ("decision_cutoff", "TEXT NOT NULL", "''"),
+            ]:
+                if col not in run_cols:
+                    conn.execute(f"ALTER TABLE prediction_runs ADD COLUMN {col} {col_type} DEFAULT {def_val}")
 
     def clear_season_data(self, seasons: Sequence[str]) -> None:
         norm_seasons = [normalize_season_code(s) for s in seasons]
@@ -523,20 +550,31 @@ class EvaluationDatasetStore:
                 INSERT OR REPLACE INTO prediction_runs (
                     run_id, model_name, model_version, model_family, target_type,
                     training_window, feature_set_version, hyperparameters_json,
-                    calibration_method, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    calibration_method, created_at, dataset_hash, feature_schema_hash,
+                    model_config_hash, git_sha, random_seed, league_id, season,
+                    round_number, decision_cutoff
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(run["run_id"]),
-                    str(run["model_name"]),
+                    str(run.get("model_name", run.get("model_id", ""))),
                     str(run["model_version"]),
-                    str(run["model_family"]),
-                    str(run["target_type"]),
-                    str(run["training_window"]),
-                    str(run["feature_set_version"]),
+                    str(run.get("model_family", "custom")),
+                    str(run.get("target_type", "fantasy_points")),
+                    str(run.get("training_window", "custom")),
+                    str(run.get("feature_set_version", "1.3.0")),
                     str(run.get("hyperparameters_json", "{}")),
                     str(run.get("calibration_method", "none")),
                     str(run["created_at"]),
+                    str(run.get("dataset_hash", "")),
+                    str(run.get("feature_schema_hash", "")),
+                    str(run.get("model_config_hash", "")),
+                    str(run.get("git_sha", "")),
+                    int(run.get("random_seed", 42)),
+                    str(run.get("league_id", "euroleague")),
+                    str(run.get("season", "")),
+                    int(run.get("round_number", 1)),
+                    str(run.get("decision_cutoff", "")),
                 ),
             )
 

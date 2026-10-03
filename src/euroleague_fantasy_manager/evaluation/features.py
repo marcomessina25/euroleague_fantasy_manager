@@ -103,15 +103,15 @@ def _compute_point_in_time_team_strengths(
             if pid not in latest_quote_by_pid:
                 latest_quote_by_pid[pid] = int(row["pre_round_quotation_tenths"])
 
-        # Pre-cutoff team win rate adjustment
+        # Pre-cutoff team win rate adjustment strictly scoped to target season and pre-cutoff
         team_games = conn.execute(
             """
             SELECT team_id, AVG(win) AS win_rate, COUNT(*) AS gp
             FROM eval_team_games
-            WHERE game_date < ?
+            WHERE season = ? AND game_date < ?
             GROUP BY team_id
             """,
-            (decision_cutoff,),
+            (norm_season, decision_cutoff),
         ).fetchall()
         win_rate_by_team = {int(r["team_id"]): (float(r["win_rate"]), int(r["gp"])) for r in team_games}
 
@@ -209,6 +209,14 @@ def build_features(
             """,
             (int(player_id), str(decision_cutoff)),
         ).fetchall()
+
+        # Hard Point-In-Time Invariant: Every historical game record MUST precede decision_cutoff
+        for r in history_rows:
+            if str(r["game_date"]) >= str(decision_cutoff):
+                raise ValueError(
+                    f"Point-in-time invariant violation: historical game_date '{r['game_date']}' "
+                    f"is not strictly prior to decision_cutoff '{decision_cutoff}' for player_id={player_id}."
+                )
 
         teams_lookup = {
             int(r["team_id"]): str(r["team_code"])
