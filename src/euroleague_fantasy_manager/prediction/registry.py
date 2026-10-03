@@ -1,5 +1,6 @@
 """Lightweight model provenance registry for V0.2.5 baselines and V0.3 predictive models."""
 
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import json
@@ -19,6 +20,9 @@ class ModelMetadata:
     hyperparameters: dict[str, Any] = field(default_factory=dict)
     calibration_method: str = "none"
     created_at: str = "2026-09-23T00:00:00Z"
+    capabilities: tuple[str, ...] = ("expected_fp",)
+    required_features: tuple[str, ...] = ("historical_boxscores",)
+    fallback_model_id: str = "fp_context_v08"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -26,6 +30,41 @@ class ModelMetadata:
     @property
     def hyperparameters_json(self) -> str:
         return json.dumps(self.hyperparameters, sort_keys=True)
+
+    def generate_manifest(
+        self,
+        training_seasons: Sequence[str] | None = None,
+        dataset_hash: str = "",
+        test_period: str = "",
+        metrics: dict[str, float] | None = None,
+    ) -> dict[str, Any]:
+        """Generate a Section 8.6 compliant Model Manifest dictionary."""
+        return {
+            "model": {
+                "name": self.model_id,
+                "version": self.model_version,
+                "family": self.model_family,
+            },
+            "training": {
+                "seasons": list(training_seasons or []),
+                "window": self.training_window,
+                "dataset_hash": dataset_hash,
+                "feature_schema": self.feature_set_version,
+            },
+            "algorithm": {
+                "target_type": self.target_type,
+                "hyperparameters": dict(self.hyperparameters),
+                "calibration": self.calibration_method,
+                "fallback": self.fallback_model_id,
+            },
+            "capabilities": list(self.capabilities),
+            "required_features": list(self.required_features),
+            "evaluation": {
+                "test_period": test_period,
+                "metrics": dict(metrics or {}),
+            },
+            "created_at": self.created_at,
+        }
 
 
 class ModelRegistry:
@@ -99,6 +138,17 @@ class ModelRegistry:
             ),
             ModelMetadata(
                 model_id="ewma_v0_2_5",
+                model_version="0.2.5",
+                model_family="baseline",
+                target_type="fantasy_points",
+                training_window="exponential_decay",
+                feature_set_version="1.0.0",
+                hyperparameters={"alpha": 0.25},
+                calibration_method="none",
+                created_at=now_iso,
+            ),
+            ModelMetadata(
+                model_id="ewma",
                 model_version="0.2.5",
                 model_family="baseline",
                 target_type="fantasy_points",
@@ -260,6 +310,21 @@ class ModelRegistry:
                 },
                 calibration_method="none",
                 created_at=now_iso,
+                capabilities=(
+                    "expected_fp",
+                    "play_probability",
+                    "minutes",
+                    "uncertainty_bounds",
+                    "counterfactual_explanations",
+                ),
+                required_features=(
+                    "point_in_time_features",
+                    "days_rest",
+                    "drw",
+                    "spread_proxy",
+                    "usage",
+                ),
+                fallback_model_id="fp_context_v08",
             ),
         ]
         for m in defaults:

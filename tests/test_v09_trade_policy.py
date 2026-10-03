@@ -280,3 +280,47 @@ def test_w3_transfer_optimizer_dynamic_cost_integration() -> None:
     assert top_rec.liquidation_urgency == 1.0
     assert top_rec.transfer_cost == 0.0  # Zero opportunity cost to dump injured asset!
     assert top_rec.net_transfer_value > 0.0
+
+
+def test_w3_threshold_exact_boundaries() -> None:
+    """Verify exact-at-threshold, below-threshold, and above-threshold decisions."""
+    p_healthy = PlayerProjectionContract(
+        player_id=1,
+        player_name="Healthy Guard",
+        position=Position.GUARD,
+        pre_round_status="available",
+        expected_fp=10.0,
+    )
+
+    # Exactly at threshold (0.50 FP) with non-negative net gain -> Justified
+    assert is_trade_package_justified(
+        gross_gain=0.50, net_gain=0.10, out_players=[p_healthy], min_net_gain_threshold=0.50
+    )
+
+    # Slightly below threshold (0.49 FP) -> Suppressed as churn
+    assert not is_trade_package_justified(
+        gross_gain=0.49, net_gain=0.10, out_players=[p_healthy], min_net_gain_threshold=0.50
+    )
+
+    # Slightly above threshold (0.51 FP) -> Justified
+    assert is_trade_package_justified(
+        gross_gain=0.51, net_gain=0.10, out_players=[p_healthy], min_net_gain_threshold=0.50
+    )
+
+    # Above gross threshold but negative net gain after penalty -> Suppressed
+    assert not is_trade_package_justified(
+        gross_gain=0.60, net_gain=-0.05, out_players=[p_healthy], min_net_gain_threshold=0.50
+    )
+
+
+def test_w3_cross_league_ruleset_quota_verification() -> None:
+    """Verify that transfer legality checking respects EuroLeague quota=3 vs EuroCup quota=6."""
+    from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
+
+    el_rules = get_league_ruleset("euroleague")
+    ec_rules = get_league_ruleset("eurocup")
+
+    assert el_rules.max_court_players_per_club == 3
+    assert ec_rules.max_court_players_per_club == 6
+    assert el_rules.squad_size == 11
+    assert ec_rules.squad_size == 11

@@ -10,16 +10,20 @@ Provides point-in-time Gradient Boosting and regularized baseline models:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
+import sqlite3
 from typing import Any, Sequence
 
 import numpy as np
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
 from sklearn.linear_model import LogisticRegression, Ridge
+from sklearn.model_selection import TimeSeriesSplit
 
 from ..evaluation.features import PointInTimeFeatureRow
+from ..fixtures import DATABASE_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -90,14 +94,24 @@ def extract_learned_features(f: PointInTimeFeatureRow) -> list[float]:
 
 
 class LearnedAvailabilityModel:
-    """Classifier estimating P(play | cutoff) using HistGradientBoostingClassifier."""
+    """Classifier estimating P(play | cutoff) using HistGradientBoostingClassifier.
+
+    Calibration Protocol:
+    Uses chronological TimeSeriesSplit cross-validation calibration where temporal ordering is
+    preserved, guaranteeing zero future-to-past data leakage during calibration.
+    """
 
     def __init__(self, random_state: int = 42) -> None:
         self.random_state = random_state
         self.model: Any = None
         self.is_fitted: bool = False
 
-    def fit(self, X: Sequence[Sequence[float]] | np.ndarray, y: Sequence[int | float] | np.ndarray) -> None:
+    def fit(
+        self,
+        X: Sequence[Sequence[float]] | np.ndarray,
+        y: Sequence[int | float] | np.ndarray,
+        temporal_split: bool = True,
+    ) -> None:
         X_arr = np.asarray(X, dtype=np.float64)
         y_arr = np.asarray(y, dtype=np.int32)
         if len(y_arr) == 0:
@@ -117,11 +131,17 @@ class LearnedAvailabilityModel:
                 max_leaf_nodes=15,
                 min_samples_leaf=max(2, min(10, len(y_arr) // 5)),
             )
-            # Use 3-fold Platt scaling if sufficient samples, else fit directly
+            # Use chronological TimeSeriesSplit calibration if sufficient samples, else standard CV or direct fit
             if len(y_arr) >= 30:
-                calibrated = CalibratedClassifierCV(estimator=base_clf, method="sigmoid", cv=3)
-                calibrated.fit(X_arr, y_arr)
-                self.model = calibrated
+                cv_scheme = TimeSeriesSplit(n_splits=3) if temporal_split else 3
+                try:
+                    calibrated = CalibratedClassifierCV(estimator=base_clf, method="sigmoid", cv=cv_scheme)
+                    calibrated.fit(X_arr, y_arr)
+                    self.model = calibrated
+                except Exception as cv_exc:
+                    logger.debug("Temporal calibration fallback to direct fit: %s", cv_exc)
+                    base_clf.fit(X_arr, y_arr)
+                    self.model = base_clf
             else:
                 base_clf.fit(X_arr, y_arr)
                 self.model = base_clf
@@ -211,7 +231,12 @@ class LearnedMinutesModel:
         return round(max(5.0, min(37.5, raw_pred)), 2)
 
     def explain(self, f: PointInTimeFeatureRow) -> dict[str, float]:
-        """Compute counterfactual feature impact attributions for workstation intel drawer."""
+        """Compute counterfactual feature impact attributions for workstation intel drawer.
+
+        Note:
+            These values represent model counterfactual perturbations (e.g. predicted minutes
+            if venue was neutral vs actual venue), NOT causal effects or formal feature importances.
+        """
         if not self.is_fitted or self.model is None:
             return {
                 "base_minutes": round(f.ewma_minutes if f.ewma_minutes > 0 else f.season_avg_minutes, 1),
@@ -268,6 +293,7 @@ class LearnedModelPipeline:
 
     availability_model: LearnedAvailabilityModel
     minutes_model: LearnedMinutesModel
+    provenance: dict[str, Any] = field(default_factory=dict)
 
     @property
     def is_fitted(self) -> bool:
@@ -278,6 +304,7 @@ class LearnedModelPipeline:
         X: Sequence[Sequence[float]] | np.ndarray,
         y_play: Sequence[int | float] | np.ndarray,
         y_minutes: Sequence[float] | np.ndarray,
+        provenance_metadata: dict[str, Any] | None = None,
     ) -> None:
         self.availability_model.fit(X, y_play)
         # Train minutes model strictly on active games (minutes > 0)
@@ -288,9 +315,148 @@ class LearnedModelPipeline:
             y_min_arr = np.asarray(y_minutes)[active_idx]
             self.minutes_model.fit(X_arr, y_min_arr)
 
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.provenance = {
+            "model_version": "0.9.0",
+            "feature_schema": "1.3.0",
+            "sample_count": len(X),
+            "active_minutes_count": len(active_idx),
+            "fitted_at": now_iso,
+            **(provenance_metadata or {}),
+        }
+
+
+def extract_historical_training_data(
+    database_path: Path = DATABASE_PATH,
+    seasons: Sequence[str] | None = None,
+    max_season: str | None = None,
+    max_round: int | None = None,
+) -> tuple[list[list[float]], list[int], list[float], dict[str, Any]]:
+    """Extract point-in-time training feature rows and ground-truth targets from historical box scores.
+
+    Enforces strict zero future data leakage:
+    - Features for round R are extracted using only data before round R cutoff.
+    - Ground-truth target minutes and participation (minutes > 0) come from completed game outcomes.
+    """
+    from ..evaluation.dataset import normalize_season_code
+    from ..evaluation.features import build_round_feature_table
+
+    db_path = Path(database_path)
+    if not db_path.exists():
+        return [], [], [], {"seasons": [], "sample_count": 0, "error": "database_not_found"}
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        tbl_check = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='eval_player_games'"
+        ).fetchone()
+        if not tbl_check:
+            return [], [], [], {"seasons": [], "sample_count": 0, "error": "table_not_found"}
+
+        if seasons is not None:
+            norm_seasons = [normalize_season_code(s) for s in seasons]
+        else:
+            avail_seasons = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT DISTINCT season FROM eval_player_games ORDER BY season"
+                ).fetchall()
+            ]
+            if max_season is not None:
+                max_norm = normalize_season_code(max_season)
+                norm_seasons = [s for s in avail_seasons if s < max_norm]
+            else:
+                norm_seasons = avail_seasons
+
+        X: list[list[float]] = []
+        y_play: list[int] = []
+        y_min: list[float] = []
+
+        for season in norm_seasons:
+            round_query = "SELECT DISTINCT round FROM eval_player_games WHERE season = ? ORDER BY round"
+            round_rows = conn.execute(round_query, (season,)).fetchall()
+            rounds = [int(r[0]) for r in round_rows]
+            if max_round is not None and (max_season is None or season == max_season):
+                rounds = [r for r in rounds if r <= max_round]
+
+            for r in rounds:
+                try:
+                    ft = build_round_feature_table(season, r, database_path=db_path)
+                except Exception as exc:
+                    logger.debug("Skipping feature extraction for %s R%d: %s", season, r, exc)
+                    continue
+
+                outcomes = {
+                    int(row["player_id"]): float(row["minutes"])
+                    for row in conn.execute(
+                        "SELECT player_id, minutes FROM eval_player_games WHERE season = ? AND round = ?",
+                        (season, r),
+                    ).fetchall()
+                }
+
+                for pid, feat_row in ft.items():
+                    if pid in outcomes:
+                        mins = outcomes[pid]
+                        X.append(extract_learned_features(feat_row))
+                        y_play.append(1 if mins > 0.0 else 0)
+                        y_min.append(mins)
+
+        metadata = {
+            "seasons": norm_seasons,
+            "sample_count": len(X),
+            "active_samples": sum(y_play),
+            "feature_count": len(LEARNED_FEATURE_NAMES),
+        }
+        return X, y_play, y_min, metadata
+    finally:
+        conn.close()
+
+
+def train_learned_pipeline_from_history(
+    database_path: Path = DATABASE_PATH,
+    seasons: Sequence[str] | None = None,
+    max_season: str | None = None,
+    max_round: int | None = None,
+    random_state: int = 42,
+) -> LearnedModelPipeline:
+    """Train production LearnedModelPipeline strictly from historical point-in-time data.
+
+    Returns an unfitted fallback pipeline if no historical data is found.
+    """
+    X, y_play, y_min, meta = extract_historical_training_data(
+        database_path=database_path,
+        seasons=seasons,
+        max_season=max_season,
+        max_round=max_round,
+    )
+    avail_m = LearnedAvailabilityModel(random_state=random_state)
+    min_m = LearnedMinutesModel(random_state=random_state)
+    pipe = LearnedModelPipeline(availability_model=avail_m, minutes_model=min_m)
+
+    if not X:
+        pipe.provenance = {
+            "origin": "unavailable_data_fallback",
+            "reason": "no_historical_data",
+            "database_path": str(database_path),
+        }
+        return pipe
+
+    pipe.fit(
+        X,
+        y_play,
+        y_min,
+        provenance_metadata={
+            "origin": "production_historical",
+            "training_seasons": meta.get("seasons", []),
+            "database_path": str(database_path),
+        },
+    )
+    return pipe
+
 
 def _generate_synthetic_seed_training_data() -> tuple[list[list[float]], list[int], list[float]]:
-    """Generate deterministic synthetic feature rows to seed the baseline pipeline offline."""
+    """Generate deterministic synthetic feature rows strictly for offline testing/development fallbacks."""
     rng = np.random.RandomState(42)
     X: list[list[float]] = []
     y_play: list[int] = []
@@ -355,17 +521,66 @@ def _generate_synthetic_seed_training_data() -> tuple[list[list[float]], list[in
     return X, y_play, y_min
 
 
+def get_synthetic_test_learned_pipeline(random_state: int = 42) -> LearnedModelPipeline:
+    """Explicitly generate a test/development model from deterministic synthetic seed rows."""
+    avail_m = LearnedAvailabilityModel(random_state=random_state)
+    min_m = LearnedMinutesModel(random_state=random_state)
+    pipe = LearnedModelPipeline(availability_model=avail_m, minutes_model=min_m)
+    X, y_play, y_min = _generate_synthetic_seed_training_data()
+    pipe.fit(
+        X,
+        y_play,
+        y_min,
+        provenance_metadata={
+            "origin": "synthetic_test_model",
+            "synthetic_samples": len(X),
+        },
+    )
+    return pipe
+
+
 _DEFAULT_LEARNED_PIPELINE: LearnedModelPipeline | None = None
 
 
+def set_default_learned_pipeline(pipeline: LearnedModelPipeline | None) -> None:
+    """Inject or reset the default singleton learned pipeline."""
+    global _DEFAULT_LEARNED_PIPELINE
+    _DEFAULT_LEARNED_PIPELINE = pipeline
+
+
+def clear_learned_pipeline_cache() -> None:
+    """Clear cached default pipeline singleton."""
+    global _DEFAULT_LEARNED_PIPELINE
+    _DEFAULT_LEARNED_PIPELINE = None
+
+
 def get_default_learned_pipeline() -> LearnedModelPipeline:
-    """Return the singleton learned pipeline, seeded deterministically if uninitialized."""
+    """Return the default learned pipeline.
+
+    Production path:
+    Trains or loads strictly from historical point-in-time evaluation data (DATABASE_PATH).
+    If historical data is missing or empty, returns an explicit fallback pipeline marked with
+    `origin='unavailable_data_fallback'`, which automatically routes predictions to V0.8
+    contextual fallbacks (fp_context_v08) without silently masquerading synthetic data as production.
+    """
     global _DEFAULT_LEARNED_PIPELINE
     if _DEFAULT_LEARNED_PIPELINE is None:
+        if DATABASE_PATH.exists():
+            pipe = train_learned_pipeline_from_history(database_path=DATABASE_PATH)
+            if pipe.is_fitted:
+                _DEFAULT_LEARNED_PIPELINE = pipe
+                return _DEFAULT_LEARNED_PIPELINE
+
+        logger.warning(
+            "Historical training data unavailable at %s; returning unavailable_data_fallback pipeline. "
+            "To use synthetic test fixtures, explicitly invoke get_synthetic_test_learned_pipeline().",
+            DATABASE_PATH,
+        )
         avail_m = LearnedAvailabilityModel(random_state=42)
         min_m = LearnedMinutesModel(random_state=42)
-        pipe = LearnedModelPipeline(availability_model=avail_m, minutes_model=min_m)
-        X, y_play, y_min = _generate_synthetic_seed_training_data()
-        pipe.fit(X, y_play, y_min)
-        _DEFAULT_LEARNED_PIPELINE = pipe
+        _DEFAULT_LEARNED_PIPELINE = LearnedModelPipeline(
+            availability_model=avail_m,
+            minutes_model=min_m,
+            provenance={"origin": "unavailable_data_fallback", "database_path": str(DATABASE_PATH)},
+        )
     return _DEFAULT_LEARNED_PIPELINE

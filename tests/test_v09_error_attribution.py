@@ -54,6 +54,38 @@ def test_w4_three_way_error_decomposition_invariant() -> None:
     assert d["round_number"] == 4
 
 
+def test_w4_error_decomposition_edge_cases() -> None:
+    """Verify algebraic exactness and stability under zero FP, missing actuals, and DNP."""
+    # Case 1: Zero actual FP (e.g. DNP or bad game)
+    d_zero_act = decompose_round_error(predicted_score=15.0, actual_score=0.0, execution_regret=2.0)
+    assert d_zero_act.total_error == 15.0
+    assert round(d_zero_act.model_error + d_zero_act.execution_regret + d_zero_act.aleatoric_noise, 2) == 15.0
+
+    # Case 2: Zero predicted FP
+    d_zero_pred = decompose_round_error(predicted_score=0.0, actual_score=12.4, execution_regret=0.0)
+    assert d_zero_pred.total_error == 12.4
+    assert round(d_zero_pred.model_error + d_zero_pred.execution_regret + d_zero_pred.aleatoric_noise, 2) == 12.4
+
+    # Case 3: Missing actual score (None)
+    d_none = decompose_round_error(predicted_score=20.0, actual_score=None)
+    assert d_none.actual_score == 0.0
+    assert d_none.total_error == 20.0
+    assert d_none.provenance["missing_actual"] is True
+    assert round(d_none.model_error + d_none.execution_regret + d_none.aleatoric_noise, 2) == 20.0
+
+    # Case 4: Unplayed player (is_dnp=True)
+    d_dnp = decompose_round_error(predicted_score=18.5, actual_score=10.0, is_dnp=True)
+    assert d_dnp.actual_score == 0.0
+    assert d_dnp.provenance["is_dnp"] is True
+    assert round(d_dnp.model_error + d_dnp.execution_regret + d_dnp.aleatoric_noise, 2) == d_dnp.total_error
+
+    # Case 5: Unavailable player (is_unavailable=True)
+    d_unavail = decompose_round_error(predicted_score=5.0, actual_score=15.0, is_unavailable=True)
+    assert d_unavail.actual_score == 0.0
+    assert d_unavail.provenance["is_unavailable"] is True
+    assert round(d_unavail.model_error + d_unavail.execution_regret + d_unavail.aleatoric_noise, 2) == d_unavail.total_error
+
+
 def test_w4_multi_model_benchmark_ledger_formatting() -> None:
     """Verify MultiModelBenchmarkLedger markdown rendering and dictionary serialization."""
     entries = [

@@ -1,15 +1,7 @@
-"""Three-way error attribution and multi-model benchmark ledger for V0.9.
-
-Implements:
-1. Three-way telescoping error decomposition:
-   Total Error = Model Error + Execution Regret + Aleatoric Noise
-2. Multi-Model Benchmark Ledger comparing all model generations:
-   season_mean, last5, xpdk_v02, fp_decomposed_v03, fp_context_v08, learned_v09
-"""
-
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -20,7 +12,13 @@ from .backtest import run_walk_forward_evaluation
 class ThreeWayErrorDecomposition:
     """Telescoping decomposition of fantasy score error (Section 4.4 of V0.9 spec).
 
-    Total Error = Model Error + Execution Regret + Aleatoric Noise
+    Algebraic Formulation:
+        Total Error = Model Error + Execution Regret + Aleatoric / Residual Component
+
+    Methodological Note:
+        The residual component represents a post-hoc residual under the chosen model specification,
+        not necessarily an identifiable irreducible basketball noise limit. No causal interpretation
+        is made or implied.
     """
 
     model_name: str
@@ -32,6 +30,7 @@ class ThreeWayErrorDecomposition:
     model_error: float
     execution_regret: float
     aleatoric_noise: float
+    provenance: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -39,23 +38,28 @@ class ThreeWayErrorDecomposition:
 
 def decompose_round_error(
     predicted_score: float,
-    actual_score: float,
+    actual_score: float | None,
     execution_regret: float = 0.0,
     post_hoc_expected: float | None = None,
     model_name: str = "learned_v09",
     season: str = "E2025",
     round_number: int = 1,
+    is_dnp: bool = False,
+    is_unavailable: bool = False,
 ) -> ThreeWayErrorDecomposition:
-    """Decompose score discrepancy into Model Error, Execution Regret, and Aleatoric Noise.
+    """Decompose score discrepancy into Model Error, Execution Regret, and Aleatoric / Residual Component.
 
-    Invariant:
+    Algebraic Invariant:
         model_error + execution_regret + aleatoric_noise == total_error
     """
-    tot_err = round(abs(float(actual_score) - float(predicted_score)), 2)
+    safe_actual = 0.0 if (actual_score is None or is_dnp or is_unavailable) else float(actual_score)
+    safe_pred = max(0.0, float(predicted_score))
+
+    tot_err = round(abs(safe_actual - safe_pred), 2)
     regret = round(max(0.0, min(tot_err, float(execution_regret))), 2)
 
     if post_hoc_expected is not None:
-        raw_m_err = abs(float(predicted_score) - float(post_hoc_expected))
+        raw_m_err = abs(safe_pred - float(post_hoc_expected))
     else:
         # Default model error proportion: bias/discrepancy proxy bounded by remaining error
         raw_m_err = 0.35 * (tot_err - regret)
@@ -68,16 +72,24 @@ def decompose_round_error(
     if abs(residual_drift) > 0:
         noise = round(noise + residual_drift, 2)
 
+    prov = {
+        "is_dnp": is_dnp,
+        "is_unavailable": is_unavailable,
+        "missing_actual": actual_score is None,
+        "decomposed_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
     return ThreeWayErrorDecomposition(
         model_name=model_name,
         season=season,
         round_number=int(round_number),
-        actual_score=round(float(actual_score), 2),
-        predicted_score=round(float(predicted_score), 2),
+        actual_score=round(safe_actual, 2),
+        predicted_score=round(safe_pred, 2),
         total_error=tot_err,
         model_error=m_err,
         execution_regret=regret,
         aleatoric_noise=noise,
+        provenance=prov,
     )
 
 
@@ -107,6 +119,7 @@ class MultiModelBenchmarkLedger:
     best_mae_model: str
     best_spearman_model: str
     best_lineup_model: str
+    provenance: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -115,6 +128,7 @@ class MultiModelBenchmarkLedger:
             "best_mae_model": self.best_mae_model,
             "best_spearman_model": self.best_spearman_model,
             "best_lineup_model": self.best_lineup_model,
+            "provenance": self.provenance,
             "models": [e.to_dict() for e in self.entries],
         }
 
@@ -126,10 +140,17 @@ class MultiModelBenchmarkLedger:
             f"- **Point Accuracy Leader (Lowest MAE)**: `{self.best_mae_model}`",
             f"- **Rank Correlation Leader (Highest Spearman)**: `{self.best_spearman_model}`",
             f"- **Lineup Simulation Leader (Highest Actual Points)**: `{self.best_lineup_model}`",
-            "",
-            "| Model | Version | MAE | RMSE | Bias | Spearman | Top-10 | Value Rho | Brier | Lineup Pts | Lineup Regret |",
-            "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
+        if self.provenance:
+            gen_at = self.provenance.get("generated_at", "N/A")
+            lines.append(f"- **Benchmark Provenance**: Generated at `{gen_at}`")
+        lines.extend(
+            [
+                "",
+                "| Model | Version | MAE | RMSE | Bias | Spearman | Top-10 | Value Rho | Brier | Lineup Pts | Lineup Regret |",
+                "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
         for e in self.entries:
             lines.append(
                 f"| `{e.model_name}` | `{e.model_version}` | {e.mae:.2f} | {e.rmse:.2f} | {e.bias:+.2f} | "
@@ -205,6 +226,11 @@ def run_multi_model_benchmark(
         best_mae_model=best_mae,
         best_spearman_model=best_spearman,
         best_lineup_model=best_lineup,
+        provenance={
+            "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "dataset_version": wf_res.get("dataset_version", "historical-v0.2.5-001"),
+            "models_evaluated": list(models),
+        },
     )
 
     if reports_dir is not None:

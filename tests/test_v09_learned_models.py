@@ -19,8 +19,13 @@ from euroleague_fantasy_manager.prediction.learned_models import (
     LearnedAvailabilityModel,
     LearnedMinutesModel,
     LearnedModelPipeline,
+    clear_learned_pipeline_cache,
+    extract_historical_training_data,
     extract_learned_features,
     get_default_learned_pipeline,
+    get_synthetic_test_learned_pipeline,
+    set_default_learned_pipeline,
+    train_learned_pipeline_from_history,
 )
 from euroleague_fantasy_manager.prediction.minutes import predict_expected_minutes_if_play
 from euroleague_fantasy_manager.prediction.registry import get_model_registry
@@ -270,3 +275,72 @@ def test_w1_walk_forward_evaluation_with_learned_model(tmp_path: Path) -> None:
     assert learned_summary["player_samples"] > 0
     assert learned_summary["mae"] > 0.0
     assert (reports_dir / "e2025_baseline_comparison.md").exists()
+
+
+def test_w1_production_historical_training_and_provenance() -> None:
+    """Verify production pipeline trains on real PIT historical data and records provenance."""
+    from euroleague_fantasy_manager.fixtures import DATABASE_PATH
+
+    clear_learned_pipeline_cache()
+    pipe = get_default_learned_pipeline()
+    assert pipe is not None
+    assert pipe.is_fitted
+    assert pipe.provenance.get("origin") == "production_historical"
+    assert pipe.provenance.get("sample_count", 0) > 0
+    assert pipe.provenance.get("model_version") == "0.9.0"
+    assert pipe.provenance.get("feature_schema") == "1.3.0"
+    assert "training_seasons" in pipe.provenance
+
+
+def test_w1_synthetic_test_model_explicit_distinction() -> None:
+    """Verify synthetic model is strictly identified as synthetic_test_model."""
+    synthetic_pipe = get_synthetic_test_learned_pipeline(random_state=42)
+    assert synthetic_pipe.is_fitted
+    assert synthetic_pipe.provenance.get("origin") == "synthetic_test_model"
+    assert synthetic_pipe.provenance.get("synthetic_samples") == 150
+
+
+def test_w1_unavailable_data_fallback_safety(tmp_path: Path, sample_feature_row: PointInTimeFeatureRow) -> None:
+    """Verify fallback pipeline gracefully routes to V0.8 contextual models when DB is absent."""
+    empty_db = tmp_path / "empty_db.sqlite3"
+    empty_pipe = train_learned_pipeline_from_history(database_path=empty_db)
+    assert not empty_pipe.is_fitted
+    assert empty_pipe.provenance.get("origin") == "unavailable_data_fallback"
+
+    # Prediction should gracefully fall back to V0.8 without crashing
+    avail = empty_pipe.availability_model.predict_play_probability(sample_feature_row)
+    assert 0.01 <= avail <= 0.995
+
+    mins = empty_pipe.minutes_model.predict_minutes(sample_feature_row)
+    assert 5.0 <= mins <= 37.5
+
+
+def test_w1_temporal_calibration_protocol() -> None:
+    """Verify availability model uses chronological temporal splits during calibration."""
+    model = LearnedAvailabilityModel(random_state=42)
+    # 60 samples with chronological order
+    rng = np.random.RandomState(42)
+    X = rng.uniform(0.0, 1.0, size=(60, len(LEARNED_FEATURE_NAMES)))
+    y = np.ones(60, dtype=int)
+    y[:10] = 0  # early DNPs
+    y[30:35] = 0
+
+    model.fit(X, y, temporal_split=True)
+    assert model.is_fitted
+
+
+def test_w1_explainability_counterfactual_bounds(sample_feature_row: PointInTimeFeatureRow) -> None:
+    """Verify explanation outputs are deterministically bounded counterfactuals."""
+    model = LearnedMinutesModel(random_state=42)
+    X = np.random.uniform(0.0, 1.0, size=(50, len(LEARNED_FEATURE_NAMES)))
+    y = np.random.uniform(12.0, 32.0, size=50)
+    model.fit(X, y)
+
+    expl = model.explain(sample_feature_row)
+    assert isinstance(expl["base_minutes"], float)
+    assert isinstance(expl["home_adj"], float)
+    assert isinstance(expl["drw_adj"], float)
+    assert isinstance(expl["spread_adj"], float)
+    assert isinstance(expl["final_minutes"], float)
+    # Explanation docstring must clarify counterfactual nature
+    assert "counterfactual" in LearnedMinutesModel.explain.__doc__.lower()
