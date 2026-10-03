@@ -29,6 +29,11 @@ def predict_expected_minutes_if_play(
         prof = compute_rotation_profile(f)
         return prof.final_expected_minutes
 
+    if m in ("minutes_learned_v09", "learned_v09", "learned", "learned_minutes"):
+        from .learned_models import get_default_learned_pipeline
+        pipe = get_default_learned_pipeline()
+        return pipe.minutes_model.predict_minutes(f)
+
     # Default: minutes_ewma_v03
     # Combine EWMA minutes, last-5 average, season average, and empirical Bayes role shrinkage
     n_gp = max(0, f.games_played)

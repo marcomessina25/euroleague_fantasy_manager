@@ -151,6 +151,7 @@ async function loadTeams() {
       addBtn.onclick = () => openTeamBuilderModal();
     }
     container.appendChild(addBtn);
+    updateCompetitionToggleUI();
   } catch (err) {
     console.error("Failed to load teams:", err);
   }
@@ -180,12 +181,62 @@ async function switchTeam(teamId) {
   await fetch(`/api/teams/${teamId}/active`, { method: "POST" });
   await loadTeams();
   await loadDashboard();
+  updateCompetitionToggleUI();
   if (changed) resetIntelligenceView();
   if (state.activeTab === "trade-studio") {
     loadTradeStudio();
   } else if (state.activeTab === "intelligence") {
     loadIntelligenceView();
   }
+}
+
+function updateCompetitionToggleUI() {
+  const currentLeague = activeTeamLeague().toLowerCase();
+  const elBtn = document.getElementById("btn-comp-euroleague");
+  const ecBtn = document.getElementById("btn-comp-eurocup");
+  if (elBtn && ecBtn) {
+    if (currentLeague === "eurocup") {
+      elBtn.classList.remove("active");
+      ecBtn.classList.add("active");
+    } else {
+      elBtn.classList.add("active");
+      ecBtn.classList.remove("active");
+    }
+  }
+}
+
+async function switchCompetition(league) {
+  const normLeague = (league || "euroleague").toLowerCase();
+  const matching = (state.teams || []).filter((t) => (t.league || "euroleague").toLowerCase() === normLeague);
+  if (matching.length > 0) {
+    await switchTeam(matching[0].team_id);
+  } else {
+    const teamId = `${normLeague}_squad_1`;
+    const teamName = normLeague === "eurocup" ? "EuroCup Primary" : "EuroLeague Primary";
+    try {
+      const res = await fetch("/api/teams", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          team_id: teamId,
+          name: teamName,
+          league: normLeague,
+          season: state.season,
+          round_number: 1,
+          turn_number: 1,
+          bank_tenths: 100,
+        }),
+      });
+      if (res.ok) {
+        const newTeam = await res.json();
+        state.teams.push(newTeam);
+        await switchTeam(newTeam.team_id);
+      }
+    } catch (err) {
+      console.error("Failed to switch competition:", err);
+    }
+  }
+  updateCompetitionToggleUI();
 }
 
 // Rename Team Modal Handlers
@@ -881,6 +932,11 @@ async function openPlayerIntelModal(playerId) {
               <strong>${data.credits || 0.0} cr</strong>
             </div>
           </div>
+        </div>
+
+        <div style="margin-top:0.75rem; background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; padding:0.6rem 0.75rem;">
+          <div style="font-size:0.72rem; text-transform:uppercase; color:var(--accent-orange); font-weight:700; margin-bottom:0.25rem;">⚡ Learned Feature Attribution (V0.9)</div>
+          <div style="font-family:monospace; font-size:0.82rem; color:var(--text-primary); line-height:1.4;">${escapeHtml(rot.attribution_summary || `Base ${rot.base_expected_minutes || 0.0}m -> Final ${rot.final_expected_minutes || 0.0}m`)}</div>
         </div>
       `;
     }

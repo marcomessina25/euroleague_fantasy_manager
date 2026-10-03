@@ -60,6 +60,12 @@ from .transfers import (
     TransferOptimizer,
     TransferRecommendation,
 )
+from .trade_policy import (
+    TradeCostContext,
+    compute_liquidation_urgency,
+    compute_package_transfer_cost,
+    is_trade_package_justified,
+)
 from .sequential_replay import (
     ModelComparisonLedger,
     ModelComparisonRow,
@@ -96,6 +102,10 @@ __all__ = [
     "TransferOptimizer",
     "TransferRecommendation",
     "TransferOptimizationResult",
+    "TradeCostContext",
+    "compute_liquidation_urgency",
+    "compute_package_transfer_cost",
+    "is_trade_package_justified",
     "MultiRoundOptimizer",
     "MultiRoundPlan",
     "RoundDecisionStep",

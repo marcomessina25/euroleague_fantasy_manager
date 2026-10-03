@@ -27,6 +27,8 @@ class TransferRecommendation:
     gross_score_gain: float
     transfer_cost: float
     net_transfer_value: float
+    liquidation_urgency: float = 0.0
+    drw_penalty_applied: float = 0.0
 
     @property
     def trade_count(self) -> int:
@@ -61,6 +63,9 @@ class TransferOptimizer:
         lineup_optimizer: FixedSquadLineupOptimizer | None = None,
         candidate_generator: CandidateGenerator | None = None,
         transfer_penalty_cost: float = 0.0,
+        dynamic_opportunity_cost: bool = False,
+        is_drw_approaching: bool = False,
+        min_net_gain_threshold: float = 0.0,
     ) -> None:
         """Initialize TransferOptimizer.
 
@@ -76,6 +81,13 @@ class TransferOptimizer:
             Subjective strategy parameter (not an official fantasy rule) used to penalize
             turnover or preserve trades across rounds. In official EuroLeague Fantasy
             Classic rules, legal scheduled trades incur 0 penalty.
+        dynamic_opportunity_cost : bool, default False
+            When True, dynamically computes opportunity cost based on player liquidation urgency
+            and DRW option value preservation.
+        is_drw_approaching : bool, default False
+            When True, elevates opportunity cost of trading healthy players due to approaching DRW.
+        min_net_gain_threshold : float, default 0.0
+            Minimum net score gain required to justify speculative trades of healthy assets.
         """
         self.constraints = constraints or OptimizationConstraints()
         self.lineup_optimizer = lineup_optimizer or FixedSquadLineupOptimizer(
@@ -85,6 +97,9 @@ class TransferOptimizer:
             constraints=self.constraints
         )
         self.transfer_penalty_cost = transfer_penalty_cost
+        self.dynamic_opportunity_cost = dynamic_opportunity_cost
+        self.is_drw_approaching = is_drw_approaching
+        self.min_net_gain_threshold = min_net_gain_threshold
 
     def optimize_transfers(
         self,
@@ -97,6 +112,9 @@ class TransferOptimizer:
         exhaustive_candidates: bool = False,
         top_n: int = 5,
         market_projections: Mapping[int, PlayerProjectionContract] | None = None,
+        dynamic_opportunity_cost: bool | None = None,
+        is_drw_approaching: bool | None = None,
+        min_net_gain_threshold: float | None = None,
     ) -> TransferOptimizationResult:
         """Find the top legal trade packages ranked by net score gain.
 
@@ -106,7 +124,12 @@ class TransferOptimizer:
             When False, uses fast candidate pruning to accelerate large market searches.
             When True, runs exact exhaustive evaluation across all candidate combinations.
         """
-        # 1. Normalize current squad
+        # 1. Resolve policy flags
+        use_dynamic = self.dynamic_opportunity_cost if dynamic_opportunity_cost is None else dynamic_opportunity_cost
+        drw_app = self.is_drw_approaching if is_drw_approaching is None else is_drw_approaching
+        min_thresh = self.min_net_gain_threshold if min_net_gain_threshold is None else min_net_gain_threshold
+
+        # 2. Normalize current squad
         squad_contracts: list[PlayerProjectionContract] = []
         for p in current_squad:
             if isinstance(p, PlayerProjectionContract):
@@ -347,8 +370,25 @@ class TransferOptimizer:
                 new_squad, round_number=round_number, top_alternatives=0
             )
             gross_gain = round(new_lineup.objective_value - current_score, 2)
-            cost = 0.0 if unlimited else self.transfer_penalty_cost * k
+            if unlimited:
+                cost = 0.0
+                urg = 0.0
+                drw_prem = 0.0
+            elif use_dynamic:
+                from .trade_policy import TradeCostContext, compute_package_transfer_cost
+                ctx = TradeCostContext(is_drw_approaching=drw_app, min_net_gain_threshold=min_thresh)
+                cost, urg, drw_prem = compute_package_transfer_cost(out_combo, context=ctx)
+            else:
+                cost = round(self.transfer_penalty_cost * k, 2)
+                urg = 0.0
+                drw_prem = 0.0
+
             net_val = round(gross_gain - cost, 2)
+
+            if use_dynamic and min_thresh > 0.0:
+                from .trade_policy import is_trade_package_justified
+                if not is_trade_package_justified(gross_gain, net_val, out_combo, min_net_gain_threshold=min_thresh):
+                    continue
 
             rec = TransferRecommendation(
                 out_players=out_combo,
@@ -358,6 +398,8 @@ class TransferOptimizer:
                 gross_score_gain=gross_gain,
                 transfer_cost=cost,
                 net_transfer_value=net_val,
+                liquidation_urgency=urg,
+                drw_penalty_applied=drw_prem,
             )
             all_recommendations.append(rec)
 

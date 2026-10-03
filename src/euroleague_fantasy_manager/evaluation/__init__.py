@@ -23,15 +23,25 @@ from .targets import (
     reconstruct_pir,
     reconstruct_player_fantasy_points,
 )
+from .error_attribution import (
+    BenchmarkModelEntry,
+    MultiModelBenchmarkLedger,
+    ThreeWayErrorDecomposition,
+    decompose_round_error,
+    run_multi_model_benchmark,
+)
 
 __all__ = [
+    "BenchmarkModelEntry",
     "DATASET_VERSION",
     "DecisionEvaluationSummary",
     "EvaluationDatasetStore",
     "ModelEvaluationSummary",
+    "MultiModelBenchmarkLedger",
     "PairedModelComparison",
     "PointInTimeFeatureRow",
     "PredictionRecord",
+    "ThreeWayErrorDecomposition",
     "build_features",
     "build_historical_dataset",
     "build_round_feature_table",
@@ -46,4 +56,6 @@ __all__ = [
     "reconstruct_pir",
     "reconstruct_player_fantasy_points",
     "run_walk_forward_evaluation",
+    "decompose_round_error",
+    "run_multi_model_benchmark",
 ]

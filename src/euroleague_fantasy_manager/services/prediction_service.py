@@ -184,6 +184,31 @@ class PredictionService:
                             team_fix[a_code] = (h_code, False, t_num, is_played)
 
                 for p in players:
+                    has_fixture = p.team_code in team_fix if team_fix else True
+                    if not has_fixture:
+                        contracts[p.id] = PlayerProjectionContract(
+                            player_id=p.id,
+                            player_name=p.name,
+                            position=p.position,
+                            team_id=p.team_id,
+                            team_code=p.team_code,
+                            price_tenths=p.price_tenths,
+                            expected_fp=0.0,
+                            probability_play=0.0,
+                            expected_minutes=0.0,
+                            fp_per_minute=0.0,
+                            uncertainty=0.0,
+                            prediction_spread=0.0,
+                            turn_number=p.turn_number,
+                            opponent_code="BYE",
+                            is_home=True,
+                            actual_fp=None,
+                            has_played=False,
+                            is_bye=True,
+                            pre_round_status="bye",
+                        )
+                        continue
+
                     opp, is_home, t_num, is_played_fix = team_fix.get(
                         p.team_code, ("", True, p.turn_number, getattr(p, "has_played", False))
                     )
@@ -239,6 +264,8 @@ class PredictionService:
                         is_home=is_home,
                         actual_fp=actual_fp,
                         has_played=has_played,
+                        is_bye=False,
+                        pre_round_status=str(getattr(p, "status", "available")),
                     )
             except Exception:
                 pass

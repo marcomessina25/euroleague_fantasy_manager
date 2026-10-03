@@ -43,6 +43,8 @@ class PlayerProjectionContract:
     is_home: bool = True
     actual_fp: float | None = None
     has_played: bool = False
+    is_bye: bool = False
+    pre_round_status: str = "available"
 
     @property
     def credits(self) -> float:
@@ -141,6 +143,18 @@ class OptimizationConstraints:
     budget_tenths: int | None = MAX_BUDGET_TENTHS
     legal_formations: frozenset[tuple[int, int, int]] = LEGAL_COURT_FORMATIONS
     quotas: dict[Position, int] = field(default_factory=lambda: dict(SQUAD_QUOTAS))
+
+    @classmethod
+    def from_ruleset(cls, ruleset: Any) -> "OptimizationConstraints":
+        """Instantiate OptimizationConstraints parameterized by a CompetitionRuleset."""
+        return cls(
+            squad_size=getattr(ruleset, "squad_size", SQUAD_SIZE),
+            court_starters_size=getattr(ruleset, "starters_count", COURT_STARTERS_SIZE),
+            sixth_man_size=getattr(ruleset, "sixth_man_count", SIXTH_MAN_SIZE),
+            head_coach_size=getattr(ruleset, "head_coach_count", HEAD_COACH_SIZE),
+            max_players_per_club=getattr(ruleset, "max_court_players_per_club", MAX_PLAYERS_PER_TEAM),
+            budget_tenths=int(getattr(ruleset, "budget_credits", 100.0) * 10),
+        )
 
 
 @dataclass(frozen=True, slots=True)

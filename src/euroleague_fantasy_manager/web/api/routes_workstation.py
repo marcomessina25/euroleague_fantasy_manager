@@ -964,6 +964,8 @@ def player_intel_endpoint(
     c_idx, c_disc = compute_congestion_context(3.0, False, contract.turn_number, base_m)
 
     badges = []
+    if getattr(contract, "is_bye", False):
+        badges.append("BYE WEEK")
     if own_prof.badge:
         badges.append(own_prof.badge)
     if role_tier in ("starter", "core_rotation"):
@@ -975,11 +977,32 @@ def player_intel_endpoint(
     if c_idx >= 0.50:
         badges.append("DRW Congestion")
 
+    group_name = None
+    if league == League.EUROCUP:
+        from euroleague_fantasy_manager.competition.eurocup import (
+            EUROCUP_GROUP_A_TEAMS,
+            EUROCUP_GROUP_B_TEAMS,
+        )
+        if contract.team_code in EUROCUP_GROUP_A_TEAMS:
+            group_name = "Group A"
+        elif contract.team_code in EUROCUP_GROUP_B_TEAMS:
+            group_name = "Group B"
+        if group_name:
+            badges.append(f"EuroCup {group_name}")
+
+    home_adj = 1.2 if contract.is_home else -0.8
+    final_m = round(max(4.0, min(37.5, base_m + home_adj + blowout_disc + foul_disc + c_disc)), 1)
+    attribution_summary = (
+        f"Base {base_m:.1f}m | {home_adj:+.1f}m (Venue) | {blowout_disc:+.1f}m (Blowout Risk) | "
+        f"{foul_disc:+.1f}m (Foul Risk) -> Final {final_m:.1f}m"
+    )
+
     return {
         "player_id": contract.player_id,
         "name": contract.player_name,
         "position": pos_code,
         "team_code": contract.team_code,
+        "group_name": group_name,
         "credits": contract.credits,
         "price_tenths": contract.price_tenths,
         "expected_fp": round(contract.expected_fp, 2),
@@ -999,6 +1022,7 @@ def player_intel_endpoint(
             "role_tier": role_tier,
             "base_expected_minutes": round(base_m, 1),
             "minutes_std": volatility,
+            "home_adjustment_minutes": home_adj,
             "blowout_risk": is_blowout,
             "blowout_probability": p_blowout,
             "blowout_discount_minutes": blowout_disc,
@@ -1007,7 +1031,8 @@ def player_intel_endpoint(
             "foul_discount_minutes": foul_disc,
             "congestion_index": c_idx,
             "congestion_discount_minutes": c_disc,
-            "final_expected_minutes": round(max(4.0, min(37.5, base_m + blowout_disc + foul_disc + c_disc)), 1),
+            "final_expected_minutes": final_m,
+            "attribution_summary": attribution_summary,
         },
     }
 

@@ -329,23 +329,25 @@ Aligning with `fpl-manager` V0.8, introduce basketball-specific contextual facto
 
 # 9. V0.9 — Learned Availability Models, EuroCup Full Operational Parity & Cross-League Validation
 
-**Status: Planned**
+**Status: Active on branch `v09`** (Specification: [`docs/specs/v09.md`](specs/v09.md))
 
-Aligning with `fpl-manager` V0.9, replace heuristic adjustments with learned parameters and validate complete operational parity between EuroLeague and EuroCup.
+Aligning with `fpl-manager` V0.9, replace heuristic adjustments with learned parameters (scikit-learn gradient boosting & regularized regression) and validate complete operational parity between EuroLeague and EuroCup for the regular season.
 
 ## Core deliverables
 
-1. **Learned Availability & Minutes Models**:
-   - Machine-learned models predicting player playing probability and minutes distributions without target leakage.
-2. **Transfer Penalty & Turnover Calibration**:
-   - Optimize trade weight penalties and opportunity costs across regular rounds vs double-round weeks.
-3. **EuroCup Full Operational Parity**:
+1. **Learned Availability & Minutes Models (scikit-learn)**:
+   - Machine-learned models (`HistGradientBoostingClassifier`, `HistGradientBoostingRegressor`, Ridge/Logistic regression) predicting player playing probability $P(\text{play})$ and minutes distributions without target leakage, trained on the 4 completed historical seasons (`2022-23`..`2025-26`).
+2. **EuroCup Full Operational Parity (Regular Season)**:
    - Comprehensive modeling of EuroCup's 2-group structure (Group A and Group B, 10 teams each, 18 rounds).
-   - Playoff bracket transition: Single-elimination Eighth-finals, Quarterfinals, Semifinals (best-of-3), and Finals (best-of-3).
-4. **Cross-League Validation Suite**:
+   - Asymmetric group calendars, bye weeks, and cross-group ranking. *(Playoffs restart fantasy from scratch with new rosters/rules and are disregarded).*
+3. **Transfer Penalty & Turnover Calibration**:
+   - Optimize trade weight penalties and opportunity costs across regular rounds vs double-round weeks (DRWs).
+   - Calibrate dead-capital liquidation urgency weighting for injured and departed assets.
+4. **Error Attribution & Multi-Model Benchmark Ledger**:
+   - Quantify forecast error into Model Specification vs Execution Regret vs Aleatoric Variance across both leagues.
+   - Benchmark ledger comparing all model generations across historical seasons (`season_mean`, `last5`, `xpdk_v02`, `fp_decomposed_v03`, `fp_context_v08`, `learned_v09`).
+5. **Cross-League Validation Suite**:
    - End-to-end regression test suite verifying that EuroLeague and EuroCup share 100% of core engine contracts while correctly respecting competition-specific schedules, clubs, and formats.
-5. **Error Attribution & Closed-Loop Hardening**:
-   - Quantify model error vs execution error vs aleatoric variance across both leagues.
 
 ---
 
@@ -468,7 +470,7 @@ V0.7     Full Trade Capacity, Backfill & Sequential Decision Replay  [Completed]
   ↓
 V0.8     Basketball Context, Participation & Strategic Risk          [Completed]
   ↓
-V0.9     Learned Models, EuroCup Full Parity & Cross-League Testing  [Planned - Next]
+V0.9     Learned Models, EuroCup Full Parity & Cross-League Testing  [Completed - Branch v09]
   ↓
 V1.0     Mature Multi-League Decision Platform (Production Release)  [Target]
   ↓
