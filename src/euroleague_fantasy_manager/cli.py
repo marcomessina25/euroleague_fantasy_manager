@@ -753,6 +753,9 @@ def build_parser() -> argparse.ArgumentParser:
             help="Fetch, parse, and validate feeds without committing records to SQLite database.",
         )
 
+    cert_parser = subparsers.add_parser("certify-v1", help="Run automated V1.0 release certification suite.")
+    cert_parser.add_argument("--json", action="store_true", help="Output JSON certification report.")
+
     return parser
 
 
@@ -1622,6 +1625,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"  - {sc} ({data['competition']}): {data['games_saved']} games, {data['boxscores_saved']} box scores")
             print("=" * 60)
         return 0
+
+    if args.command == "certify-v1":
+        from .certification import run_v1_certification
+
+        report = run_v1_certification(db_path=args.db)
+        if getattr(args, "json", False):
+            print(json.dumps(report.to_dict(), indent=2))
+        else:
+            print(report.to_text())
+        return 0 if report.is_release_ready else 1
 
     return 0
 
