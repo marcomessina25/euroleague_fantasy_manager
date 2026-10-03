@@ -63,7 +63,7 @@ class TeamService:
             parsed_settings = TeamSettings()
 
         if squad:
-            self._validate_roster(squad, league=league)
+            self._validate_club_quota(squad, league=league)
 
         team = Team(
             team_id=team_id,
@@ -391,6 +391,14 @@ class TeamService:
                     f"Invalid squad: requires {req} {pos_display}s, found {counts.get(key, 0)}."
                 )
 
+        self._validate_club_quota(units, league=league)
+
+    def _validate_club_quota(
+        self,
+        units: Sequence[TeamRosterUnit],
+        league: str = "euroleague",
+    ) -> None:
+        """Enforce the competition-specific max court players per club."""
         from collections import Counter
         from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
         ruleset = get_league_ruleset(league)

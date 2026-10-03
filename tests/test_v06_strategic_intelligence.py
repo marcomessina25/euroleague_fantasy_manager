@@ -765,16 +765,35 @@ def _snapshot_team_db(tmp_path: Path) -> tuple[Path, TestClient]:
     client = TestClient(create_app(db_path=db))
     # Guard 105 (10.0 cr) held instead of 101 (11.0 cr): an obvious 1-for-1 upgrade within the 1.0 cr bank.
     squad = [102, 103, 104, 105, 201, 202, 203, 204, 301, 302, 401]
-    res = client.post("/api/teams", json={"team_id": "mkt", "name": "Market Team", "league": "euroleague", "player_ids": squad})
+    # The synthetic snapshot has only two clubs, so no quota-legal squad exists; bypass the club quota here.
+    from unittest.mock import patch
+
+    with patch(
+        "euroleague_fantasy_manager.services.team_service.TeamService._validate_club_quota",
+        lambda self, units, league="euroleague": None,
+    ):
+        res = client.post("/api/teams", json={"team_id": "mkt", "name": "Market Team", "league": "euroleague", "player_ids": squad})
     assert res.status_code == 200, res.text
     return db, client
+
+
+def _relaxed_club_quota():
+    """The two-club synthetic snapshot cannot satisfy any club quota; relax it for these optimizer assertions."""
+    from unittest.mock import patch
+
+    from euroleague_fantasy_manager.optimization.constraints import OptimizationConstraints
+
+    return patch(
+        "euroleague_fantasy_manager.services.optimization_service.OptimizationService._resolve_constraints",
+        lambda self, league: OptimizationConstraints(max_players_per_club=11),
+    )
 
 
 def test_dossier_includes_transfer_and_intra_round_analysis(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     db, _ = _snapshot_team_db(tmp_path)
     ts = TeamService(db_path=db)
 
-    with caplog.at_level("WARNING", logger="euroleague_fantasy_manager.intelligence.dossier"):
+    with caplog.at_level("WARNING", logger="euroleague_fantasy_manager.intelligence.dossier"), _relaxed_club_quota():
         dossier = generate_manager_dossier(team_id="mkt", team_service=ts, database_path=db)
     assert not [r for r in caplog.records if "optimization failed" in r.getMessage()]
 
@@ -810,18 +829,19 @@ def test_dossier_markdown_renders_optimizer_substitutions(team_service: TeamServ
 def test_alternative_formation_gap_uses_optimizer_scores(tmp_path: Path) -> None:
     db, _ = _snapshot_team_db(tmp_path)
     ts = TeamService(db_path=db)
-    dossier = generate_manager_dossier(team_id="mkt", team_service=ts, database_path=db)
+    with _relaxed_club_quota():
+        dossier = generate_manager_dossier(team_id="mkt", team_service=ts, database_path=db)
 
-    alts = dossier.current_lineup.alternatives
-    assert alts
-    from euroleague_fantasy_manager.services.optimization_service import OptimizationService
-    from euroleague_fantasy_manager.services.prediction_service import PredictionService
+        alts = dossier.current_lineup.alternatives
+        assert alts
+        from euroleague_fantasy_manager.services.optimization_service import OptimizationService
+        from euroleague_fantasy_manager.services.prediction_service import PredictionService
 
-    opt_total = OptimizationService(team_service=ts, prediction_service=PredictionService(database_path=db)).optimize_lineup(
-        team_id="mkt", season="2026/27"
-    ).expected_total_fp
-    for alt in alts:
-        assert alt["gap_to_optimal_fp"] == round(opt_total - alt["expected_score"], 2)
+        opt_total = OptimizationService(team_service=ts, prediction_service=PredictionService(database_path=db)).optimize_lineup(
+            team_id="mkt", season="2026/27"
+        ).expected_total_fp
+        for alt in alts:
+            assert alt["gap_to_optimal_fp"] == round(opt_total - alt["expected_score"], 2)
 
     check = next(c for c in analyze_dossier(dossier).checklist if c.check_name == "Alternative Formation Viability")
     assert f"{abs(alts[0]['gap_to_optimal_fp']):.2f}" in check.details
