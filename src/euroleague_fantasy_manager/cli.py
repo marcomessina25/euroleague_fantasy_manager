@@ -164,11 +164,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Explicit season code override (e.g. E2026 or U2026). If not provided, derived from API config.",
     )
-    subparsers.add_parser("report", parents=[sub_league_parent], help="Print a summary of the most recently saved SQLite snapshot.")
+    report_parser = subparsers.add_parser("report", parents=[sub_league_parent], help="Print a summary of the most recently saved SQLite snapshot.")
+    report_parser.add_argument("--json", action="store_true", help="Output JSON payload.")
 
     players_parser = subparsers.add_parser("players", parents=[sub_league_parent], help="Search players and Head Coaches in the latest snapshot.")
     players_parser.add_argument("--search", "-s", type=str, default="", help="Name or club abbreviation filter.")
     players_parser.add_argument("--position", "-p", type=str, default=None, help="Position filter (G, F, C, HC).")
+    players_parser.add_argument("--json", action="store_true", help="Output JSON payload.")
 
     import_parser = subparsers.add_parser("import-squad", parents=[sub_league_parent], help="Import 11-unit squad from players.txt.")
     import_parser.add_argument("--file", type=Path, default=DEFAULT_PLAYERS_PATH, help="Path to players.txt.")
@@ -199,6 +201,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_SQUAD_PATH,
         help="Path to current_squad.json.",
     )
+    trades_parser.add_argument("--json", action="store_true", help="Output JSON payload.")
 
     # V0.2 Decision Support Commands
     squad_parser = subparsers.add_parser(
@@ -219,6 +222,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Target round number (defaults to round_number in squad file or snapshot).",
     )
+    squad_parser.add_argument("--json", action="store_true", help="Output JSON payload.")
 
     fixtures_parser = subparsers.add_parser(
         "fixtures",
@@ -249,6 +253,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_SQUAD_PATH,
         help="Path to current_squad.json (used with --squad-only).",
     )
+    fixtures_parser.add_argument("--json", action="store_true", help="Output JSON payload.")
 
     lineup_parser = subparsers.add_parser(
         "lineup",
@@ -354,6 +359,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.25,
         help="EWMA decay parameter alpha in (0, 1] (default: 0.25).",
+    )
+    inspect_ds_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output JSON summary.",
     )
 
     benchmark_parser = eval_sub.add_parser(
@@ -639,7 +649,8 @@ def build_parser() -> argparse.ArgumentParser:
     team_parser = subparsers.add_parser("team", help="Manage multi-team profiles (up to 6 teams).")
     team_sub = team_parser.add_subparsers(dest="team_command", required=True)
 
-    team_sub.add_parser("list", help="List all managed teams.")
+    t_list = team_sub.add_parser("list", help="List all managed teams.")
+    t_list.add_argument("--json", action="store_true", help="Output JSON payload.")
 
     t_create = team_sub.add_parser("create", help="Create a new team.")
     t_create.add_argument("--id", required=True, type=str, help="Team ID (e.g. team_1).")
@@ -650,6 +661,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     t_show = team_sub.add_parser("show", help="Show team details and squad.")
     t_show.add_argument("--id", type=str, default=None, help="Team ID (default: active team).")
+    t_show.add_argument("--json", action="store_true", help="Output JSON payload.")
 
     t_select = team_sub.add_parser("select", help="Set active team.")
     t_select.add_argument("--id", required=True, type=str, help="Team ID to activate.")
@@ -1317,6 +1329,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if args.team_command == "list":
             teams = ts.list_teams()
+            if getattr(args, "json", False):
+                active = ts.get_active_team()
+                active_id = active.team_id if active else None
+                out_teams = []
+                for t in teams:
+                    d = t.to_dict()
+                    d["is_active"] = (t.team_id == active_id)
+                    out_teams.append(d)
+                print(json.dumps(out_teams, indent=2, ensure_ascii=False))
+                return 0
             if not teams:
                 print("No teams found in database.")
                 return 0
@@ -1359,6 +1381,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             except KeyError:
                 print(f"Team '{target_id}' not found.")
                 return 1
+            if getattr(args, "json", False):
+                print(json.dumps(team.to_dict(), indent=2, ensure_ascii=False))
+                return 0
             print(f"Team: {team.name} [{team.team_id}] (League: {getattr(team, 'league', 'euroleague').upper()})")
             print(f"Season: {team.season} | Round: {team.round_number} | Turn: {team.turn_number}")
             print(f"Bank: {team.bank_tenths / 10.0:.1f} cr | Squad Value: {team.total_squad_value_tenths / 10.0:.1f} cr")
