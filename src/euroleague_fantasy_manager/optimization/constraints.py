@@ -20,10 +20,10 @@ from ..rules import (
 
 @dataclass(frozen=True, slots=True)
 class PlayerProjectionContract:
-    """Decoupled prediction contract consumed by the V0.4 decision layer.
+    """Decoupled canonical prediction contract consumed by the decision layer (V1.0 Section 6.1).
 
-    V0.3 predicts. V0.4 decides. The optimizer must not know how the prediction
-    was generated (xPDK, EWMA, Ridge/Logistic decomposition, etc.).
+    The prediction subsystem produces projections; the optimization/valuation layer consumes them.
+    Downstream decision components must never branch on internal model mechanics.
     """
 
     player_id: int
@@ -45,10 +45,146 @@ class PlayerProjectionContract:
     has_played: bool = False
     is_bye: bool = False
     pre_round_status: str = "available"
+    # Canonical V1.0 contract fields:
+    league_id: str = "euroleague"
+    season: str = ""
+    round_number: int = 1
+    decision_cutoff: str | None = None
+    lower_bound: float | None = None
+    upper_bound: float | None = None
+    points_above_replacement: float = 0.0
+    fp_per_credit: float = 0.0
+    model_version: str = ""
+    feature_version: str = ""
+    provenance: dict[str, Any] = field(default_factory=dict)
+    # Rotation & context badges:
+    rotation_tier: str = "core_rotation"
+    blowout_risk: bool = False
+    foul_fragility: str = "LOW"
+    congestion_index: float = 0.0
+    context_badges: tuple[str, ...] = ()
 
     @property
     def credits(self) -> float:
         return round(self.price_tenths / 10.0, 1)
+
+    @property
+    def price(self) -> float:
+        """Canonical alias for credits."""
+        return self.credits
+
+    @property
+    def play_probability(self) -> float:
+        """Canonical alias for probability_play."""
+        return self.probability_play
+
+    @property
+    def round(self) -> int:
+        """Canonical alias for round_number."""
+        return self.round_number
+
+    @property
+    def cutoff(self) -> str | None:
+        """Canonical alias for decision_cutoff."""
+        return self.decision_cutoff
+
+    @property
+    def par(self) -> float:
+        """Canonical alias for points_above_replacement."""
+        return self.points_above_replacement
+
+    @property
+    def effective_lower_bound(self) -> float:
+        """Lower bound: explicit lower_bound if present, else expected_fp - 1.96*uncertainty."""
+        if self.lower_bound is not None:
+            return round(self.lower_bound, 2)
+        return max(0.0, round(self.expected_fp - 1.96 * self.uncertainty, 2))
+
+    @property
+    def effective_upper_bound(self) -> float:
+        """Upper bound: explicit upper_bound if present, else expected_fp + 1.96*uncertainty."""
+        if self.upper_bound is not None:
+            return round(self.upper_bound, 2)
+        return round(self.expected_fp + 1.96 * self.uncertainty, 2)
+
+    @property
+    def effective_fp_per_credit(self) -> float:
+        """Points per credit efficiency ratio."""
+        if self.fp_per_credit > 0.0:
+            return round(self.fp_per_credit, 2)
+        if self.credits > 0.0:
+            return round(self.expected_fp / self.credits, 2)
+        return 0.0
+
+    def validate_contract(self) -> list[str]:
+        """Validate projection contract invariants against canonical ranges and types."""
+        errors: list[str] = []
+        if self.player_id <= 0:
+            errors.append(f"player_id must be a positive integer, got {self.player_id}")
+        if not isinstance(self.position, Position):
+            errors.append(f"position must be an instance of Position enum, got {type(self.position)}")
+        if not (0.0 <= self.probability_play <= 1.0):
+            errors.append(f"probability_play must be in [0.0, 1.0], got {self.probability_play}")
+        if self.expected_minutes < 0.0 or self.expected_minutes > 50.0:
+            errors.append(f"expected_minutes must be in [0.0, 50.0], got {self.expected_minutes}")
+        if self.expected_fp < -15.0 or self.expected_fp > 100.0:
+            errors.append(f"expected_fp out of valid basketball range [-15.0, 100.0], got {self.expected_fp}")
+        if self.uncertainty < 0.0:
+            errors.append(f"uncertainty cannot be negative, got {self.uncertainty}")
+        if self.price_tenths < 0:
+            errors.append(f"price_tenths cannot be negative, got {self.price_tenths}")
+        if self.turn_number not in (1, 2, 3):
+            errors.append(f"turn_number must be in (1, 2, 3), got {self.turn_number}")
+        if self.lower_bound is not None and self.upper_bound is not None:
+            if self.lower_bound > self.upper_bound:
+                errors.append(f"lower_bound ({self.lower_bound}) cannot exceed upper_bound ({self.upper_bound})")
+        return errors
+
+    @property
+    def is_valid(self) -> bool:
+        """Return True if all contract invariants are satisfied."""
+        return len(self.validate_contract()) == 0
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize canonical projection contract to dictionary."""
+        return {
+            "player_id": self.player_id,
+            "player_name": self.player_name,
+            "position": self.position.short_code if isinstance(self.position, Position) else str(self.position),
+            "team_id": self.team_id,
+            "team_code": self.team_code,
+            "price_tenths": self.price_tenths,
+            "credits": self.credits,
+            "expected_fp": round(self.expected_fp, 2),
+            "probability_play": round(self.probability_play, 4),
+            "expected_minutes": round(self.expected_minutes, 2),
+            "fp_per_minute": round(self.fp_per_minute, 4),
+            "uncertainty": round(self.uncertainty, 2),
+            "prediction_spread": round(self.prediction_spread, 2),
+            "lower_bound": self.effective_lower_bound,
+            "upper_bound": self.effective_upper_bound,
+            "points_above_replacement": round(self.points_above_replacement, 2),
+            "fp_per_credit": self.effective_fp_per_credit,
+            "turn_number": self.turn_number,
+            "opponent_code": self.opponent_code,
+            "is_home": self.is_home,
+            "actual_fp": self.actual_fp,
+            "has_played": self.has_played,
+            "is_bye": self.is_bye,
+            "pre_round_status": self.pre_round_status,
+            "league_id": self.league_id,
+            "season": self.season,
+            "round_number": self.round_number,
+            "decision_cutoff": self.decision_cutoff,
+            "model_version": self.model_version,
+            "feature_version": self.feature_version,
+            "provenance": dict(self.provenance),
+            "rotation_tier": self.rotation_tier,
+            "blowout_risk": self.blowout_risk,
+            "foul_fragility": self.foul_fragility,
+            "congestion_index": self.congestion_index,
+            "context_badges": list(self.context_badges),
+        }
 
     @classmethod
     def from_player(
@@ -58,6 +194,13 @@ class PlayerProjectionContract:
         uncertainty: float = 0.0,
         actual_fp: float | None = None,
         has_played: bool = False,
+        league_id: str = "euroleague",
+        season: str = "",
+        round_number: int = 1,
+        decision_cutoff: str | None = None,
+        model_version: str = "player_baseline",
+        feature_version: str = "1.0.0",
+        provenance: dict[str, Any] | None = None,
     ) -> "PlayerProjectionContract":
         act = actual_fp if actual_fp is not None else (player.last_match_pts if getattr(player, "has_played", False) else None)
         played = has_played or getattr(player, "has_played", False)
@@ -76,6 +219,13 @@ class PlayerProjectionContract:
             turn_number=player.turn_number,
             actual_fp=act,
             has_played=played,
+            league_id=league_id,
+            season=season,
+            round_number=round_number,
+            decision_cutoff=decision_cutoff,
+            model_version=model_version,
+            feature_version=feature_version,
+            provenance=dict(provenance or {}),
         )
 
     @classmethod
@@ -84,7 +234,7 @@ class PlayerProjectionContract:
         proj: Any,
         team_id: int | None = None,
     ) -> "PlayerProjectionContract":
-        """Convert a V0.3 DecomposedProjection into the decoupled V0.4 contract."""
+        """Convert a V0.3 DecomposedProjection into the decoupled V0.4+ canonical contract."""
         pos_raw = getattr(proj, "position", "G")
         pos_enum = Position.from_raw(pos_raw)
         return cls(
@@ -103,28 +253,123 @@ class PlayerProjectionContract:
             turn_number=int(getattr(proj, "turn_number", 1)),
             opponent_code=str(getattr(proj, "opponent_team_code", "")),
             is_home=bool(getattr(proj, "home", True)),
+            lower_bound=float(getattr(proj, "lower_bound", 0.0)),
+            upper_bound=float(getattr(proj, "upper_bound", 0.0)),
+            points_above_replacement=float(getattr(proj, "points_above_replacement", 0.0)),
+            fp_per_credit=float(getattr(proj, "expected_fp_per_credit", 0.0)),
+            rotation_tier=str(getattr(proj, "rotation_tier", "core_rotation")),
+            blowout_risk=bool(getattr(proj, "blowout_risk", False)),
+            foul_fragility=str(getattr(proj, "foul_fragility", "LOW")),
+            congestion_index=float(getattr(proj, "congestion_index", 0.0)),
+            context_badges=tuple(getattr(proj, "context_badges", ())),
+            model_version=str(getattr(proj, "model_version", "0.3.0")),
+            feature_version=str(getattr(proj, "feature_version", "1.0.0")),
+            provenance={"cold_start_source": str(getattr(proj, "cold_start_source", ""))},
+        )
+
+    @classmethod
+    def from_baseline(
+        cls,
+        player_id: int,
+        player_name: str,
+        position: Position | str,
+        expected_fp: float,
+        model_id: str,
+        uncertainty: float = 0.0,
+        team_id: int | None = None,
+        team_code: str = "",
+        price_tenths: int = 100,
+        turn_number: int = 1,
+        opponent_code: str = "",
+        is_home: bool = True,
+        league_id: str = "euroleague",
+        season: str = "",
+        round_number: int = 1,
+        decision_cutoff: str | None = None,
+        model_version: str = "0.2.5",
+        feature_version: str = "1.0.0",
+        provenance: dict[str, Any] | None = None,
+    ) -> "PlayerProjectionContract":
+        """Factory for baseline prediction models (season_mean, last5, ewma, etc.)."""
+        pos_enum = position if isinstance(position, Position) else Position.from_raw(str(position))
+        prov = {"model_id": model_id, "model_family": "baseline"}
+        if provenance:
+            prov.update(provenance)
+        return cls(
+            player_id=player_id,
+            player_name=player_name,
+            position=pos_enum,
+            team_id=team_id,
+            team_code=team_code,
+            price_tenths=price_tenths,
+            expected_fp=expected_fp,
+            probability_play=1.0,
+            expected_minutes=0.0,
+            fp_per_minute=0.0,
+            uncertainty=uncertainty,
+            turn_number=turn_number,
+            opponent_code=opponent_code,
+            is_home=is_home,
+            league_id=league_id,
+            season=season,
+            round_number=round_number,
+            decision_cutoff=decision_cutoff,
+            model_version=model_version,
+            feature_version=feature_version,
+            provenance=prov,
         )
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PlayerProjectionContract":
         pos = data.get("position")
         pos_enum = pos if isinstance(pos, Position) else Position.from_raw(str(pos))
+        price_tenths = int(
+            data.get("price_tenths", int(round(float(data.get("credits", data.get("price", 0.0))) * 10)))
+        )
+        prob = float(data.get("probability_play", data.get("play_probability", 1.0)))
+        exp_fp = float(data.get("expected_fp", data.get("expected_pdk", 0.0)))
+        sigma = float(data.get("uncertainty", data.get("sigma", data.get("sigma_pdk", 0.0))))
+        lower = data.get("lower_bound")
+        upper = data.get("upper_bound")
+        par = float(data.get("points_above_replacement", data.get("par", 0.0)))
+        fp_pc = float(data.get("fp_per_credit", 0.0))
+
         return cls(
             player_id=int(data["player_id"]),
             player_name=str(data.get("player_name", data.get("name", ""))),
             position=pos_enum,
             team_id=data.get("team_id"),
             team_code=str(data.get("team_code", "")),
-            price_tenths=int(data.get("price_tenths", int(round(float(data.get("credits", 0.0)) * 10)))),
-            expected_fp=float(data.get("expected_fp", data.get("expected_pdk", 0.0))),
-            probability_play=float(data.get("probability_play", data.get("play_probability", 1.0))),
+            price_tenths=price_tenths,
+            expected_fp=exp_fp,
+            probability_play=prob,
             expected_minutes=float(data.get("expected_minutes", 0.0)),
             fp_per_minute=float(data.get("fp_per_minute", 0.0)),
-            uncertainty=float(data.get("uncertainty", data.get("sigma", data.get("sigma_pdk", 0.0)))),
+            uncertainty=sigma,
             prediction_spread=float(data.get("prediction_spread", 0.0)),
             turn_number=int(data.get("turn_number", 1)),
             opponent_code=str(data.get("opponent_code", data.get("opponent_team_code", ""))),
             is_home=bool(data.get("is_home", True)),
+            actual_fp=float(data["actual_fp"]) if data.get("actual_fp") is not None else None,
+            has_played=bool(data.get("has_played", False)),
+            is_bye=bool(data.get("is_bye", False)),
+            pre_round_status=str(data.get("pre_round_status", "available")),
+            league_id=str(data.get("league_id", "euroleague")),
+            season=str(data.get("season", "")),
+            round_number=int(data.get("round_number", data.get("round", 1))),
+            decision_cutoff=data.get("decision_cutoff", data.get("cutoff")),
+            lower_bound=float(lower) if lower is not None else None,
+            upper_bound=float(upper) if upper is not None else None,
+            points_above_replacement=par,
+            fp_per_credit=fp_pc,
+            model_version=str(data.get("model_version", "")),
+            feature_version=str(data.get("feature_version", "")),
+            provenance=dict(data.get("provenance") or {}),
+            rotation_tier=str(data.get("rotation_tier", "core_rotation")),
+            blowout_risk=bool(data.get("blowout_risk", False)),
+            foul_fragility=str(data.get("foul_fragility", "LOW")),
+            congestion_index=float(data.get("congestion_index", 0.0)),
+            context_badges=tuple(data.get("context_badges") or ()),
         )
 
 

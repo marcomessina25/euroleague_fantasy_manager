@@ -4,6 +4,7 @@ from euroleague_fantasy_manager.multi_team.models import (
     Team,
     TeamRosterUnit,
     TeamSettings,
+    TeamStateSnapshot,
 )
 from euroleague_fantasy_manager.multi_team.store import (
     MAX_TEAMS,
@@ -15,5 +16,6 @@ __all__ = [
     "Team",
     "TeamRosterUnit",
     "TeamSettings",
+    "TeamStateSnapshot",
     "TeamStore",
 ]

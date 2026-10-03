@@ -149,12 +149,13 @@ def test_w2_eurocup_group_standings() -> None:
 
 
 def test_w2_ruleset_parity() -> None:
-    """Verify EuroLeague and EuroCup rulesets share identical roster size and club quotas."""
+    """Verify EuroLeague and EuroCup rulesets share roster size while parameterizing club quotas (3 vs 6)."""
     el_rules = get_league_ruleset(League.EUROLEAGUE)
     ec_rules = get_league_ruleset(League.EUROCUP)
 
     assert el_rules.squad_size == ec_rules.squad_size == 11
-    assert el_rules.max_court_players_per_club == ec_rules.max_court_players_per_club == 6
+    assert el_rules.max_court_players_per_club == 3
+    assert ec_rules.max_court_players_per_club == 6
     assert el_rules.budget_credits == ec_rules.budget_credits == 100.0
     assert el_rules.starters_count == ec_rules.starters_count == 5
     assert el_rules.head_coach_count == ec_rules.head_coach_count == 1

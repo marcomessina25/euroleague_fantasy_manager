@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
 from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
@@ -85,24 +85,15 @@ def apply_bye_week_adjustments(
         t_code = c.team_code.strip().upper()
         if t_code and t_code not in norm_scheduled:
             # Player's team has no fixture scheduled in this round (bye week)
-            adj = PlayerProjectionContract(
-                player_id=c.player_id,
-                player_name=c.player_name,
-                position=c.position,
-                team_id=c.team_id,
-                team_code=c.team_code,
-                price_tenths=c.price_tenths,
+            adj = replace(
+                c,
                 expected_fp=0.0,
                 probability_play=0.0,
                 expected_minutes=0.0,
                 fp_per_minute=0.0,
                 uncertainty=0.0,
                 prediction_spread=0.0,
-                turn_number=c.turn_number,
                 opponent_code="BYE",
-                is_home=c.is_home,
-                actual_fp=c.actual_fp,
-                has_played=c.has_played,
                 is_bye=True,
                 pre_round_status="bye",
             )
