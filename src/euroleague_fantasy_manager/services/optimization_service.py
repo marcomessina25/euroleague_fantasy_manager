@@ -89,11 +89,20 @@ class OptimizationService:
     ) -> None:
         self.team_service = team_service
         self.prediction_service = prediction_service
+        self._custom_constraints = constraints is not None
         self.constraints = constraints or OptimizationConstraints()
         self.lineup_optimizer = FixedSquadLineupOptimizer(constraints=self.constraints)
         self.transfer_optimizer = TransferOptimizer(constraints=self.constraints)
         self.multi_round_optimizer = MultiRoundOptimizer(constraints=self.constraints)
         self.intra_round_optimizer = IntraRoundSubstitutionOptimizer()
+
+    def _resolve_constraints(self, league: str) -> OptimizationConstraints:
+        """Resolve constraints parameterized by the league ruleset unless custom constraints are set."""
+        if self._custom_constraints:
+            return self.constraints
+        from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
+        ruleset = get_league_ruleset(league)
+        return OptimizationConstraints.from_ruleset(ruleset)
 
     def optimize_intra_round(
         self,
@@ -155,9 +164,10 @@ class OptimizationService:
 
         r_mode = RiskMode.from_str(risk_mode)
         include_opt_val = (option_value_mode.lower() != "none")
+        eff_constraints = self._resolve_constraints(_team_league(team))
 
         optimizer = FixedSquadLineupOptimizer(
-            constraints=self.constraints,
+            constraints=eff_constraints,
             risk_mode=r_mode,
             risk_lambda=risk_lambda,
             include_option_value=include_opt_val,
@@ -286,7 +296,13 @@ class OptimizationService:
                     ownership_map = {}
             market, _ = apply_strategy_preset_to_market(market, ownership_map, preset=strategy_preset)
 
-        return self.transfer_optimizer.optimize_transfers(
+        eff_constraints = self._resolve_constraints(league)
+        transfer_opt = (
+            self.transfer_optimizer
+            if self._custom_constraints
+            else TransferOptimizer(constraints=eff_constraints)
+        )
+        return transfer_opt.optimize_transfers(
             current_squad=squad_contracts,
             market=market,
             bank_tenths=team.bank_tenths,
@@ -316,10 +332,16 @@ class OptimizationService:
 
         squad_contracts = self._resolve_squad_contracts(team.squad, season, s_rnd, league=league)
 
-        self.multi_round_optimizer.discount_factor = gamma
-        self.multi_round_optimizer.branching_factor = beam_width
+        eff_constraints = self._resolve_constraints(league)
+        mr_opt = (
+            self.multi_round_optimizer
+            if self._custom_constraints
+            else MultiRoundOptimizer(constraints=eff_constraints)
+        )
+        mr_opt.discount_factor = gamma
+        mr_opt.branching_factor = beam_width
 
-        return self.multi_round_optimizer.optimize_multi_round(
+        return mr_opt.optimize_multi_round(
             start_round=s_rnd,
             horizon=horizon,
             initial_squad=squad_contracts,
