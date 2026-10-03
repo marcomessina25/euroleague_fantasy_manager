@@ -190,11 +190,13 @@ class StateSnapshot:
     created_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     )
+    league: str = "euroleague"
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "snapshot_id": self.snapshot_id,
             "team_id": self.team_id,
+            "league": self.league,
             "season": self.season,
             "round_number": self.round_number,
             "turn_number": self.turn_number,
@@ -223,6 +225,7 @@ class StateSnapshot:
             player_metadata=meta,
             dataset_version=data.get("dataset_version", "1.0.0"),
             created_at=data.get("created_at", ""),
+            league=str(data.get("league", "euroleague")),
         )
 
 
@@ -248,11 +251,13 @@ class DecisionRecord:
     actual_squad_ids: tuple[int, ...] | None = None
     is_override: bool = False
     notes: str | None = None
+    league: str = "euroleague"
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "decision_id": self.decision_id,
             "team_id": self.team_id,
+            "league": self.league,
             "season": self.season,
             "round_number": self.round_number,
             "turn_number": self.turn_number,
@@ -294,6 +299,7 @@ class DecisionRecord:
             actual_squad_ids=act_squad,
             is_override=bool(data.get("is_override", False)),
             notes=data.get("notes"),
+            league=str(data.get("league", "euroleague")),
         )
 
 

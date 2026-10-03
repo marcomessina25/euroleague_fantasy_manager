@@ -48,6 +48,7 @@ class DecisionLogger:
         recommended_lineup: LineupPayload | None = None,
         actual_lineup: LineupPayload | None = None,
         snapshot: StateSnapshot | None = None,
+        league: str = "euroleague",
     ) -> DecisionRecord:
         """Record a pre-round or initial lineup decision."""
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -83,6 +84,7 @@ class DecisionLogger:
                 bank_tenths=bank_tenths,
                 player_metadata=player_meta,
                 created_at=now_iso,
+                league=league,
             )
             self.store.save_snapshot(snap)
 
@@ -166,6 +168,7 @@ class DecisionLogger:
             actual_lineup=act_payload,
             is_override=is_override,
             notes=notes,
+            league=league,
         )
 
         self.store.log_decision(record)
@@ -186,6 +189,7 @@ class DecisionLogger:
         recommended_transfers: TransferPayload | None = None,
         actual_transfers: TransferPayload | None = None,
         snapshot: StateSnapshot | None = None,
+        league: str = "euroleague",
     ) -> DecisionRecord:
         """Record between-round transfer decision."""
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -243,6 +247,7 @@ class DecisionLogger:
             actual_transfers=act_payload,
             is_override=is_override,
             notes=notes,
+            league=league,
         )
 
         self.store.log_decision(record)
@@ -266,6 +271,7 @@ class DecisionLogger:
         recommended_turn_sub: TurnSubPayload | None = None,
         actual_turn_sub: TurnSubPayload | None = None,
         snapshot: StateSnapshot | None = None,
+        league: str = "euroleague",
     ) -> DecisionRecord:
         """Record intra-round Turn 1 -> Turn 2 substitutions or captain switch."""
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -298,6 +304,7 @@ class DecisionLogger:
             turn_decision=turn_payload,
             is_override=False,
             notes=notes,
+            league=league,
         )
 
         self.store.log_decision(record)
@@ -318,6 +325,7 @@ class DecisionLogger:
         provenance: DecisionProvenance | None = None,
         notes: str | None = None,
         snapshot: StateSnapshot | None = None,
+        league: str = "euroleague",
     ) -> DecisionRecord:
         """Record initial season team selection/builder decision."""
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -373,6 +381,7 @@ class DecisionLogger:
                 bank_tenths=bank_tenths,
                 player_metadata=player_meta,
                 created_at=now_iso,
+                league=league,
             )
             self.store.save_snapshot(snap)
 
@@ -406,6 +415,7 @@ class DecisionLogger:
             actual_lineup=actual_lineup,
             is_override=is_override,
             notes=notes,
+            league=league,
         )
 
         self.store.log_decision(record)
