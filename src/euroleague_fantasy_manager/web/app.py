@@ -26,7 +26,7 @@ def create_app(db_path: str | Path = "data/euroleague.sqlite3") -> FastAPI:
     app = FastAPI(
         title="EuroLeague Fantasy Manager Workstation",
         description="Local-first decision-support and multi-team management workstation.",
-        version="0.6.0",
+        version="1.0.0",
     )
 
     web_dir = Path(__file__).parent

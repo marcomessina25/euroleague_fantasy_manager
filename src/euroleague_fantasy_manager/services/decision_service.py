@@ -38,6 +38,7 @@ class DecisionService:
         snapshot: StateSnapshot | None = None,
         notes: str = "",
         squad_contracts: Sequence[PlayerProjectionContract] | None = None,
+        league: str = "euroleague",
     ) -> DecisionRecord:
         """Log a lineup selection decision with immutable state snapshot."""
         return self.logger.log_lineup_decision(
@@ -51,6 +52,7 @@ class DecisionService:
             snapshot=snapshot,
             notes=notes,
             squad_contracts=squad_contracts,
+            league=league,
         )
 
     def log_transfers(
@@ -63,6 +65,7 @@ class DecisionService:
         provenance: DecisionProvenance | None = None,
         snapshot: StateSnapshot | None = None,
         notes: str = "",
+        league: str = "euroleague",
     ) -> DecisionRecord:
         """Log a trade decision."""
         return self.logger.log_transfer_decision(
@@ -74,6 +77,7 @@ class DecisionService:
             provenance=provenance,
             snapshot=snapshot,
             notes=notes,
+            league=league,
         )
 
     def log_turn_sub(
@@ -87,6 +91,7 @@ class DecisionService:
         provenance: DecisionProvenance | None = None,
         snapshot: StateSnapshot | None = None,
         notes: str = "",
+        league: str = "euroleague",
     ) -> DecisionRecord:
         """Log an intra-round Turn 1 -> Turn 2 substitution."""
         return self.logger.log_turn_substitution(
@@ -99,6 +104,7 @@ class DecisionService:
             provenance=provenance,
             snapshot=snapshot,
             notes=notes,
+            league=league,
         )
 
     def log_initial_team(
@@ -111,6 +117,7 @@ class DecisionService:
         snapshot: StateSnapshot | None = None,
         notes: str = "",
         squad_contracts: Sequence[PlayerProjectionContract] | None = None,
+        league: str = "euroleague",
     ) -> DecisionRecord:
         """Log an initial team creation draft decision."""
         return self.logger.log_initial_team_decision(
@@ -122,6 +129,7 @@ class DecisionService:
             snapshot=snapshot,
             notes=notes,
             squad_contracts=squad_contracts,
+            league=league,
         )
 
     def list_decisions(
@@ -129,9 +137,10 @@ class DecisionService:
         team_id: str,
         season: str | None = None,
         round_number: int | None = None,
+        league: str | None = None,
     ) -> list[DecisionRecord]:
         """List decision records isolated to a team."""
-        return self.store.list_decisions(team_id=team_id, season=season, round_number=round_number)
+        return self.store.list_decisions(team_id=team_id, season=season, round_number=round_number, league=league)
 
     def get_decision(self, decision_id: str) -> DecisionRecord | None:
         """Retrieve a specific decision record with full payload and outcome."""

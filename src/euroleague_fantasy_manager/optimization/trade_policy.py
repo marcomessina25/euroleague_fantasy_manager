@@ -1,4 +1,11 @@
-"""Transfer opportunity cost calibration, liquidation urgency scoring, and turnover rate tuning for V0.9."""
+"""Transfer opportunity cost calibration, liquidation urgency scoring, and turnover rate tuning for V0.9.
+
+Strategic Policy Note:
+The minimum net-gain threshold (default 0.50 FP) and double-round week (DRW) opportunity-cost
+premiums are strategic decision-theoretic policy parameters to prevent unproductive turnover
+churn and protect option value. They are NOT official EuroLeague or EuroCup fantasy rules
+(official rules allow up to 4 free transfers per round without restriction).
+"""
 
 from __future__ import annotations
 
@@ -11,7 +18,20 @@ from .constraints import PlayerProjectionContract
 
 @dataclass(frozen=True, slots=True)
 class TradeCostContext:
-    """Contextual parameters influencing the opportunity cost of burning transfers."""
+    """Contextual parameters influencing the opportunity cost of burning transfers.
+
+    Parameters:
+    -----------
+    is_drw_approaching : bool
+        Whether a congested double-round week is imminent (requires preserving trade option value).
+    base_trade_cost : float
+        Baseline penalty in FP for trading out a healthy active court asset (default: 0.40 FP).
+    drw_trade_cost_premium : float
+        Additional penalty in FP incurred for burning a transfer before a double-round week (default: 0.60 FP).
+    min_net_gain_threshold : float
+        Strategy hurdle threshold (default: 0.50 FP). Trades below this expected net gain on healthy
+        assets are treated as speculative churn and suppressed.
+    """
 
     is_drw_approaching: bool = False
     base_trade_cost: float = 0.40

@@ -43,6 +43,7 @@ class DecisionStore:
                 CREATE TABLE IF NOT EXISTS state_snapshots (
                     snapshot_id TEXT PRIMARY KEY,
                     team_id TEXT NOT NULL,
+                    league TEXT NOT NULL DEFAULT 'euroleague',
                     season TEXT NOT NULL,
                     round_number INTEGER NOT NULL,
                     turn_number INTEGER NOT NULL,
@@ -57,6 +58,7 @@ class DecisionStore:
                 CREATE TABLE IF NOT EXISTS decision_logs (
                     decision_id TEXT PRIMARY KEY,
                     team_id TEXT NOT NULL,
+                    league TEXT NOT NULL DEFAULT 'euroleague',
                     season TEXT NOT NULL,
                     round_number INTEGER NOT NULL,
                     turn_number INTEGER NOT NULL,
@@ -112,11 +114,18 @@ class DecisionStore:
                 ON decision_logs(team_id, season, round_number);
                 """
             )
-            # Ensure player_metadata_json column exists in case of existing database
+            # Ensure player_metadata_json and league columns exist in case of existing database
             cur = conn.execute("PRAGMA table_info(state_snapshots);")
-            existing_cols = {r["name"] for r in cur.fetchall()}
-            if "player_metadata_json" not in existing_cols:
+            snap_cols = {r["name"] for r in cur.fetchall()}
+            if "player_metadata_json" not in snap_cols:
                 conn.execute("ALTER TABLE state_snapshots ADD COLUMN player_metadata_json TEXT;")
+            if "league" not in snap_cols:
+                conn.execute("ALTER TABLE state_snapshots ADD COLUMN league TEXT NOT NULL DEFAULT 'euroleague';")
+
+            cur_dec = conn.execute("PRAGMA table_info(decision_logs);")
+            dec_cols = {r["name"] for r in cur_dec.fetchall()}
+            if "league" not in dec_cols:
+                conn.execute("ALTER TABLE decision_logs ADD COLUMN league TEXT NOT NULL DEFAULT 'euroleague';")
 
     # ---------------------------------------------------------------------------
     # Snapshots
@@ -134,8 +143,8 @@ class DecisionStore:
                 INSERT OR REPLACE INTO state_snapshots (
                     snapshot_id, team_id, season, round_number, turn_number,
                     squad_ids, prices_tenths, bank_tenths, dataset_version, created_at,
-                    player_metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    player_metadata_json, league
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     snapshot.snapshot_id,
@@ -149,6 +158,7 @@ class DecisionStore:
                     snapshot.dataset_version,
                     snapshot.created_at,
                     meta_json,
+                    getattr(snapshot, "league", "euroleague") or "euroleague",
                 ),
             )
 
@@ -166,6 +176,7 @@ class DecisionStore:
                     int(k): dict(v)
                     for k, v in json.loads(row["player_metadata_json"]).items()
                 }
+            league_val = str(row["league"]) if "league" in row.keys() else "euroleague"
             return StateSnapshot(
                 snapshot_id=row["snapshot_id"],
                 team_id=row["team_id"],
@@ -178,6 +189,7 @@ class DecisionStore:
                 player_metadata=meta_dict,
                 dataset_version=row["dataset_version"],
                 created_at=row["created_at"],
+                league=league_val,
             )
 
     # ---------------------------------------------------------------------------
@@ -230,8 +242,8 @@ class DecisionStore:
                     recommended_lineup_json, actual_lineup_json,
                     recommended_transfers_json, actual_transfers_json,
                     turn_decision_json, recommended_squad_ids_json, actual_squad_ids_json,
-                    is_override, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    is_override, notes, league
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.decision_id,
@@ -252,6 +264,7 @@ class DecisionStore:
                     act_squad_json,
                     1 if record.is_override else 0,
                     record.notes,
+                    getattr(record, "league", "euroleague") or "euroleague",
                 ),
             )
 
@@ -284,6 +297,7 @@ class DecisionStore:
         team_id: str | None = None,
         season: str | None = None,
         round_number: int | None = None,
+        league: str | None = None,
     ) -> list[DecisionRecord]:
         query = "SELECT * FROM decision_logs WHERE 1=1"
         params: list[Any] = []
@@ -296,6 +310,9 @@ class DecisionStore:
         if round_number is not None:
             query += " AND round_number = ?"
             params.append(round_number)
+        if league is not None:
+            query += " AND league = ?"
+            params.append(league)
         query += " ORDER BY round_number ASC, turn_number ASC, created_at ASC"
 
         with self._connect() as conn:
@@ -339,6 +356,7 @@ class DecisionStore:
             if "actual_squad_ids_json" in row.keys() and row["actual_squad_ids_json"]
             else None
         )
+        league_val = str(row["league"]) if "league" in row.keys() else "euroleague"
 
         return DecisionRecord(
             decision_id=row["decision_id"],
@@ -359,6 +377,7 @@ class DecisionStore:
             actual_squad_ids=act_squad,
             is_override=bool(row["is_override"]),
             notes=row["notes"],
+            league=league_val,
         )
 
     # ---------------------------------------------------------------------------

@@ -66,6 +66,34 @@ class CompetitionRuleset:
         }
     )
 
+    def is_formation_legal(self, guards: int, forwards: int, centers: int) -> bool:
+        """Check if a court formation (e.g. 2-2-1, 1-2-2) is legal under this ruleset."""
+        return f"{guards}-{forwards}-{centers}" in self.valid_formations
+
+    def is_roster_composition_legal(
+        self,
+        starters: int,
+        sixth_man: int,
+        bench: int,
+        head_coach: int,
+    ) -> bool:
+        """Check if unit counts match the mandated roster hierarchy (5 starters, 1 6th, 4 bench, 1 HC)."""
+        return (
+            starters == self.starters_count
+            and sixth_man == self.sixth_man_count
+            and bench == self.bench_count
+            and head_coach == self.head_coach_count
+        )
+
+    def is_club_quota_legal(self, court_club_counts: Mapping[str, int]) -> bool:
+        """Verify that no club exceeds the maximum allowed court player quota."""
+        return all(count <= self.max_court_players_per_club for count in court_club_counts.values())
+
+    def calculate_player_score(self, raw_fp: float, role: str) -> float:
+        """Apply official role multipliers (e.g. captain 2.0x, bench 0.5x) to raw fantasy score."""
+        multiplier = self.scoring_multipliers.get(role.lower(), 1.0)
+        return round(raw_fp * multiplier, 2)
+
     def to_dict(self) -> dict[str, object]:
         return {
             "league": self.league.value,
@@ -92,6 +120,7 @@ class EuroLeagueRuleset(CompetitionRuleset):
             name="EuroLeague Fantasy Challenge",
             competition_code="E",
             league_id=10,
+            max_court_players_per_club=3,
         )
 
 
@@ -102,6 +131,7 @@ class EuroCupRuleset(CompetitionRuleset):
             name="EuroCup Fantasy Challenge",
             competition_code="U",
             league_id=11,
+            max_court_players_per_club=6,
         )
 
 

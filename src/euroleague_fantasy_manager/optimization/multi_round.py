@@ -32,20 +32,31 @@ class MultiRoundPlan:
     total_expected_score: float
     discounted_expected_score: float
     final_bank_tenths: int
+    planning_mode: str = "approximate"
+    beam_width: int = 4
+    discount_factor: float = 0.95
 
 
 class MultiRoundOptimizer:
     """Short-horizon multi-round dynamic beam search planner (horizons N=2..4).
 
     Search Method & Strategy Boundaries:
-      - Search Strategy: Heuristic dynamic beam search. Retains the top `branching_factor`
-        squad states at each step to avoid exponential combinatorial explosion.
+      - Search Strategy: Heuristic dynamic beam search ("approximate"). Retains the top `branching_factor`
+        (beam_width) squad states at each step to avoid exponential combinatorial explosion.
       - Not Globally Optimal: Beam search is a disciplined approximation; it does not
         guarantee finding the global optimum across all conceivable combinatorial paths.
       - Discount Factor (gamma): Default gamma = 0.95 is a strategic modeling assumption
         (valuing immediate known points slightly more than distant uncertain points),
         NOT an official fantasy game rule. Setting gamma = 1.0 provides undiscounted cumulative points.
     """
+
+    @property
+    def beam_width(self) -> int:
+        return self.branching_factor
+
+    @beam_width.setter
+    def beam_width(self, val: int) -> None:
+        self.branching_factor = val
 
     def __init__(
         self,
@@ -186,4 +197,7 @@ class MultiRoundOptimizer:
             total_expected_score=round(best_raw, 2),
             discounted_expected_score=round(best_disc, 2),
             final_bank_tenths=final_bank,
+            planning_mode="approximate",
+            beam_width=self.branching_factor,
+            discount_factor=self.discount_factor,
         )

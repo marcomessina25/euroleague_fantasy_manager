@@ -62,6 +62,9 @@ class TeamService:
         else:
             parsed_settings = TeamSettings()
 
+        if squad:
+            self._validate_club_quota(squad, league=league)
+
         team = Team(
             team_id=team_id,
             name=name,
@@ -156,7 +159,7 @@ class TeamService:
         """
         team = self.get_team(team_id)
         if validate and roster_units:
-            self._validate_roster(roster_units)
+            self._validate_roster(roster_units, league=getattr(team, "league", "euroleague"))
 
         self.store.save_squad(team_id, round_number, roster_units)
         if roster_units and advance_team_round:
@@ -354,8 +357,12 @@ class TeamService:
 
         return team
 
-    def _validate_roster(self, units: Sequence[TeamRosterUnit]) -> None:
-        """Validate 11 units and official position quotas."""
+    def _validate_roster(
+        self,
+        units: Sequence[TeamRosterUnit],
+        league: str = "euroleague",
+    ) -> None:
+        """Validate 11 units, official position quotas, and competition-specific club quota."""
         if len(units) != SQUAD_SIZE:
             raise ValueError(
                 f"Roster must have exactly {SQUAD_SIZE} units, got {len(units)}."
@@ -382,6 +389,31 @@ class TeamService:
                 pos_display = pos.name if hasattr(pos, "name") else str(pos)
                 raise ValueError(
                     f"Invalid squad: requires {req} {pos_display}s, found {counts.get(key, 0)}."
+                )
+
+        self._validate_club_quota(units, league=league)
+
+    def _validate_club_quota(
+        self,
+        units: Sequence[TeamRosterUnit],
+        league: str = "euroleague",
+    ) -> None:
+        """Enforce the competition-specific max court players per club."""
+        from collections import Counter
+        from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
+        ruleset = get_league_ruleset(league)
+        court_clubs = [
+            u.team_code
+            for u in units
+            if str(u.position).upper() not in ("HC", "HEAD_COACH", "4") and u.team_code
+        ]
+        if court_clubs:
+            club_counts = Counter(court_clubs)
+            if not ruleset.is_club_quota_legal(club_counts):
+                max_allowed = ruleset.max_court_players_per_club
+                violating = [f"{c}: {n}" for c, n in club_counts.items() if n > max_allowed]
+                raise ValueError(
+                    f"Squad violates club quota for {ruleset.name} (max {max_allowed} per club): {', '.join(violating)}"
                 )
 
     def revert_to_round_start(
@@ -618,7 +650,7 @@ class TeamService:
         candidate_squad = kept_units + recruits_units
 
         # Validate squad constraints
-        self._validate_roster(candidate_squad)
+        self._validate_roster(candidate_squad, league=getattr(team, "league", "euroleague"))
 
         # Assign roles
         if lineup_optimizer and market_projections:
