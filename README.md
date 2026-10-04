@@ -2,7 +2,7 @@
 
 A deterministic, local-first **EuroLeague Fantasy Challenge (Classic Mode)** decision engine for the 2026/27 season (`E2026`), architected to share its core engine with **EuroCup Fantasy Challenge** (`U2026`).
 
-![Version](https://img.shields.io/badge/Version-0.9.0-purple) ![Python](https://img.shields.io/badge/Python-3.12-blue) ![CI](https://github.com/marcomessina25/euroleague_fantasy_manager/actions/workflows/ci.yml/badge.svg) ![License](https://img.shields.io/badge/License-MIT-green)
+![Version](https://img.shields.io/badge/Version-1.0.0-purple) ![Python](https://img.shields.io/badge/Python-3.12-blue) ![CI](https://github.com/marcomessina25/euroleague_fantasy_manager/actions/workflows/ci.yml/badge.svg) ![License](https://img.shields.io/badge/License-MIT-green)
 
 ---
 
@@ -20,7 +20,7 @@ This project uses official EuroLeague/EuroCup fantasy data and related public co
 ## Living roadmap
 
 - [`docs/architecture.md`](docs/architecture.md) defines the purpose, architectural boundaries, and responsibilities of each layer.
-- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1` through `V0.9` completed).
+- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1` through `V1.0` completed).
 - [`docs/specs/v02.md`](docs/specs/v02.md) and [`docs/specs/items_left_for_v02.md`](docs/specs/items_left_for_v02.md) define the **V0.2** heuristic decision-support baseline specification and pre-merge checklist.
 - [`docs/specs/v025.md`](docs/specs/v025.md) and [`docs/specs/v025_cleanup.md`](docs/specs/v025_cleanup.md) define the **V0.2.5** historical evaluation foundation.
 - [`docs/specs/v03.md`](docs/specs/v03.md) and [`docs/specs/items_left_for_v03.md`](docs/specs/items_left_for_v03.md) define the **V0.3** validated predictive projection layer (`0.3.0`) and merge checklist.
@@ -33,6 +33,7 @@ This project uses official EuroLeague/EuroCup fantasy data and related public co
 - [`docs/specs/v07.md`](docs/specs/v07.md) and [`docs/specs/v07_handoff.md`](docs/specs/v07_handoff.md) define **V0.7** full trade capacity, historical round backfill, point-in-time state reconstruction, and sequential decision replay (`0.7.0`).
 - [`docs/specs/v08.md`](docs/specs/v08.md) defines **V0.8** basketball context modeling, rotation tiers, injury vacancy usage surges, rank-aware decisions (Core/Shield/Sword), and option value formalization (`0.8.0`).
 - [`docs/specs/v09.md`](docs/specs/v09.md) defines **V0.9** learned availability models, EuroCup full operational parity (Groups A & B), dynamic transfer policy, three-way error attribution, multi-model benchmark ledger, and cross-league validation suite (`0.9.0`).
+- [`docs/specs/v10.md`](docs/specs/v10.md) defines **V1.0** Mature Multi-League Fantasy Decision Platform: release certification, point-in-time integrity, production-hardened learned models, closed-loop decision audit, multi-team isolation, and 22-step golden end-to-end lifecycle (`1.0.0`).
 
 Both human contributors and AI agents must read the relevant living documents before making material changes and update them whenever architecture, scope, priorities, or delivery status changes.
 
@@ -439,6 +440,98 @@ V0.8 grounds models in verified real-world European basketball dynamics, introdu
   - Role tier, base vs final expected minutes, minutes volatility ($\sigma_m$).
   - Blowout probability, foul fragility tier, and congestion index.
   - Ownership profile, ceiling ($+1.28\sigma$), and floor ($-1.0\sigma$) projections.
+
+## V0.9 Learned Availability Models, EuroCup Parity & Benchmark Ledgers
+
+V0.9 shifts the prediction and evaluation foundation to machine-learned availability and minutes estimation, achieves full operational parity for EuroCup (20 clubs across Groups A & B), and introduces fine-grained three-way error attribution:
+
+### 1. Learned Availability & Regression Models (`learned_v09`)
+
+- **Gradient Boosted Tree Pipelines**: Trains supervised availability classifiers (`HistGradientBoostingClassifier`) and conditional minutes regressors (`HistGradientBoostingRegressor`) using scikit-learn.
+- **Strict Out-of-Sample Calibration**: Validates probability calibration on rolling historical rounds to ensure calibrated uncertainty intervals without future data leakage.
+- **Integrated Stack**: Combines predicted $P(\text{play})$, expected minutes, and rate models into end-to-end projections:
+  $$\mathbb{E}[\text{FP}] = \hat{P}(\text{play}) \times \hat{\mathbb{E}}[\text{minutes} \mid \text{play}] \times \hat{\mathbb{E}}[\text{FP/min}]$$
+
+### 2. Full EuroCup Parity (Groups A & B)
+
+- **20-Club Dual-Group Structure**: Ingests, models, and optimizes squads for all 20 EuroCup teams across Groups A & B.
+- **Distinct Competition Dynamics**: Accounts for EuroCup's 18-round regular season, group schedules, and club limits.
+
+### 3. Three-Way Error Attribution & Benchmark Ledgers
+
+- **Component Error Decomposition**: Decomposes total prediction error into:
+  - **Availability Error**: Missing games or unexpected DNPs.
+  - **Minutes Error**: Deviation between expected and realized playing time.
+  - **Rate Error**: Deviation in per-minute fantasy production ($\text{FP/min}$).
+- **Multi-Model Benchmark**: Chronological evaluation ledger comparing `season_mean`, `ewma`, `fp_context_v08`, and `learned_v09` across historical seasons.
+
+---
+
+## V1.0 Platform Certification, Production Hardening & Golden Release (`1.0.0`)
+
+V1.0 marks the formal production release of the EuroLeague Fantasy Manager platform. It unifies all capabilities developed from V0.1 through V0.9 into an auditable, reproducible, point-in-time correct, and fully certified system:
+
+### 1. 16-Gate Automated Release Certification (`elf certify-v1`)
+
+A unified release validation command executing 16 comprehensive gates covering the entire platform stack:
+
+```powershell
+elf certify-v1
+# Or machine-readable JSON:
+elf certify-v1 --json
+```
+
+| # | Certification Gate | Verified Guarantee |
+|:---|:---|:---|
+| **1** | Core contracts | Invariant enforcement on formations, 11-unit squads, and salary caps |
+| **2** | PIT integrity | Strict cutoff timestamps preventing future data leakage |
+| **3** | Reproducibility | Canonical SHA-256 content hashing across datasets and artifacts |
+| **4** | Learned training | Multi-season historical training pipeline execution |
+| **5** | Learned evaluation | Walk-forward benchmark comparing `learned_v09` vs `fp_context_v08` |
+| **6** | EuroLeague rules | EuroLeague quota enforcement (max 3 court players per club) |
+| **7** | EuroCup rules | EuroCup dual-group schedule and quota enforcement (max 6 court players per club) |
+| **8** | Six-team isolation | Mutation isolation across 6 concurrent teams |
+| **9** | Optimizer oracle | Combinatorial oracle verification of lineup and transfer optimizers |
+| **10** | Sequential replay | Deterministic replay and algebraic telescoping regret closure |
+| **11** | Decision audit | Immutability and distinction of recommendation, human override, and outcome |
+| **12** | CLI workflows | Execution of critical commands with validated JSON schemas |
+| **13** | Workstation API | FastAPI endpoints (`/api/teams`, `/api/workstation/players`, `/`) operational |
+| **14** | Offline operation | 100% offline verification with non-local sockets blocked |
+| **15** | Benchmark regression | Bounded metric evaluation against historical baselines |
+| **16** | Documentation | Strict version 1.0.0 synchronization across package and specifications |
+
+### 2. Six-Team Concurrent Cross-League Isolation
+
+- **Independent Team Profiles**: Simultaneously manage up to 6 distinct teams across EuroLeague and EuroCup.
+- **Zero State Bleed**: Mutating squad rosters, trade histories, or bank balances on one team has zero side effects on any other team.
+- **Competition-Aware Quotas**: Dynamically validates maximum court players from the same club (EuroLeague: max 3; EuroCup: max 6).
+
+### 3. Closed-Loop Immutable Decision Audit & Regret Attribution
+
+- **Immutable Audit Trail**: Every decision record logs the complete pre-decision point-in-time squad snapshot, optimizer recommendation payload, human override adjustments, and full model provenance.
+- **Human vs. Model Separation**: Recommendations remain immutable even when a human manager chooses an override (e.g. alternate captain or trade).
+- **Outcome Reconciliation**: Ingests official box scores to reconcile realized points and decomposes decision regret:
+  $$\text{Total Regret} = \text{Captain Regret} + \text{Sixth Man Regret} + \text{Bench Regret} + \text{Turn Sub Regret} + \text{Transfer Regret} + \text{Formation Regret} + \text{Residual}$$
+  satisfying exact algebraic closure.
+
+### 4. Hardened CLI & Workstation
+
+- **Universal `--json` Output**: Machine-readable JSON output across `report`, `players`, `validate-trades`, `squad`, `fixtures`, `team list`, `team show`, `evaluation inspect`, and `certify-v1`.
+- **Mutation-Free Invariant**: All inspection commands guarantee zero mutations to team databases or configuration files.
+- **Interactive Workstation**: Production-grade local FastAPI GUI with visual half-court lineup editor, T1 $\to$ T2 turn substitution simulator, Trade Studio, and Grounded Strategic Copilot.
+
+### 5. Canonical 22-Step Golden End-to-End Lifecycle
+
+Validated through `tests/test_v10_golden_end_to_end.py`, testing the entire lifecycle 100% offline:
+1. Historical snapshot loading & point-in-time feature generation
+2. Squad initialization & validation across legal formations
+3. Statistical & learned model projections
+4. Manager Dossier generation & deterministic strategic analysis
+5. Lineup, transfer, and multi-round beam search optimization
+6. Decision logging with human overrides
+7. Intra-round Turn 1 score ingestion & Turn 2 substitution recomputation
+8. Final outcome reconciliation & telescoping regret decomposition
+9. EuroCup cross-league execution & 6-team state isolation
 
 ## License
 
