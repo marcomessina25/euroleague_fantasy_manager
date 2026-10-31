@@ -301,7 +301,7 @@ def test_team_round_sync_is_explicit_and_trade_studio_30_options(tmp_path: Path)
     assert failures == {}
     synced_ids = {t.team_id for t in synced}
     assert "sync_team" in synced_ids
-    # The app's default team_1 (legacy placeholder roster) rolls forward too
+    # The app's default team_1 (seeded empty: the example config's players are not in this snapshot) rolls forward too
     assert "team_1" in synced_ids
     team = ts.get_team("sync_team")
     assert team.round_number == 8
@@ -367,6 +367,51 @@ def test_sync_failure_is_reported_not_swallowed(tmp_path: Path, monkeypatch):
     assert failures == {"t_bad": "boom"}
     assert ts.get_team("t_ok").round_number == 3
     assert ts.get_team("t_bad").round_number == 1
+
+
+def test_sync_rejects_invalid_stored_roster_without_mutating(tmp_path: Path):
+    """Roll-forward validates the carried squad first; a rejected team is left untouched."""
+    from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit
+
+    db_path = tmp_path / "sync_invalid.sqlite3"
+    create_mock_snapshot(db_path, round_number=1)
+    ts = TeamService(db_path=db_path)
+    ts.create_team("t_bad", "Bad", round_number=1, bank_tenths=0)
+    ts.update_team("t_bad", transfers_remaining=2)
+    placeholder = [TeamRosterUnit(player_id=900 + i, position="G", name=f"P{i}") for i in range(11)]
+    ts.store.save_squad("t_bad", 1, placeholder)
+    create_mock_snapshot(db_path, round_number=3)
+
+    synced, failures = ts.sync_all_teams_to_live_round("euroleague")
+    assert synced == []
+    assert "requires 4 GUARDs, found 11" in failures["t_bad"]
+    team = ts.get_team("t_bad")
+    assert team.round_number == 1
+    assert team.transfers_remaining == 2
+
+
+def test_default_team_seeded_from_config_with_real_metadata(tmp_path: Path, monkeypatch):
+    """team_1 is seeded from config/current_squad.json with positions/clubs resolved from the snapshot."""
+    db_path = tmp_path / "seed.sqlite3"
+    create_mock_snapshot(db_path, round_number=5)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "current_squad.json").write_text(json.dumps({
+        "season": "2026/27",
+        "league_id": EUROLEAGUE_LEAGUE_ID,
+        "round_number": 5,
+        "player_ids": list(range(101, 112)),
+        "purchase_prices_tenths": {},
+        "bank_tenths": 15,
+    }), encoding="utf-8")
+
+    create_app(db_path=db_path)
+    team = TeamService(db_path=db_path).get_team("team_1")
+    assert team.round_number == 5
+    assert len(team.squad) == 11
+    positions = sorted(u.position for u in team.squad)
+    assert positions == ["C"] * 2 + ["F"] * 4 + ["G"] * 4 + ["HC"]
+    assert all(u.team_code for u in team.squad)
 
 
 def _contract(pid: int, pos: Position, club: str, fp: float, price: int):

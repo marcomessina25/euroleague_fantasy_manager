@@ -136,8 +136,9 @@ class TeamService:
             if u.player_id in latest_prices:
                 u.current_price_tenths = latest_prices[u.player_id]
 
-        # Composition is carried forward unchanged (already accepted when stored), so it is not
-        # re-validated; legacy placeholder rosters (e.g. config imports) must still roll forward.
+        # Validate before any write so a rejected roll-forward leaves the team untouched
+        if curr_units:
+            self._validate_roster(curr_units, league=team.league)
         self.update_team(team_id, transfers_remaining=MAX_TRADES_PER_ROUND)
         return self.set_squad(team_id, live_round, curr_units, validate=False, advance_team_round=True)
 
@@ -372,23 +373,47 @@ class TeamService:
         config_path: str | Path = "config/current_squad.json",
         player_metadata: dict[int, dict[str, Any]] | None = None,
     ) -> Team:
-        """Import team configuration and roster from a JSON squad file."""
+        """Import team configuration and roster from a JSON squad file.
+
+        Position, name and club come from ``player_metadata`` or, when absent, from the
+        latest snapshot of the config's competition. Raises ValueError if any player cannot
+        be resolved, so placeholder rosters are never stored.
+        """
+        from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
+
         path = Path(config_path)
         if not path.exists():
             raise FileNotFoundError(f"Configuration file not found: {path}")
 
         data = json.loads(path.read_text(encoding="utf-8"))
-        player_ids = data.get("player_ids", [])
+        player_ids = [int(pid) for pid in data.get("player_ids", [])]
         purchase_prices = data.get("purchase_prices_tenths", {})
         bank = int(data.get("bank_tenths", 0))
         round_number = int(data.get("round_number", 1))
         season = str(data.get("season", "2026/27"))
+        league_id = int(data.get("league_id", get_league_ruleset(League.EUROLEAGUE).league_id))
+        league = next((lg for lg in League if get_league_ruleset(lg).league_id == league_id), League.EUROLEAGUE)
 
-        meta = player_metadata or {}
+        meta = dict(player_metadata or {})
+        unresolved = [pid for pid in player_ids if pid not in meta]
+        db_path = getattr(self.store, "db_path", None)
+        if unresolved and db_path is not None:
+            from euroleague_fantasy_manager.storage import SnapshotStore
+
+            for p in SnapshotStore(Path(db_path)).load_latest_players(league_id=league_id):
+                if p.id in unresolved:
+                    meta[p.id] = {"position": p.position.short_code, "name": p.name, "team_code": p.team_code}
+            unresolved = [pid for pid in player_ids if pid not in meta]
+        if unresolved:
+            raise ValueError(
+                f"Cannot import squad from {path}: players {unresolved} not found in the latest "
+                f"{league.value} snapshot. Run `elf update --league {league.value}` first."
+            )
+
         units: list[TeamRosterUnit] = []
         for pid in player_ids:
-            p_meta = meta.get(pid, {})
-            pos = p_meta.get("position", "G")
+            p_meta = meta[pid]
+            pos = p_meta["position"]
             p_price = int(purchase_prices.get(str(pid), 100))
             units.append(
                 TeamRosterUnit(
@@ -401,12 +426,14 @@ class TeamService:
                     is_coach=(pos == "HC"),
                 )
             )
+        self._validate_roster(units, league=league.value)
 
         existing = self.store.get_team(team_id)
         if not existing:
             team = self.create_team(
                 team_id=team_id,
                 name=f"Team {team_id.capitalize()}",
+                league=league.value,
                 season=season,
                 round_number=round_number,
                 bank_tenths=bank,
