@@ -1,8 +1,8 @@
 # EuroLeague Fantasy Manager — Roadmap
 
-> **Current planning baseline:** 2026-10-02  
-> **Current baseline:** V0.8 is delivered on branch `v08` (commits `ea86436..8515607`), verified with 249 passing tests.  
-> **Next release:** V0.9 (Learned Models, EuroCup Full Parity & Cross-League Testing).
+> **Current planning baseline:** October 2026  
+> **Current baseline:** V1.0.1 (branch `v101`) is delivered with mid-season squad creation and arbitrary round support.  
+> **Previous releases:** V1.0 (PR #15 merged into `main`).
 
 ## 1. Vision
 
@@ -470,9 +470,11 @@ V0.7     Full Trade Capacity, Backfill & Sequential Decision Replay  [Completed]
   ↓
 V0.8     Basketball Context, Participation & Strategic Risk          [Completed]
   ↓
-V0.9     Learned Models, EuroCup Full Parity & Cross-League Testing  [Completed - Branch v09]
+V0.9     Learned Models, EuroCup Full Parity & Cross-League Testing  [Completed]
   ↓
-V1.0     Mature Multi-League Decision Platform (Production Release)  [Target]
+V1.0     Mature Multi-League Decision Platform (Production Release)  [Completed - PR #15]
+  ↓
+V1.0.1   Mid-Season Squad Creation & Arbitrary Round Support         [Completed - Branch v101]
   ↓
 V1.1     Strategic Squad Construction & Unlimited Window Optimizer   [Planned]
   ↓

@@ -51,6 +51,10 @@ class TeamService:
     ) -> Team:
         """Create a new isolated team profile (max 6)."""
         league = League.from_str(league).value
+        if round_number < 1:
+            raise ValueError(f"round_number must be at least 1; got {round_number}.")
+        if bank_tenths < 0:
+            raise ValueError("Bank credits cannot be negative.")
         existing = self.store.get_team(team_id)
         if existing:
             raise ValueError(f"Team with ID '{team_id}' already exists.")
@@ -91,12 +95,76 @@ class TeamService:
             )
         return created
 
-    def get_team(self, team_id: str) -> Team:
+    def get_team(self, team_id: str, auto_sync: bool = True) -> Team:
         """Retrieve team by ID, raising KeyError if not found."""
         team = self.store.get_team(team_id)
         if not team:
             raise KeyError(f"Team '{team_id}' not found.")
+        if auto_sync and hasattr(self.store, "db_path"):
+            try:
+                from euroleague_fantasy_manager.storage import SnapshotStore
+                from euroleague_fantasy_manager.competition.ruleset import League, get_league_ruleset
+                snap_store = SnapshotStore(self.store.db_path)
+                league_enum = League.from_str(getattr(team, "league", "euroleague"))
+                ruleset = get_league_ruleset(league_enum)
+                summary = snap_store.get_latest_summary(league_id=ruleset.league_id)
+                if summary and summary.round_number > team.round_number:
+                    return self.sync_team_to_live_round(team_id)
+            except Exception:
+                pass
         return team
+
+    def sync_team_to_live_round(self, team_id: str) -> Team:
+        """Advance a team's active round and squad to the latest competition snapshot round."""
+        team = self.store.get_team(team_id)
+        if not team or not hasattr(self.store, "db_path"):
+            return team if team else self.get_team(team_id, auto_sync=False)
+
+        from euroleague_fantasy_manager.storage import SnapshotStore
+        from euroleague_fantasy_manager.competition.ruleset import League, get_league_ruleset
+        from euroleague_fantasy_manager.rules import MAX_TRADES_PER_ROUND
+
+        snap_store = SnapshotStore(self.store.db_path)
+        league_enum = League.from_str(getattr(team, "league", "euroleague"))
+        ruleset = get_league_ruleset(league_enum)
+        summary = snap_store.get_latest_summary(league_id=ruleset.league_id)
+        if summary is None or summary.round_number <= team.round_number:
+            return team
+
+        live_round = summary.round_number
+        curr_units = self.store.get_squad(team_id, team.round_number)
+        if not curr_units:
+            curr_units = list(team.squad)
+
+        # Update player current_price_tenths from latest snapshot
+        try:
+            latest_players = {p.id: p for p in snap_store.load_latest_players(league_id=ruleset.league_id)}
+            for u in curr_units:
+                p = latest_players.get(u.player_id)
+                if p:
+                    u.current_price_tenths = p.price_tenths
+        except Exception:
+            pass
+
+        self.set_squad(team_id, live_round, curr_units, validate=False, advance_team_round=True)
+        return self.update_team(team_id, transfers_remaining=MAX_TRADES_PER_ROUND)
+
+    def sync_all_teams_to_live_round(self, league: Any = None) -> list[Team]:
+        """Advance all managed teams whose round is behind the latest competition snapshot."""
+        updated = []
+        for team in self.store.list_teams():
+            if league is not None:
+                from euroleague_fantasy_manager.competition.ruleset import League
+                try:
+                    target_league = League.from_str(league).value
+                    team_league = League.from_str(getattr(team, "league", "euroleague")).value
+                    if team_league != target_league:
+                        continue
+                except Exception:
+                    pass
+            synced = self.sync_team_to_live_round(team.team_id)
+            updated.append(synced)
+        return updated
 
     def list_teams(self) -> list[Team]:
         """List all active teams."""

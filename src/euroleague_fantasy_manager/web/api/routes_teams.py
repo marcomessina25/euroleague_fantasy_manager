@@ -40,6 +40,7 @@ class CreateTeamRequest(BaseModel):
     round_number: int = 1
     turn_number: int = 1
     bank_tenths: int | None = None
+    credits: float | None = None
     settings: dict[str, Any] = Field(default_factory=dict)
     player_ids: list[int] = Field(default_factory=list)
     recommended_player_ids: list[int] = Field(default_factory=list)
@@ -87,27 +88,57 @@ def create_team(
             clean = re.sub(r"[^a-zA-Z0-9_]", "", req.name.strip().lower().replace(" ", "_"))[:16]
             tid = f"team_{clean or 'squad'}_{int(time.time())}"
 
+        round_num = int(req.round_number)
+        if round_num < 1:
+            raise HTTPException(status_code=400, detail="round_number must be at least 1.")
+
+        # Resolve bank credits
+        if req.credits is not None and req.bank_tenths is None:
+            bank_tenths = int(round(req.credits * 10))
+        elif req.bank_tenths is not None:
+            bank_tenths = int(req.bank_tenths)
+        else:
+            bank_tenths = None
+
+        if round_num > 1 and bank_tenths is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"For round {round_num} (mid-season creation), bank credits must be explicitly specified (e.g. 'credits': 1.5 or 'bank_tenths': 15).",
+            )
+
+        if bank_tenths is not None and bank_tenths < 0:
+            raise HTTPException(status_code=400, detail="Bank credits cannot be negative.")
+
         squad_units: list[TeamRosterUnit] = []
         contracts: list[PlayerProjectionContract] = []
-        bank_tenths = req.bank_tenths if req.bank_tenths is not None else 1000
 
         if req.player_ids:
-            proj_dict = prediction_service.get_projections_dict(req.season, req.round_number, league=league)
+            proj_dict = prediction_service.get_projections_dict(req.season, round_num, league=league)
             missing = [pid for pid in req.player_ids if pid not in proj_dict]
             if missing:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Player IDs {missing} do not belong to the selected league '{league}' player pool.",
+                    detail=f"Player IDs {missing} do not belong to the selected league '{league}' player pool for round {round_num}.",
                 )
             contracts = [proj_dict[pid] for pid in req.player_ids]
 
+            spent_tenths = sum(c.price_tenths for c in contracts)
+
             # Validate squad
-            val = validate_squad_constraints(contracts, budget_tenths=1000)
-            if not val.is_valid:
-                raise HTTPException(status_code=400, detail=f"Invalid squad: {'; '.join(val.errors)}")
+            if round_num == 1:
+                val = validate_squad_constraints(contracts, budget_tenths=1000)
+                if not val.is_valid:
+                    raise HTTPException(status_code=400, detail=f"Invalid squad: {'; '.join(val.errors)}")
+                if bank_tenths is None:
+                    bank_tenths = max(0, 1000 - spent_tenths)
+            else:
+                # Mid-season creation: squad value reflects market changes; validate structure & quotas
+                val = validate_squad_constraints(contracts, check_budget=False)
+                if not val.is_valid:
+                    raise HTTPException(status_code=400, detail=f"Invalid squad: {'; '.join(val.errors)}")
 
             # Optimize lineup assignment (starters, captain, 6th man, bench, coach)
-            lineup = optimization_service.lineup_optimizer.optimize(contracts, round_number=req.round_number)
+            lineup = optimization_service.lineup_optimizer.optimize(contracts, round_number=round_num)
 
             starter_set = set(lineup.starter_ids)
             bench_set = set(lineup.bench_ids)
@@ -132,9 +163,8 @@ def create_team(
                     )
                 )
 
-            spent_tenths = sum(c.price_tenths for c in contracts)
-            if req.bank_tenths is None:
-                bank_tenths = max(0, 1000 - spent_tenths)
+        if bank_tenths is None:
+            bank_tenths = 1000 if round_num == 1 else 0
 
         team = service.create_team(
             team_id=tid,
@@ -142,7 +172,7 @@ def create_team(
             league=league,
             mode=req.mode,
             season=req.season,
-            round_number=req.round_number,
+            round_number=round_num,
             turn_number=req.turn_number,
             bank_tenths=bank_tenths,
             settings=req.settings,
@@ -156,10 +186,12 @@ def create_team(
                 decision_service.log_initial_team(
                     team_id=tid,
                     season=req.season,
+                    round_number=round_num,
                     recommended_squad_ids=rec_ids,
                     actual_squad_ids=req.player_ids,
-                    notes=f"Initial team draft: {req.name}",
+                    notes=f"Initial team draft: {req.name} (Round {round_num})",
                     squad_contracts=contracts,
+                    league=league,
                 )
             except Exception as e:
                 # Transactional rollback: team must not exist if audit record fails

@@ -2,7 +2,7 @@
 
 A deterministic, local-first **EuroLeague Fantasy Challenge (Classic Mode)** decision engine for the 2026/27 season (`E2026`), architected to share its core engine with **EuroCup Fantasy Challenge** (`U2026`).
 
-![Version](https://img.shields.io/badge/Version-1.0.0-purple) ![Python](https://img.shields.io/badge/Python-3.12-blue) ![CI](https://github.com/marcomessina25/euroleague_fantasy_manager/actions/workflows/ci.yml/badge.svg) ![License](https://img.shields.io/badge/License-MIT-green)
+![Version](https://img.shields.io/badge/Version-1.0.1-purple) ![Python](https://img.shields.io/badge/Python-3.12-blue) ![CI](https://github.com/marcomessina25/euroleague_fantasy_manager/actions/workflows/ci.yml/badge.svg) ![License](https://img.shields.io/badge/License-MIT-green)
 
 ---
 
@@ -20,7 +20,7 @@ This project uses official EuroLeague/EuroCup fantasy data and related public co
 ## Living roadmap
 
 - [`docs/architecture.md`](docs/architecture.md) defines the purpose, architectural boundaries, and responsibilities of each layer.
-- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1` through `V1.0` completed).
+- [`docs/roadmap.md`](docs/roadmap.md) tracks current delivery status (`V0.1` through `V1.0.1` completed).
 - [`docs/specs/v02.md`](docs/specs/v02.md) and [`docs/specs/items_left_for_v02.md`](docs/specs/items_left_for_v02.md) define the **V0.2** heuristic decision-support baseline specification and pre-merge checklist.
 - [`docs/specs/v025.md`](docs/specs/v025.md) and [`docs/specs/v025_cleanup.md`](docs/specs/v025_cleanup.md) define the **V0.2.5** historical evaluation foundation.
 - [`docs/specs/v03.md`](docs/specs/v03.md) and [`docs/specs/items_left_for_v03.md`](docs/specs/items_left_for_v03.md) define the **V0.3** validated predictive projection layer (`0.3.0`) and merge checklist.
@@ -34,6 +34,7 @@ This project uses official EuroLeague/EuroCup fantasy data and related public co
 - [`docs/specs/v08.md`](docs/specs/v08.md) defines **V0.8** basketball context modeling, rotation tiers, injury vacancy usage surges, rank-aware decisions (Core/Shield/Sword), and option value formalization (`0.8.0`).
 - [`docs/specs/v09.md`](docs/specs/v09.md) defines **V0.9** learned availability models, EuroCup full operational parity (Groups A & B), dynamic transfer policy, three-way error attribution, multi-model benchmark ledger, and cross-league validation suite (`0.9.0`).
 - [`docs/specs/v10.md`](docs/specs/v10.md) defines **V1.0** Mature Multi-League Fantasy Decision Platform: release certification, point-in-time integrity, production-hardened learned models, closed-loop decision audit, multi-team isolation, and 22-step golden end-to-end lifecycle (`1.0.0`).
+- [`docs/specs/v101.md`](docs/specs/v101.md) defines **V1.0.1** Mid-Season Squad Creation from Specific Round: point-in-time squad baseline initialization, custom bank credits entry, salary cap relaxation for post-round-1 teams, and zero-history transfer optimization (`1.0.1`).
 
 Both human contributors and AI agents must read the relevant living documents before making material changes and update them whenever architecture, scope, priorities, or delivery status changes.
 
@@ -498,7 +499,7 @@ elf certify-v1 --json
 | **13** | Workstation API | FastAPI endpoints (`/api/teams`, `/api/workstation/players`, `/`) operational |
 | **14** | Offline operation | 100% offline verification with non-local sockets blocked |
 | **15** | Benchmark regression | Bounded metric evaluation against historical baselines |
-| **16** | Documentation | Strict version 1.0.0 synchronization across package and specifications |
+| **16** | Documentation | Strict version 1.0.1 synchronization across package and specifications |
 
 ### 2. Six-Team Concurrent Cross-League Isolation
 
@@ -532,6 +533,17 @@ Validated through `tests/test_v10_golden_end_to_end.py`, testing the entire life
 7. Intra-round Turn 1 score ingestion & Turn 2 substitution recomputation
 8. Final outcome reconciliation & telescoping regret decomposition
 9. EuroCup cross-league execution & 6-team state isolation
+
+---
+
+## V1.0.1 Mid-Season Squad Creation from Specific Round (`1.0.1`)
+
+V1.0.1 adds the capability for managers to initialize and manage an existing official fantasy squad directly from any specific round $R$ (including the active live round):
+- **No Prior History Required:** Solves the cold-start problem for mid-season teams; managers do not need transaction histories from rounds $1 \dots R-1$.
+- **Explicit Credits Input:** In Round 1, starting budget is fixed at 100.0 credits ($bank = 100 - \sum cost$). For Round > 1, the user enters their current bank credits (or total team value), accommodating accumulated player price appreciation/depreciation.
+- **Workstation Team Builder:** Initial Team Builder modal dynamically auto-populates the current active round, switches to editable bank credits for round > 1, reloads player projections for that round, and displays total team value.
+- **CLI Support:** `elf team create --round <R> --credits <CR>` and `elf team import-squad --round <R> --credits <CR> --file <PATH>` enable instant mid-season team setup.
+- Specification details in [`docs/specs/v101.md`](docs/specs/v101.md).
 
 ## License
 

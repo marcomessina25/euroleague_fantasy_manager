@@ -38,6 +38,8 @@ def import_squad_from_file(
     database_path: Path = DATABASE_PATH,
     league_id: int = EUROLEAGUE_LEAGUE_ID,
     league: str | League | None = None,
+    round_number: int | None = None,
+    bank_credits: float | None = None,
 ) -> dict[str, Any]:
     """Read players.txt line-by-line, resolve IDs/prices from SQLite, and update current_squad.json."""
     if league is not None:
@@ -59,7 +61,7 @@ def import_squad_from_file(
         squad_data = {
             "season": "2026/27",
             "league_id": league_id,
-            "round_number": 1,
+            "round_number": round_number or 1,
             "player_ids": [],
             "purchase_prices_tenths": {},
             "bank_tenths": 0,
@@ -90,12 +92,17 @@ def import_squad_from_file(
     total_cost_tenths = sum(int(u["price_tenths"]) for u in imported_units)
     squad_data["player_ids"] = [u["id"] for u in imported_units]
     squad_data["purchase_prices_tenths"] = {str(u["id"]): int(u["price_tenths"]) for u in imported_units}
-    if total_cost_tenths <= MAX_BUDGET_TENTHS:
+    if bank_credits is not None:
+        squad_data["bank_tenths"] = int(round(bank_credits * 10))
+    elif total_cost_tenths <= MAX_BUDGET_TENTHS and (round_number is None or round_number == 1):
         squad_data["bank_tenths"] = MAX_BUDGET_TENTHS - total_cost_tenths
 
-    summary = store.get_latest_summary(league_id=league_id)
-    if summary is not None and "round_number" not in squad_data:
-        squad_data["round_number"] = summary.round_number
+    if round_number is not None:
+        squad_data["round_number"] = round_number
+    else:
+        summary = store.get_latest_summary(league_id=league_id)
+        if summary is not None and "round_number" not in squad_data:
+            squad_data["round_number"] = summary.round_number
 
     squad_path.parent.mkdir(parents=True, exist_ok=True)
     squad_path.write_text(json.dumps(squad_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

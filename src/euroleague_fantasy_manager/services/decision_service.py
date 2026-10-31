@@ -113,6 +113,7 @@ class DecisionService:
         season: str,
         recommended_squad_ids: Sequence[int],
         actual_squad_ids: Sequence[int] | None = None,
+        round_number: int = 1,
         provenance: DecisionProvenance | None = None,
         snapshot: StateSnapshot | None = None,
         notes: str = "",
@@ -123,6 +124,7 @@ class DecisionService:
         return self.logger.log_initial_team_decision(
             team_id=team_id,
             season=season,
+            round_number=round_number,
             recommended_squad_ids=recommended_squad_ids,
             actual_squad_ids=actual_squad_ids,
             provenance=provenance,

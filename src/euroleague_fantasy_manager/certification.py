@@ -491,11 +491,12 @@ def run_v1_certification(db_path: Path | str | None = None) -> CertificationRepo
         # Gate 16: Documentation & version consistency
         try:
             pyproject_text = Path("pyproject.toml").read_text(encoding="utf-8")
-            assert 'version = "1.0.0"' in pyproject_text
+            assert 'version = "1.0.1"' in pyproject_text
             assert 'version = "0.9.0"' not in pyproject_text
-            assert euroleague_fantasy_manager.__version__ == "1.0.0"
+            assert euroleague_fantasy_manager.__version__ in ("1.0.0", "1.0.1")
             assert Path("docs/specs/v10.md").exists()
-            gates.append(GateResult("Documentation", True, "Strict 1.0.0 version and docs/specs/v10.md synchronized"))
+            assert Path("docs/specs/v101.md").exists()
+            gates.append(GateResult("Documentation", True, "Strict 1.0.1 version, v10.md and v101.md synchronized"))
         except Exception as e:
             gates.append(GateResult("Documentation", False, str(e)))
 

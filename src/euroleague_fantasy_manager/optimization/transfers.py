@@ -110,7 +110,7 @@ class TransferOptimizer:
         max_trades: int = 1,
         unlimited: bool = False,
         exhaustive_candidates: bool = False,
-        top_n: int = 5,
+        top_n: int = 30,
         market_projections: Mapping[int, PlayerProjectionContract] | None = None,
         dynamic_opportunity_cost: bool | None = None,
         is_drw_approaching: bool | None = None,
@@ -293,14 +293,17 @@ class TransferOptimizer:
         # 2-STAGE SCREENING PATH: For limited transfers (1..4) or bounded unlimited transfers (1..5)
         effective_max_trades = max_trades if (unlimited and max_trades is not None and max_trades <= 5) else min(max_trades, 4)
 
-        # Dynamic candidate filtering limits to prevent combinatorial explosion
-        cand_limits = {1: 15, 2: 8, 3: 5, 4: 4, 5: 3}
-        cand_limit = cand_limits.get(effective_max_trades, 3) if not exhaustive_candidates else 50
+        # Dynamic candidate filtering limits per trade size k to prevent combinatorial explosion
+        # while ensuring rich diversity for multi-player transfers
+        cand_limits_by_k = {1: 30, 2: 14, 3: 7, 4: 5, 5: 4}
 
         # Stage 1: Fast screening of legal trade combinations
         screened_packages: list[tuple[float, tuple[PlayerProjectionContract, ...], tuple[PlayerProjectionContract, ...], int, int]] = []
 
         for k in range(1, effective_max_trades + 1):
+            cand_limit = cand_limits_by_k.get(k, 4) if not exhaustive_candidates else 50
+            k_packages: list[tuple[float, tuple[PlayerProjectionContract, ...], tuple[PlayerProjectionContract, ...], int, int]] = []
+
             for out_combo in combinations(squad_contracts, k):
                 out_ids = [p.player_id for p in out_combo]
                 out_positions = Counter(p.position for p in out_combo)
@@ -340,26 +343,19 @@ class TransferOptimizer:
                         continue
 
                     evaluated_count += 1
-
-                    # Validate transfer constraints
-                    val_res, new_bank = validate_transfers_constraints(
-                        current_squad=squad_contracts,
-                        out_ids=out_ids,
-                        in_players=in_players,
-                        bank_tenths=bank_tenths,
-                        constraints=self.constraints,
-                    )
-                    if not val_res.is_valid:
-                        continue
-
+                    new_bank = max_budget - purchases_val
                     in_exp_sum = sum(p.expected_fp for p in in_players)
                     proxy_gain = in_exp_sum - out_exp_sum
-                    screened_packages.append((proxy_gain, tuple(out_combo), tuple(in_players), new_bank, k))
+                    k_packages.append((proxy_gain, tuple(out_combo), tuple(in_players), new_bank, k))
+
+            # Keep top candidates per trade size k
+            k_packages.sort(key=lambda x: x[0], reverse=True)
+            screened_packages.extend(k_packages[:30] if not exhaustive_candidates else k_packages)
 
         # Stage 2: Evaluate exact lineup optimization for top screened packages
-        if not exhaustive_candidates and len(screened_packages) > 25:
+        if not exhaustive_candidates and len(screened_packages) > 80:
             screened_packages.sort(key=lambda x: x[0], reverse=True)
-            screened_packages = screened_packages[:25]
+            screened_packages = screened_packages[:80]
 
         for proxy_gain, out_combo, in_players, new_bank, k in screened_packages:
             out_ids_set = {p.player_id for p in out_combo}
