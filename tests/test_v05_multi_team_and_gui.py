@@ -252,10 +252,20 @@ def test_team_service_operations_and_config_import(tmp_path: Path):
     }
     cfg_file.write_text(json.dumps(cfg_data), encoding="utf-8")
 
-    imported = ts.import_from_config(team_id="imported_team", config_path=cfg_file)
+    meta = {
+        c.player_id: {"position": c.position.short_code, "name": c.player_name, "team_code": c.team_code}
+        for c in contracts
+    }
+    imported = ts.import_from_config(team_id="imported_team", config_path=cfg_file, player_metadata=meta)
     assert imported.team_id == "imported_team"
     assert imported.bank_tenths == 350
     assert len(imported.squad) == 11
+
+    # Without metadata and without a snapshot to resolve from, no placeholder roster is stored
+    with pytest.raises(ValueError, match="not found in the latest"):
+        ts.import_from_config(team_id="unresolved_team", config_path=cfg_file)
+    with pytest.raises(KeyError):
+        ts.get_team("unresolved_team")
 
 
 def test_optimization_service_lineup_and_oracle_verification(tmp_path: Path):

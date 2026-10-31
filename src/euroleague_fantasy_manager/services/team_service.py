@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -29,6 +30,8 @@ from euroleague_fantasy_manager.multi_team.store import (
     TeamStore,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class TeamService:
     """Service orchestrating multi-team lifecycle, squad state, and team isolation."""
@@ -51,6 +54,10 @@ class TeamService:
     ) -> Team:
         """Create a new isolated team profile (max 6)."""
         league = League.from_str(league).value
+        if round_number < 1:
+            raise ValueError(f"round_number must be at least 1; got {round_number}.")
+        if bank_tenths < 0:
+            raise ValueError("Bank credits cannot be negative.")
         existing = self.store.get_team(team_id)
         if existing:
             raise ValueError(f"Team with ID '{team_id}' already exists.")
@@ -97,6 +104,62 @@ class TeamService:
         if not team:
             raise KeyError(f"Team '{team_id}' not found.")
         return team
+
+    def sync_team_to_live_round(self, team_id: str) -> Team:
+        """Roll a team's squad forward to the latest competition snapshot round.
+
+        Called explicitly after a data update (``elf update`` / ``POST /api/workstation/update-data``),
+        never on read. The previous round's squad is carried forward with refreshed prices and
+        the per-round transfer allowance is reset, since a new round has started.
+        """
+        from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
+        from euroleague_fantasy_manager.storage import SnapshotStore
+
+        team = self.get_team(team_id)
+        db_path = getattr(self.store, "db_path", None)
+        if db_path is None:
+            return team
+
+        snap_store = SnapshotStore(db_path)
+        ruleset = get_league_ruleset(League.from_str(team.league))
+        summary = snap_store.get_latest_summary(league_id=ruleset.league_id)
+        if summary is None or summary.round_number <= team.round_number:
+            return team
+
+        live_round = summary.round_number
+        curr_units = self.store.get_squad(team_id, team.round_number) or list(team.squad)
+
+        latest_prices = {
+            p.id: p.price_tenths for p in snap_store.load_latest_players(league_id=ruleset.league_id)
+        }
+        for u in curr_units:
+            if u.player_id in latest_prices:
+                u.current_price_tenths = latest_prices[u.player_id]
+
+        # Validate before any write so a rejected roll-forward leaves the team untouched
+        if curr_units:
+            self._validate_roster(curr_units, league=team.league)
+        self.update_team(team_id, transfers_remaining=MAX_TRADES_PER_ROUND)
+        return self.set_squad(team_id, live_round, curr_units, validate=False, advance_team_round=True)
+
+    def sync_all_teams_to_live_round(self, league: Any = None) -> tuple[list[Team], dict[str, str]]:
+        """Roll forward every managed team (optionally of one league) behind the latest snapshot.
+
+        Returns ``(synced_teams, failures)`` where ``failures`` maps team_id to an error message;
+        one failing team never blocks the others.
+        """
+        target_league = League.from_str(league).value if league is not None else None
+        synced: list[Team] = []
+        failures: dict[str, str] = {}
+        for team in self.store.list_teams():
+            if target_league is not None and League.from_str(team.league).value != target_league:
+                continue
+            try:
+                synced.append(self.sync_team_to_live_round(team.team_id))
+            except Exception as e:  # noqa: BLE001 - reported to caller, not swallowed
+                logger.warning("Failed to sync team %s to live round: %s", team.team_id, e)
+                failures[team.team_id] = str(e)
+        return synced, failures
 
     def list_teams(self) -> list[Team]:
         """List all active teams."""
@@ -310,23 +373,47 @@ class TeamService:
         config_path: str | Path = "config/current_squad.json",
         player_metadata: dict[int, dict[str, Any]] | None = None,
     ) -> Team:
-        """Import team configuration and roster from a JSON squad file."""
+        """Import team configuration and roster from a JSON squad file.
+
+        Position, name and club come from ``player_metadata`` or, when absent, from the
+        latest snapshot of the config's competition. Raises ValueError if any player cannot
+        be resolved, so placeholder rosters are never stored.
+        """
+        from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
+
         path = Path(config_path)
         if not path.exists():
             raise FileNotFoundError(f"Configuration file not found: {path}")
 
         data = json.loads(path.read_text(encoding="utf-8"))
-        player_ids = data.get("player_ids", [])
+        player_ids = [int(pid) for pid in data.get("player_ids", [])]
         purchase_prices = data.get("purchase_prices_tenths", {})
         bank = int(data.get("bank_tenths", 0))
         round_number = int(data.get("round_number", 1))
         season = str(data.get("season", "2026/27"))
+        league_id = int(data.get("league_id", get_league_ruleset(League.EUROLEAGUE).league_id))
+        league = next((lg for lg in League if get_league_ruleset(lg).league_id == league_id), League.EUROLEAGUE)
 
-        meta = player_metadata or {}
+        meta = dict(player_metadata or {})
+        unresolved = [pid for pid in player_ids if pid not in meta]
+        db_path = getattr(self.store, "db_path", None)
+        if unresolved and db_path is not None:
+            from euroleague_fantasy_manager.storage import SnapshotStore
+
+            for p in SnapshotStore(Path(db_path)).load_latest_players(league_id=league_id):
+                if p.id in unresolved:
+                    meta[p.id] = {"position": p.position.short_code, "name": p.name, "team_code": p.team_code}
+            unresolved = [pid for pid in player_ids if pid not in meta]
+        if unresolved:
+            raise ValueError(
+                f"Cannot import squad from {path}: players {unresolved} not found in the latest "
+                f"{league.value} snapshot. Run `elf update --league {league.value}` first."
+            )
+
         units: list[TeamRosterUnit] = []
         for pid in player_ids:
-            p_meta = meta.get(pid, {})
-            pos = p_meta.get("position", "G")
+            p_meta = meta[pid]
+            pos = p_meta["position"]
             p_price = int(purchase_prices.get(str(pid), 100))
             units.append(
                 TeamRosterUnit(
@@ -339,12 +426,14 @@ class TeamService:
                     is_coach=(pos == "HC"),
                 )
             )
+        self._validate_roster(units, league=league.value)
 
         existing = self.store.get_team(team_id)
         if not existing:
             team = self.create_team(
                 team_id=team_id,
                 name=f"Team {team_id.capitalize()}",
+                league=league.value,
                 season=season,
                 round_number=round_number,
                 bank_tenths=bank,

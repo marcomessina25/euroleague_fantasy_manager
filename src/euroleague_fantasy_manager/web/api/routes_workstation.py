@@ -42,6 +42,7 @@ from euroleague_fantasy_manager.services.scenario_service import (
 )
 from euroleague_fantasy_manager.services.team_service import TeamService
 from euroleague_fantasy_manager.web.deps import (
+    get_db_path,
     get_decision_service,
     get_evaluation_service,
     get_optimization_service,
@@ -71,6 +72,7 @@ class OptimizeTransfersRequest(BaseModel):
     unlimited: bool = False
     exhaustive: bool = False
     strategy_preset: str = "balanced_value"
+    top_n: int = Field(default=30, ge=1, le=50)
 
 
 class MultiRoundRequest(BaseModel):
@@ -119,6 +121,7 @@ class LogDecisionRequest(BaseModel):
 
 class SuggestInitialTeamRequest(BaseModel):
     season: str = "2026/27"
+    round_number: int = 1
     budget_credits: float = 100.0
     risk_mode: str = "expected"
     locked_player_ids: list[int] = Field(default_factory=list)
@@ -396,6 +399,7 @@ def optimize_transfers_endpoint(
             unlimited=req.unlimited,
             exhaustive=req.exhaustive,
             strategy_preset=req.strategy_preset,
+            top_n=req.top_n,
         )
 
         recs = []
@@ -878,6 +882,23 @@ def get_player_details_endpoint(
     }
 
 
+@router.get("/current-round")
+def get_current_round_endpoint(
+    league: League = Depends(parse_league),
+    db_path: str = Depends(get_db_path),
+) -> dict[str, Any]:
+    """Return the active current round for the given league."""
+    from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
+    from euroleague_fantasy_manager.fixtures import get_current_round
+    from euroleague_fantasy_manager.storage import SnapshotStore
+    store = SnapshotStore(db_path)
+    try:
+        rnd = get_current_round(store, league_id=get_league_ruleset(league).league_id)
+    except Exception:
+        rnd = 1
+    return {"current_round": rnd, "league": league.value}
+
+
 @router.post("/initial-team/suggest")
 def suggest_initial_team_endpoint(
     req: SuggestInitialTeamRequest,
@@ -893,6 +914,7 @@ def suggest_initial_team_endpoint(
     try:
         return optimization_service.suggest_initial_team(
             season=req.season,
+            round_number=req.round_number,
             budget_credits=req.budget_credits,
             risk_mode=req.risk_mode,
             locked_player_ids=req.locked_player_ids,
@@ -1041,6 +1063,7 @@ def player_intel_endpoint(
 def update_data_endpoint(
     league: League = Depends(parse_league),
     prediction_service: PredictionService = Depends(get_prediction_service),
+    team_service: TeamService = Depends(get_team_service),
 ) -> dict[str, Any]:
     """Fetch live data from official EuroLeague Fantasy API and update SQLite snapshot store."""
     try:
@@ -1054,21 +1077,26 @@ def update_data_endpoint(
         store = SnapshotStore(prediction_service.database_path)
         summary = store.save_snapshot(payload, raw_directory=RAW_ARCHIVE_DIRECTORY)
         prediction_service.clear_cache()
-        return {
-            "success": True,
-            "message": f"Successfully updated snapshot #{summary.snapshot_id} for {summary.season_code} round {summary.round_number}.",
-            "summary": {
-                "snapshot_id": summary.snapshot_id,
-                "season_code": summary.season_code,
-                "round_number": summary.round_number,
-                "player_count": summary.player_count,
-                "coach_count": summary.coach_count,
-                "team_count": summary.team_count,
-                "fixture_count": summary.fixture_count,
-                "created_at": summary.created_at,
-            },
-        }
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to fetch live data from EuroLeague API: {e}")
+
+    # Roll managed teams forward; a failing team is reported, not fatal to the data update.
+    synced, sync_failures = team_service.sync_all_teams_to_live_round(league)
+    return {
+        "success": True,
+        "message": f"Successfully updated snapshot #{summary.snapshot_id} for {summary.season_code} round {summary.round_number}.",
+        "summary": {
+            "snapshot_id": summary.snapshot_id,
+            "season_code": summary.season_code,
+            "round_number": summary.round_number,
+            "player_count": summary.player_count,
+            "coach_count": summary.coach_count,
+            "team_count": summary.team_count,
+            "fixture_count": summary.fixture_count,
+            "created_at": summary.created_at,
+        },
+        "synced_team_ids": [t.team_id for t in synced],
+        "sync_failures": sync_failures,
+    }
 
 

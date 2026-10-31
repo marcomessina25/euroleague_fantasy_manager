@@ -264,14 +264,18 @@ class OptimizationService:
         candidate_pool: Sequence[PlayerProjectionContract] | None = None,
         exhaustive: bool = False,
         strategy_preset: str = "balanced_value",
+        top_n: int = 5,
     ) -> TransferOptimizationResult:
         """Find optimal trade combinations for the team."""
         team = self.team_service.get_team(team_id)
         rnd = round_number or team.round_number
 
         # G2: Clamp max_trades against the team's actual transfers_remaining
-        # so direct API callers cannot receive suggestions exceeding budget.
-        effective_max = min(max_trades, team.transfers_remaining, MAX_TRADES_PER_ROUND)
+        # so direct API callers cannot receive suggestions exceeding budget (unless unlimited is requested).
+        if unlimited:
+            effective_max = max_trades if max_trades is not None else MAX_TRADES_PER_ROUND
+        else:
+            effective_max = min(max_trades, team.transfers_remaining, MAX_TRADES_PER_ROUND)
 
         league = _team_league(team)
         squad_contracts = self._resolve_squad_contracts(team.squad, season, rnd, league=league)
@@ -310,6 +314,7 @@ class OptimizationService:
             max_trades=effective_max,
             unlimited=unlimited,
             exhaustive_candidates=exhaustive,
+            top_n=top_n,
         )
 
     def plan_multi_round(
@@ -352,6 +357,7 @@ class OptimizationService:
     def recommend_initial_team(
         self,
         season: str = "2026/27",
+        round_number: int = 1,
         budget_credits: float = 100.0,
         risk_mode: str = "expected",
         pool: Sequence[PlayerProjectionContract] | None = None,
@@ -359,7 +365,7 @@ class OptimizationService:
         league: str | None = None,
     ) -> list[PlayerProjectionContract]:
         """Optimal initial squad draft recommendation from scratch or completing locked players."""
-        market = list(pool or self.prediction_service.get_projections(season, 1, league=league))
+        market = list(pool or self.prediction_service.get_projections(season, round_number, league=league))
         if not market:
             return []
         try:
@@ -375,6 +381,7 @@ class OptimizationService:
     def suggest_initial_team(
         self,
         season: str = "2026/27",
+        round_number: int = 1,
         budget_credits: float = 100.0,
         risk_mode: str = "expected",
         locked_player_ids: Sequence[int] | None = None,
@@ -383,7 +390,7 @@ class OptimizationService:
     ) -> dict[str, Any]:
         """Suggest optimal 11-player squad with breakdown and validation for GUI."""
         locked_set = set(locked_player_ids or [])
-        market = list(pool or self.prediction_service.get_projections(season, 1, league=league))
+        market = list(pool or self.prediction_service.get_projections(season, round_number, league=league))
         budget_limit_tenths = int(round(budget_credits * 10))
 
         if not market:

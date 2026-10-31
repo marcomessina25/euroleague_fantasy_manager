@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,8 @@ from euroleague_fantasy_manager.web.api.routes_teams import router as teams_rout
 from euroleague_fantasy_manager.web.api.routes_workstation import router as workstation_router
 from euroleague_fantasy_manager.web.deps import set_db_path
 
+logger = logging.getLogger(__name__)
+
 
 def create_app(db_path: str | Path = "data/euroleague.sqlite3") -> FastAPI:
     """Create and configure the local FastAPI workstation application."""
@@ -26,7 +29,7 @@ def create_app(db_path: str | Path = "data/euroleague.sqlite3") -> FastAPI:
     app = FastAPI(
         title="EuroLeague Fantasy Manager Workstation",
         description="Local-first decision-support and multi-team management workstation.",
-        version="1.0.0",
+        version="1.0.1",
     )
 
     web_dir = Path(__file__).parent
@@ -68,8 +71,8 @@ def _ensure_initial_team(db_path: str | Path) -> None:
             try:
                 ts.import_from_config(team_id="team_1", config_path=cfg_path)
                 return
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001 - seeding is best-effort; fall back to an empty team
+                logger.warning("Not seeding team_1 from %s: %s", cfg_path, e)
 
         # Fallback create empty team
         ts.create_team(

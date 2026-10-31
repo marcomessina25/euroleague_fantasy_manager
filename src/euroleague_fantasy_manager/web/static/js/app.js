@@ -1527,6 +1527,7 @@ async function triggerSuggestTransfers() {
           : Math.min(MAX_TRADES_PER_ROUND, tradeStudioState.transfersRemaining || 1),
         unlimited: tradeStudioState.unlimited,
         strategy_preset: strategyPreset,
+        top_n: 30,
       }),
     });
 
@@ -1760,6 +1761,7 @@ async function triggerMultiRound() {
       body: JSON.stringify({
         team_id: state.activeTeamId,
         season: state.season,
+        start_round: state.roundNumber,
         horizon: horizon,
         gamma: gamma,
       }),
@@ -1878,12 +1880,13 @@ function normalizePos(pos) {
 }
 
 // =========================================================================
-// Initial Team Builder (V0.5)
+// Initial Team Builder (V0.5 / V1.0.1)
 // =========================================================================
 let teamBuilderState = {
   selectedPlayers: [],
   allPlayers: [],
   poolLeague: null,
+  poolRound: null,
   recommendedPlayerIds: [],
 };
 
@@ -1892,24 +1895,38 @@ function teamBuilderLeague() {
   return sel ? sel.value : "euroleague";
 }
 
+function teamBuilderRound() {
+  const input = document.getElementById("tb-team-round");
+  const val = input ? parseInt(input.value, 10) : 1;
+  return isNaN(val) || val < 1 ? 1 : val;
+}
+
+function teamBuilderBankCredits() {
+  const input = document.getElementById("tb-team-credits");
+  const val = input ? parseFloat(input.value) : 0.0;
+  return isNaN(val) ? 0.0 : val;
+}
+
 async function loadTeamBuilderPool() {
   const league = teamBuilderLeague();
+  const round = teamBuilderRound();
   const poolIndicator = document.getElementById("tb-pool-count");
 
-  if (teamBuilderState.allPlayers.length === 0 || teamBuilderState.poolLeague !== league) {
+  if (teamBuilderState.allPlayers.length === 0 || teamBuilderState.poolLeague !== league || teamBuilderState.poolRound !== round) {
     if (poolIndicator) poolIndicator.textContent = "Loading player pool...";
     teamBuilderState.allPlayers = [];
     try {
-      const res = await fetch(`/api/workstation/players?season=${state.season}&round_number=1&limit=500&league=${encodeURIComponent(league)}`);
+      const res = await fetch(`/api/workstation/players?season=${state.season}&round_number=${round}&limit=500&league=${encodeURIComponent(league)}`);
       if (res.ok) {
         const rawPlayers = await res.json();
-        // Ignore stale responses if the league was changed while loading.
-        if (teamBuilderLeague() !== league) return;
+        // Ignore stale responses if the league or round was changed while loading.
+        if (teamBuilderLeague() !== league || teamBuilderRound() !== round) return;
         teamBuilderState.allPlayers = rawPlayers.map((p) => ({
           ...p,
           position: normalizePos(p.position),
         }));
         teamBuilderState.poolLeague = league;
+        teamBuilderState.poolRound = round;
       }
     } catch (err) {
       console.error("Failed to fetch market pool:", err);
@@ -1922,7 +1939,7 @@ async function loadTeamBuilderPool() {
       const label = league === "eurocup" ? "EuroCup" : "EuroLeague";
       poolIndicator.innerHTML = `0 players available — <a href="#" onclick="triggerUpdateData('${league === "eurocup" ? "eurocup" : "euroleague"}'); return false;">download ${label} data</a>`;
     } else {
-      poolIndicator.textContent = `${count} players available`;
+      poolIndicator.textContent = `${count} players available (Round ${round})`;
     }
   }
 }
@@ -1936,11 +1953,33 @@ async function onTeamBuilderLeagueChange() {
   updateTeamBuilderUI();
 }
 
+async function onTeamBuilderRoundChange() {
+  teamBuilderState.selectedPlayers = [];
+  teamBuilderState.recommendedPlayerIds = [];
+  hideTeamBuilderDropdown();
+  await loadTeamBuilderPool();
+  updateTeamBuilderUI();
+}
+
 async function openTeamBuilderModal() {
   document.getElementById("team-builder-modal").style.display = "flex";
   document.getElementById("tb-team-name").value = "";
   teamBuilderState.selectedPlayers = [];
   teamBuilderState.recommendedPlayerIds = [];
+
+  // Try to set round to current active round
+  const roundInput = document.getElementById("tb-team-round");
+  try {
+    const crRes = await fetch(`/api/workstation/current-round?league=${encodeURIComponent(teamBuilderLeague())}`);
+    if (crRes.ok) {
+      const crData = await crRes.json();
+      if (roundInput && crData.current_round) {
+        roundInput.value = crData.current_round;
+      }
+    }
+  } catch (e) {
+    // Keep existing value
+  }
 
   await loadTeamBuilderPool();
   updateTeamBuilderUI();
@@ -2060,6 +2099,7 @@ function clearTeamBuilderRoster() {
 }
 
 async function suggestOptimalInitialTeam() {
+  const round = teamBuilderRound();
   const btn = document.getElementById("tb-btn-suggest");
   btn.disabled = true;
   btn.textContent = "⏳ Optimizing...";
@@ -2067,13 +2107,18 @@ async function suggestOptimalInitialTeam() {
   const lockedIds = teamBuilderState.selectedPlayers.map((p) => p.player_id);
   const risk = document.getElementById("tb-opt-risk").value;
 
+  const totalCostCredits = teamBuilderState.selectedPlayers.reduce((sum, p) => sum + (p.credits || 0), 0);
+  const bankCr = teamBuilderBankCredits();
+  const budget = round === 1 ? 100.0 : Math.max(100.0, Math.round((totalCostCredits + bankCr) * 10) / 10);
+
   try {
     const res = await fetch("/api/workstation/initial-team/suggest", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         season: state.season,
-        budget_credits: 100.0,
+        round_number: round,
+        budget_credits: budget,
         risk_mode: risk,
         locked_player_ids: lockedIds,
         league: teamBuilderLeague(),
@@ -2096,24 +2141,60 @@ async function suggestOptimalInitialTeam() {
     console.error("Failed to suggest initial team:", err);
   } finally {
     btn.disabled = false;
-    btn.textContent = "⚡ Suggest Squad (Round 1 Objective)";
+    btn.textContent = `⚡ Suggest Squad (Round ${round})`;
   }
 }
 
 function updateTeamBuilderUI() {
   const players = teamBuilderState.selectedPlayers;
   const name = document.getElementById("tb-team-name").value.trim();
+  const round = teamBuilderRound();
+
+  const creditsInput = document.getElementById("tb-team-credits");
+  const creditsLabel = document.getElementById("tb-team-credits-label");
+  const budgetStatLabel = document.getElementById("tb-stat-budget-label");
+  const budgetStatVal = document.getElementById("tb-stat-budget");
+  const remLabel = document.getElementById("tb-stat-remaining-label");
+  const remEl = document.getElementById("tb-stat-remaining");
+  const suggestBtn = document.getElementById("tb-btn-suggest");
+
+  if (suggestBtn) {
+    suggestBtn.textContent = `⚡ Suggest Squad (Round ${round})`;
+  }
 
   // Calculate totals
-  const totalCostCredits = players.reduce((sum, p) => sum + (p.credits || 0), 0);
-  const remainingCredits = Math.round((100.0 - totalCostCredits) * 10) / 10;
+  const totalCostCredits = Math.round(players.reduce((sum, p) => sum + (p.credits || 0), 0) * 10) / 10;
   const totalFp = players.reduce((sum, p) => sum + (p.expected_fp || 0), 0);
+
+  let remainingCredits = 0.0;
+  if (round === 1) {
+    if (creditsInput) {
+      creditsInput.disabled = true;
+      creditsInput.value = Math.max(0, Math.round((100.0 - totalCostCredits) * 10) / 10).toFixed(1);
+    }
+    if (creditsLabel) creditsLabel.textContent = "Bank (auto)";
+    if (budgetStatLabel) budgetStatLabel.textContent = "Budget";
+    if (budgetStatVal) budgetStatVal.textContent = "100.0 cr";
+    if (remLabel) remLabel.textContent = "Remaining";
+    remainingCredits = Math.round((100.0 - totalCostCredits) * 10) / 10;
+    remEl.textContent = `${remainingCredits.toFixed(1)} cr`;
+    remEl.style.color = remainingCredits >= 0 ? "var(--accent-green)" : "var(--accent-red)";
+  } else {
+    if (creditsInput) {
+      creditsInput.disabled = false;
+    }
+    if (creditsLabel) creditsLabel.textContent = "Bank Cr *";
+    const bankCr = teamBuilderBankCredits();
+    if (budgetStatLabel) budgetStatLabel.textContent = "Total Value";
+    if (budgetStatVal) budgetStatVal.textContent = `${(totalCostCredits + bankCr).toFixed(1)} cr`;
+    if (remLabel) remLabel.textContent = "Bank Cr";
+    remainingCredits = bankCr;
+    remEl.textContent = `${bankCr.toFixed(1)} cr`;
+    remEl.style.color = bankCr >= 0 ? "var(--accent-green)" : "var(--accent-red)";
+  }
 
   // Update Stats Bar
   document.getElementById("tb-stat-spent").textContent = `${totalCostCredits.toFixed(1)} cr`;
-  const remEl = document.getElementById("tb-stat-remaining");
-  remEl.textContent = `${remainingCredits.toFixed(1)} cr`;
-  remEl.style.color = remainingCredits >= 0 ? "var(--accent-green)" : "var(--accent-red)";
   document.getElementById("tb-stat-fp").textContent = `${totalFp.toFixed(1)} FP`;
 
   // Count positions
@@ -2154,7 +2235,12 @@ function updateTeamBuilderUI() {
   const errors = [];
   if (!name) errors.push("Enter team name");
   if (players.length !== 11) errors.push(`${11 - players.length} player(s) needed`);
-  if (remainingCredits < 0) errors.push(`Exceeds budget by ${Math.abs(remainingCredits).toFixed(1)} cr`);
+  if (round === 1) {
+    if (remainingCredits < 0) errors.push(`Exceeds 100.0 cr budget by ${Math.abs(remainingCredits).toFixed(1)} cr`);
+  } else {
+    const bankCr = teamBuilderBankCredits();
+    if (isNaN(bankCr) || bankCr < 0) errors.push("Bank credits must be ≥ 0.0 cr");
+  }
   if (posCounts.G !== 4) errors.push(`Needs 4 Guards (current: ${posCounts.G})`);
   if (posCounts.F !== 4) errors.push(`Needs 4 Forwards (current: ${posCounts.F})`);
   if (posCounts.C !== 2) errors.push(`Needs 2 Centers (current: ${posCounts.C})`);
@@ -2171,7 +2257,7 @@ function updateTeamBuilderUI() {
     msgEl.style.color = "var(--accent-red)";
     createBtn.disabled = true;
   } else {
-    msgEl.textContent = "✓ Squad is complete and legal!";
+    msgEl.textContent = `✓ Squad is complete and legal for Round ${round}!`;
     msgEl.style.color = "var(--accent-green)";
     createBtn.disabled = false;
   }
@@ -2208,6 +2294,7 @@ async function submitCreateTeam() {
   const name = document.getElementById("tb-team-name").value.trim();
   if (!name) return;
 
+  const round = teamBuilderRound();
   const playerIds = teamBuilderState.selectedPlayers.map((p) => p.player_id);
   const recIds = teamBuilderState.recommendedPlayerIds.length > 0 ? teamBuilderState.recommendedPlayerIds : playerIds;
 
@@ -2218,17 +2305,23 @@ async function submitCreateTeam() {
   const leagueSelect = document.getElementById("tb-team-league");
   const league = leagueSelect ? leagueSelect.value : "euroleague";
 
+  const payload = {
+    name: name,
+    league: league,
+    season: state.season,
+    round_number: round,
+    player_ids: playerIds,
+    recommended_player_ids: recIds,
+  };
+  if (round > 1) {
+    payload.credits = teamBuilderBankCredits();
+  }
+
   try {
     const res = await fetch("/api/teams", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: name,
-        league: league,
-        season: state.season,
-        player_ids: playerIds,
-        recommended_player_ids: recIds,
-      }),
+      body: JSON.stringify(payload),
     });
 
     if (res.ok) {
@@ -2277,7 +2370,12 @@ async function triggerUpdateData(league) {
       const data = await res.json();
       teamBuilderState.allPlayers = []; // Invalidate cached player pool
       teamBuilderState.poolLeague = null;
-      alert(data.message || 'Fantasy snapshot updated successfully!');
+      let msg = data.message || 'Fantasy snapshot updated successfully!';
+      const failures = Object.entries(data.sync_failures || {});
+      if (failures.length > 0) {
+        msg += '\n\nCould not roll forward team(s):\n' + failures.map(([id, e]) => `- ${id}: ${e}`).join('\n');
+      }
+      alert(msg);
       await loadDashboard();
       if (state.activeTab === 'trade-studio') {
         await loadPlayerPool();

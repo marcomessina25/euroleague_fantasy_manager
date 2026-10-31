@@ -627,30 +627,38 @@ All advice is grounded strictly in the deterministic Manager Dossier with guaran
           <button class="btn btn-icon" onclick="closeTeamBuilderModal()" style="font-size:1.2rem; background:transparent; border:none; color:var(--text-muted); cursor:pointer;">✕</button>
         </div>
 
-        <!-- Team Name, League & Budget Bar -->
-        <div style="display:grid; grid-template-columns: 1fr 140px 1.5fr; gap:1rem; margin-top:1rem; align-items:center;">
+        <!-- Team Name, League, Round, Credits & Budget Bar -->
+        <div style="display:grid; grid-template-columns: 1fr 140px 90px 100px 1.5fr; gap:0.75rem; margin-top:1rem; align-items:center;">
           <div class="form-group">
             <label for="tb-team-name">Team Name *</label>
             <input type="text" id="tb-team-name" placeholder="e.g. Panathinaikos Elite" maxlength="32" oninput="updateTeamBuilderUI()">
           </div>
           <div class="form-group">
-            <label for="tb-team-league">Competition League</label>
+            <label for="tb-team-league">League</label>
             <select id="tb-team-league" onchange="onTeamBuilderLeagueChange()" style="padding:0.45rem 0.5rem; font-size:0.85rem;">
               <option value="euroleague">EuroLeague [EL]</option>
               <option value="eurocup">EuroCup [EC]</option>
             </select>
           </div>
+          <div class="form-group">
+            <label for="tb-team-round">Round *</label>
+            <input type="number" id="tb-team-round" min="1" max="38" value="1" onchange="onTeamBuilderRoundChange()" style="padding:0.45rem 0.5rem; font-size:0.85rem; width:100%;">
+          </div>
+          <div class="form-group" id="tb-credits-group">
+            <label for="tb-team-credits" id="tb-team-credits-label">Bank Cr *</label>
+            <input type="number" id="tb-team-credits" min="0" step="0.1" value="0.0" oninput="updateTeamBuilderUI()" style="padding:0.45rem 0.5rem; font-size:0.85rem; width:100%;">
+          </div>
           <div class="stats-bar" style="justify-content:space-around;">
             <div class="stat-item">
-              <span class="stat-label">Budget</span>
+              <span class="stat-label" id="tb-stat-budget-label">Budget</span>
               <span class="stat-val" id="tb-stat-budget">100.0 cr</span>
             </div>
             <div class="stat-item">
-              <span class="stat-label">Spent</span>
+              <span class="stat-label">Squad Value</span>
               <span class="stat-val" id="tb-stat-spent">0.0 cr</span>
             </div>
             <div class="stat-item">
-              <span class="stat-label">Remaining</span>
+              <span class="stat-label" id="tb-stat-remaining-label">Remaining</span>
               <span class="stat-val" id="tb-stat-remaining" style="color:var(--accent-green);">100.0 cr</span>
             </div>
             <div class="stat-item">
