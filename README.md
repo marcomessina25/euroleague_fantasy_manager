@@ -543,6 +543,7 @@ V1.0.1 adds the capability for managers to initialize and manage an existing off
 - **Explicit Credits Input:** In Round 1, starting budget is fixed at 100.0 credits ($bank = 100 - \sum cost$). For Round > 1, the user enters their current bank credits (or total team value), accommodating accumulated player price appreciation/depreciation.
 - **Workstation Team Builder:** Initial Team Builder modal dynamically auto-populates the current active round, switches to editable bank credits for round > 1, reloads player projections for that round, and displays total team value.
 - **CLI Support:** `elf team create --round <R> --credits <CR>` and `elf team import-squad --round <R> --credits <CR> --file <PATH>` enable instant mid-season team setup.
+- **Live-Round Roll-Forward:** `elf update` / the workstation **Update Data** button roll every managed team forward to the new live round (squad carried over, prices refreshed, transfers reset). Viewing a team never changes it.
 - Specification details in [`docs/specs/v101.md`](docs/specs/v101.md).
 
 ## License

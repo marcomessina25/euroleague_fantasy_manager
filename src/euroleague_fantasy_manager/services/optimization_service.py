@@ -264,7 +264,7 @@ class OptimizationService:
         candidate_pool: Sequence[PlayerProjectionContract] | None = None,
         exhaustive: bool = False,
         strategy_preset: str = "balanced_value",
-        top_n: int = 30,
+        top_n: int = 5,
     ) -> TransferOptimizationResult:
         """Find optimal trade combinations for the team."""
         team = self.team_service.get_team(team_id)

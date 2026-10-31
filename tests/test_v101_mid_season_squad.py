@@ -263,8 +263,8 @@ def test_cli_team_create_mid_season(tmp_path: Path):
     assert team.bank_tenths == 25
 
 
-def test_team_round_auto_sync_and_trade_studio_30_options(tmp_path: Path):
-    """Test auto-synchronization to live round and trade options up to top_n."""
+def test_team_round_sync_is_explicit_and_trade_studio_30_options(tmp_path: Path):
+    """Reads never mutate a team; a data update rolls it forward to the live round."""
     db_path = tmp_path / "sync_and_studio.sqlite3"
     create_mock_snapshot(db_path, round_number=1)
 
@@ -288,16 +288,37 @@ def test_team_round_auto_sync_and_trade_studio_30_options(tmp_path: Path):
     # Advance snapshot store to round 8
     create_mock_snapshot(db_path, round_number=8)
 
-    # Calling dashboard should auto-sync team to round 8
+    # Reading the team (directly or via the dashboard) must not move it forward
+    ts = TeamService(db_path=db_path)
+    ts.update_team("sync_team", transfers_remaining=1)
+    assert client.get("/api/workstation/dashboard?team_id=sync_team&season=2026/27").status_code == 200
+    unchanged = ts.get_team("sync_team")
+    assert unchanged.round_number == 2
+    assert unchanged.transfers_remaining == 1
+
+    # The data-update flow rolls managed teams forward explicitly
+    synced, failures = ts.sync_all_teams_to_live_round("euroleague")
+    assert failures == {}
+    synced_ids = {t.team_id for t in synced}
+    assert "sync_team" in synced_ids
+    # The app's default team_1 (legacy placeholder roster) rolls forward too
+    assert "team_1" in synced_ids
+    team = ts.get_team("sync_team")
+    assert team.round_number == 8
+    assert team.transfers_remaining == 4
+    assert len(team.squad) == 11
+    assert ts.store.get_round_checkpoint("sync_team", 8, team.season)["transfers_remaining"] == 4
+
+    # Syncing again is a no-op; other leagues are untouched
+    synced_again, _ = ts.sync_all_teams_to_live_round("euroleague")
+    assert all(t.round_number == 8 for t in synced_again)
+    assert ts.sync_all_teams_to_live_round("eurocup") == ([], {})
+
     dash_resp = client.get("/api/workstation/dashboard?team_id=sync_team&season=2026/27")
     assert dash_resp.status_code == 200
-    dash_data = dash_resp.json()
-    assert dash_data["round_number"] == 8
+    assert dash_resp.json()["round_number"] == 8
 
-    # Rounds list should show live round 8
-    rounds_resp = client.get("/api/teams/sync_team/rounds")
-    assert rounds_resp.status_code == 200
-    rounds_data = rounds_resp.json()
+    rounds_data = client.get("/api/teams/sync_team/rounds").json()
     assert rounds_data["current_round"] == 8
     assert 8 in rounds_data["rounds"]
 
@@ -314,5 +335,155 @@ def test_team_round_auto_sync_and_trade_studio_30_options(tmp_path: Path):
         },
     )
     assert opt_resp.status_code == 200
-    opt_data = opt_resp.json()
-    assert len(opt_data["recommendations"]) > 0
+    assert len(opt_resp.json()["recommendations"]) > 0
+
+    # top_n is bounded to keep exact lineup re-optimization cost predictable
+    bad = client.post(
+        "/api/workstation/optimize/transfers",
+        json={"team_id": "sync_team", "season": "2026/27", "round_number": 8, "top_n": 500},
+    )
+    assert bad.status_code == 422
+
+
+def test_sync_failure_is_reported_not_swallowed(tmp_path: Path, monkeypatch):
+    """A team that fails to roll forward is reported and does not block other teams."""
+    db_path = tmp_path / "sync_fail.sqlite3"
+    create_mock_snapshot(db_path, round_number=1)
+    ts = TeamService(db_path=db_path)
+    ts.create_team("t_ok", "OK", round_number=1, bank_tenths=0)
+    ts.create_team("t_bad", "Bad", round_number=1, bank_tenths=0)
+    create_mock_snapshot(db_path, round_number=3)
+
+    original = TeamService.sync_team_to_live_round
+
+    def flaky(self, team_id):
+        if team_id == "t_bad":
+            raise ValueError("boom")
+        return original(self, team_id)
+
+    monkeypatch.setattr(TeamService, "sync_team_to_live_round", flaky)
+    synced, failures = ts.sync_all_teams_to_live_round()
+    assert [t.team_id for t in synced] == ["t_ok"]
+    assert failures == {"t_bad": "boom"}
+    assert ts.get_team("t_ok").round_number == 3
+    assert ts.get_team("t_bad").round_number == 1
+
+
+def _contract(pid: int, pos: Position, club: str, fp: float, price: int):
+    from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
+
+    return PlayerProjectionContract(
+        player_id=pid,
+        player_name=f"P{pid}",
+        position=pos,
+        team_code=club,
+        price_tenths=price,
+        expected_fp=fp,
+        expected_minutes=25.0,
+    )
+
+
+@pytest.mark.parametrize("max_trades", [1, 2, 3])
+def test_transfer_suggestions_respect_club_quota(max_trades: int):
+    """Screening must never propose a package that exceeds the per-club court-player quota."""
+    from collections import Counter
+
+    from euroleague_fantasy_manager.optimization.constraints import validate_squad_constraints
+    from euroleague_fantasy_manager.optimization.transfers import TransferOptimizer
+
+    G, F, C, HC = Position.GUARD, Position.FORWARD, Position.CENTER, Position.HEAD_COACH
+    # 6 court players already from AAA (the maximum)
+    squad = [
+        _contract(1, G, "AAA", 10, 90), _contract(2, G, "AAA", 10, 90),
+        _contract(3, G, "BBB", 8, 80), _contract(4, G, "CCC", 8, 80),
+        _contract(5, F, "AAA", 10, 90), _contract(6, F, "AAA", 10, 90),
+        _contract(7, F, "BBB", 8, 80), _contract(8, F, "CCC", 8, 80),
+        _contract(9, C, "AAA", 10, 90), _contract(10, C, "AAA", 10, 90),
+        _contract(11, HC, "AAA", 5, 50),
+    ]
+    # Elite AAA targets would dominate on points but are illegal unless an AAA player leaves
+    market = [
+        _contract(100 + i, pos, "AAA", 40.0, 90) for i, pos in enumerate([G, G, F, F, C])
+    ] + [
+        _contract(200 + i, pos, "DDD", 12.0, 80) for i, pos in enumerate([G, G, F, F, C])
+    ]
+
+    res = TransferOptimizer().optimize_transfers(
+        current_squad=squad, market=market, bank_tenths=50, max_trades=max_trades, top_n=30
+    )
+    assert res.recommendations
+    for rec in res.recommendations:
+        out_ids = {p.player_id for p in rec.out_players}
+        new_squad = [p for p in squad if p.player_id not in out_ids] + list(rec.in_players)
+        clubs = Counter(p.team_code for p in new_squad if p.position != HC)
+        assert clubs["AAA"] <= 6, f"Illegal package {sorted(out_ids)} -> {[p.player_id for p in rec.in_players]}"
+        assert validate_squad_constraints(new_squad, check_budget=False).is_valid
+
+
+_SQUAD_NAMES = [
+    "Guard 1", "Guard 2", "Guard 3", "Guard 4",
+    "Forward 1", "Forward 2", "Forward 3", "Forward 4",
+    "Center 1", "Center 2", "Coach 1",
+]
+
+
+def test_cli_team_create_mid_season_with_squad_file(tmp_path: Path):
+    """`team create --file` builds a validated mid-season roster above 100.0 Cr."""
+    from euroleague_fantasy_manager.cli import main
+
+    db_path = tmp_path / "cli_file.sqlite3"
+    create_mock_snapshot(db_path, round_number=5)
+    players_file = tmp_path / "players.txt"
+    players_file.write_text("# my squad\n" + "\n".join(_SQUAD_NAMES) + "\n", encoding="utf-8")
+
+    rc = main(["--db", str(db_path), "team", "create", "--id", "t_file", "--name", "File",
+               "--round", "5", "--credits", "1.5", "--file", str(players_file)])
+    assert rc == 0
+
+    team = TeamService(db_path=db_path).get_team("t_file")
+    assert team.round_number == 5
+    assert team.bank_tenths == 15
+    assert sorted(u.player_id for u in team.squad) == list(range(101, 112))
+    assert sum(u.purchase_price_tenths for u in team.squad) == 1050
+    assert sum(1 for u in team.squad if u.is_captain) == 1
+
+
+def test_cli_team_create_rejects_unresolved_names_and_bad_args(tmp_path: Path, capsys):
+    from euroleague_fantasy_manager.cli import main
+
+    db_path = tmp_path / "cli_bad.sqlite3"
+    create_mock_snapshot(db_path, round_number=5)
+    players_file = tmp_path / "players.txt"
+    players_file.write_text("\n".join(_SQUAD_NAMES[:-1] + ["Nobody Here"]) + "\n", encoding="utf-8")
+
+    base = ["--db", str(db_path), "team", "create", "--name", "Bad", "--round", "5"]
+    assert main(base + ["--id", "t1", "--credits", "1.5", "--file", str(players_file)]) == 1
+    assert "Nobody Here" in capsys.readouterr().out
+
+    assert main(base + ["--id", "t2", "--credits", "1.5", "--file", str(tmp_path / "missing.txt")]) == 1
+    assert "not found" in capsys.readouterr().out
+
+    assert main(base + ["--id", "t3", "--credits", "1.5", "--bank", "15"]) == 1
+    assert main(base + ["--id", "t4", "--credits", "-1"]) == 1
+
+    ts = TeamService(db_path=db_path)
+    assert [t.team_id for t in ts.list_teams()] == []
+
+
+def test_cli_team_import_squad_into_existing_team(tmp_path: Path):
+    from euroleague_fantasy_manager.cli import main
+
+    db_path = tmp_path / "cli_import.sqlite3"
+    create_mock_snapshot(db_path, round_number=5)
+    players_file = tmp_path / "players.txt"
+    players_file.write_text("\n".join(_SQUAD_NAMES) + "\n", encoding="utf-8")
+
+    assert main(["--db", str(db_path), "team", "create", "--id", "t_imp", "--name", "Imp"]) == 0
+    rc = main(["--db", str(db_path), "team", "import-squad", "--team", "t_imp",
+               "--round", "5", "--credits", "2.0", "--file", str(players_file)])
+    assert rc == 0
+
+    team = TeamService(db_path=db_path).get_team("t_imp")
+    assert team.round_number == 5
+    assert team.bank_tenths == 20
+    assert sorted(u.player_id for u in team.squad) == list(range(101, 112))

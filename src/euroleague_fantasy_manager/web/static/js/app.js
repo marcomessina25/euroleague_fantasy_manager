@@ -2341,8 +2341,6 @@ async function submitCreateTeam() {
   } catch (err) {
     console.error("Failed to create team:", err);
     btn.disabled = false;
-    console.error("Failed to create team:", err);
-    btn.disabled = false;
     btn.textContent = "✓ Create Team & Enter Workstation";
   }
 }
@@ -2372,7 +2370,12 @@ async function triggerUpdateData(league) {
       const data = await res.json();
       teamBuilderState.allPlayers = []; // Invalidate cached player pool
       teamBuilderState.poolLeague = null;
-      alert(data.message || 'Fantasy snapshot updated successfully!');
+      let msg = data.message || 'Fantasy snapshot updated successfully!';
+      const failures = Object.entries(data.sync_failures || {});
+      if (failures.length > 0) {
+        msg += '\n\nCould not roll forward team(s):\n' + failures.map(([id, e]) => `- ${id}: ${e}`).join('\n');
+      }
+      alert(msg);
       await loadDashboard();
       if (state.activeTab === 'trade-studio') {
         await loadPlayerPool();

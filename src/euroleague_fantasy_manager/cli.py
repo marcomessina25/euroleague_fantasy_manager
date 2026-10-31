@@ -813,13 +813,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             season_code=getattr(args, "season_code", None),
         )
         summary = store.save_snapshot(payload, raw_directory=RAW_ARCHIVE_DIRECTORY)
-        try:
-            from .multi_team.store import TeamStore
-            from .services.team_service import TeamService
-            t_service = TeamService(TeamStore(store.db_path))
-            t_service.sync_all_teams_to_live_round(resolved_league)
-        except Exception:
-            pass
+        from .multi_team.store import TeamStore
+        from .services.team_service import TeamService
+        synced, sync_failures = TeamService(TeamStore(store.database_path)).sync_all_teams_to_live_round(resolved_league)
+        if synced:
+            print(f"Synced {len(synced)} team(s) to round {summary.round_number}.", file=sys.stderr)
+        for team_id, err in sync_failures.items():
+            print(f"Warning: could not sync team '{team_id}' to round {summary.round_number}: {err}", file=sys.stderr)
         print(json.dumps(asdict(summary), indent=2))
         return 0
 
@@ -1379,89 +1379,42 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if args.team_command == "create":
             try:
-                round_num = getattr(args, "round", 1) or 1
-                bank_tenths = getattr(args, "bank", None)
-                credits_val = getattr(args, "credits", None)
-                if credits_val is not None and bank_tenths is None:
-                    bank_tenths = int(round(credits_val * 10))
-                elif bank_tenths is None:
-                    bank_tenths = 1000 if round_num == 1 else None
-
+                round_num = args.round
+                if round_num < 1:
+                    raise ValueError(f"--round must be at least 1; got {round_num}.")
+                if args.bank is not None and args.credits is not None:
+                    raise ValueError("Specify either --bank (tenths) or --credits, not both.")
+                bank_tenths = args.bank if args.credits is None else int(round(args.credits * 10))
                 if round_num > 1 and bank_tenths is None:
-                    print(f"Error: For round {round_num} (mid-season creation), credits must be specified (e.g. --credits 1.5).")
-                    return 1
+                    raise ValueError(
+                        f"For round {round_num} (mid-season creation), credits must be specified (e.g. --credits 1.5)."
+                    )
 
-                league_str = getattr(args, "league", "euroleague") or "euroleague"
-                norm_league = League.from_str(league_str)
-                squad_units = []
-                pids = []
-                if getattr(args, "players", None):
+                norm_league = League.from_str(args.league or "euroleague")
+                if args.players and args.file is not None:
+                    raise ValueError("Specify either --players or --file, not both.")
+                if args.players:
                     pids = [int(p.strip()) for p in args.players.split(",") if p.strip()]
-                elif getattr(args, "file", None) and args.file.is_file():
-                    from euroleague_fantasy_manager.import_squad import search_player_exact_or_single
-                    s_store = SnapshotStore(args.db)
-                    lid = get_league_ruleset(norm_league).league_id
-                    for line in args.file.read_text(encoding="utf-8").splitlines():
-                        q = line.strip()
-                        if not q or q.startswith("#"): continue
-                        m = search_player_exact_or_single(s_store, q, league_id=lid)
-                        if m: pids.append(m["id"])
+                elif args.file is not None:
+                    pids = _resolve_players_file_ids(args.file, args.db, norm_league)
+                else:
+                    pids = []
 
-                if pids:
-                    from euroleague_fantasy_manager.services.prediction_service import PredictionService
-                    from euroleague_fantasy_manager.services.optimization_service import OptimizationService
-                    from euroleague_fantasy_manager.optimization.constraints import validate_squad_constraints
-                    ps = PredictionService(db_path=args.db)
-                    opts = OptimizationService(ps, ts)
-                    p_map = ps.get_projections_dict(args.season, round_num, league=norm_league.value)
-                    missing = [pid for pid in pids if pid not in p_map]
-                    if missing:
-                        print(f"Error: Player IDs {missing} not in {norm_league.value} pool for round {round_num}.")
-                        return 1
-                    contracts = [p_map[pid] for pid in pids]
-                    if round_num == 1:
-                        val = validate_squad_constraints(contracts, budget_tenths=1000)
-                        if not val.is_valid:
-                            print(f"Error: Invalid squad: {'; '.join(val.errors)}")
-                            return 1
-                        if bank_tenths is None or getattr(args, "credits", None) is None:
-                            bank_tenths = max(0, 1000 - sum(c.price_tenths for c in contracts))
-                    else:
-                        val = validate_squad_constraints(contracts, check_budget=False)
-                        if not val.is_valid:
-                            print(f"Error: Invalid squad: {'; '.join(val.errors)}")
-                            return 1
-
-                    lineup = opts.lineup_optimizer.optimize(contracts, round_number=round_num)
-                    st_set = set(lineup.starter_ids)
-                    bn_set = set(lineup.bench_ids)
-                    for c in contracts:
-                        pos_str = c.position.name if hasattr(c.position, "name") else str(c.position)
-                        squad_units.append(
-                            TeamRosterUnit(
-                                player_id=c.player_id,
-                                position=pos_str,
-                                name=c.player_name,
-                                team_code=c.team_code,
-                                purchase_price_tenths=c.price_tenths,
-                                current_price_tenths=c.price_tenths,
-                                is_starter=(c.player_id in st_set),
-                                is_captain=(c.player_id == lineup.captain_id),
-                                is_sixth_man=(c.player_id == lineup.sixth_man_id),
-                                is_bench=(c.player_id in bn_set),
-                                is_coach=(c.player_id == lineup.head_coach_id),
-                                turn_number=c.turn_number,
-                            )
-                        )
+                squad_units = (
+                    _build_cli_roster(args.db, ts, args.season, round_num, norm_league, pids) if pids else []
+                )
+                if bank_tenths is None:
+                    # Round 1 without explicit bank: whatever the squad leaves of the 100.0 Cr budget
+                    bank_tenths = 1000 - sum(u.purchase_price_tenths for u in squad_units)
 
                 team = ts.create_team(
                     team_id=args.id,
                     name=args.name,
                     season=args.season,
                     round_number=round_num,
-                    bank_tenths=bank_tenths if bank_tenths is not None else 0,
+                    bank_tenths=bank_tenths,
                     league=norm_league.value,
-                    squad=squad_units if squad_units else None,
+                    squad=squad_units or None,
                 )
                 print(f"Created team '{team.team_id}' ({team.name}) [{team.league}] for round {team.round_number} (Bank: {team.bank_tenths / 10.0:.1f} cr, Roster: {len(team.squad)} units)")
                 return 0
@@ -1470,7 +1423,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 1
 
         if args.team_command == "import-squad":
-            target_id = args.team or (ts.get_active_team().team_id if ts.get_active_team() else None)
+            active = ts.get_active_team()
+            target_id = args.team or (active.team_id if active else None)
             if not target_id:
                 print("Error: No active team found. Specify --team <id>.")
                 return 1
@@ -1480,60 +1434,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"Error: Team '{target_id}' not found.")
                 return 1
 
-            if not args.file.is_file():
-                print(f"Error: File '{args.file}' not found.")
+            try:
+                if args.round < 1:
+                    raise ValueError(f"--round must be at least 1; got {args.round}.")
+                if args.credits < 0:
+                    raise ValueError("Bank credits cannot be negative.")
+                norm_league = League.from_str(target_team.league)
+                pids = _resolve_players_file_ids(args.file, args.db, norm_league)
+                units = _build_cli_roster(args.db, ts, target_team.season, args.round, norm_league, pids)
+            except ValueError as e:
+                print(f"Error: {e}")
                 return 1
-
-            from euroleague_fantasy_manager.import_squad import search_player_exact_or_single
-            from euroleague_fantasy_manager.services.prediction_service import PredictionService
-            from euroleague_fantasy_manager.services.optimization_service import OptimizationService
-            from euroleague_fantasy_manager.optimization.constraints import validate_squad_constraints
-
-            norm_league = League.from_str(target_team.league)
-            s_store = SnapshotStore(args.db)
-            lid = get_league_ruleset(norm_league).league_id
-            pids = []
-            for line in args.file.read_text(encoding="utf-8").splitlines():
-                q = line.strip()
-                if not q or q.startswith("#"): continue
-                m = search_player_exact_or_single(s_store, q, league_id=lid)
-                if m: pids.append(m["id"])
-
-            ps = PredictionService(db_path=args.db)
-            opts = OptimizationService(ps, ts)
-            p_map = ps.get_projections_dict(target_team.season, args.round, league=norm_league.value)
-            missing = [pid for pid in pids if pid not in p_map]
-            if missing:
-                print(f"Error: Player IDs {missing} not in {norm_league.value} pool for round {args.round}.")
-                return 1
-            contracts = [p_map[pid] for pid in pids]
-            val = validate_squad_constraints(contracts, check_budget=(args.round == 1))
-            if not val.is_valid:
-                print(f"Error: Invalid squad: {'; '.join(val.errors)}")
-                return 1
-
-            lineup = opts.lineup_optimizer.optimize(contracts, round_number=args.round)
-            st_set = set(lineup.starter_ids)
-            bn_set = set(lineup.bench_ids)
-            units = []
-            for c in contracts:
-                pos_str = c.position.name if hasattr(c.position, "name") else str(c.position)
-                units.append(
-                    TeamRosterUnit(
-                        player_id=c.player_id,
-                        position=pos_str,
-                        name=c.player_name,
-                        team_code=c.team_code,
-                        purchase_price_tenths=c.price_tenths,
-                        current_price_tenths=c.price_tenths,
-                        is_starter=(c.player_id in st_set),
-                        is_captain=(c.player_id == lineup.captain_id),
-                        is_sixth_man=(c.player_id == lineup.sixth_man_id),
-                        is_bench=(c.player_id in bn_set),
-                        is_coach=(c.player_id == lineup.head_coach_id),
-                        turn_number=c.turn_number,
-                    )
-                )
 
             bank_t = int(round(args.credits * 10))
             ts.update_team(target_id, round_number=args.round, bank_tenths=bank_t)
@@ -1883,6 +1794,89 @@ def _resolve_squad(
         centers = sorted([c for c in contracts.values() if c.position == Position.CENTER], key=lambda x: (-x.price_tenths, x.player_id))[:2]
         coaches = sorted([c for c in contracts.values() if c.position == Position.HEAD_COACH], key=lambda x: (-x.price_tenths, x.player_id))[:1]
         return guards + forwards + centers + coaches, 0
+
+
+def _resolve_players_file_ids(players_file: Path, db_path: Path, league: League) -> list[int]:
+    """Resolve a players.txt file (one name per line, '#' comments) to player IDs.
+
+    Raises ValueError listing every line that matched no player or more than one player.
+    """
+    from .import_squad import search_player_exact_or_single
+
+    if not players_file.is_file():
+        raise ValueError(f"File '{players_file}' not found.")
+    snap_store = SnapshotStore(db_path)
+    league_id = get_league_ruleset(league).league_id
+    pids: list[int] = []
+    unresolved: list[str] = []
+    for line in players_file.read_text(encoding="utf-8").splitlines():
+        query = line.strip()
+        if not query or query.startswith("#"):
+            continue
+        match = search_player_exact_or_single(snap_store, query, league_id=league_id)
+        if match is None:
+            unresolved.append(query)
+        else:
+            pids.append(int(match["id"]))
+    if unresolved:
+        raise ValueError(
+            f"Could not resolve {len(unresolved)} name(s) in '{players_file}' to a unique "
+            f"{league.value} player: {', '.join(unresolved)}"
+        )
+    return pids
+
+
+def _build_cli_roster(
+    db_path: Path,
+    team_service: Any,
+    season: str,
+    round_number: int,
+    league: League,
+    player_ids: Sequence[int],
+) -> list[Any]:
+    """Validate an 11-unit squad for a round and return roster units with an optimized lineup.
+
+    Round 1 enforces the 100.0 Cr starting budget; later rounds validate structure and
+    club quotas only, since mid-season squad value reflects market price changes.
+    """
+    from .multi_team.models import TeamRosterUnit
+    from .optimization.constraints import validate_squad_constraints
+    from .services.optimization_service import OptimizationService
+    from .services.prediction_service import PredictionService
+
+    ps = PredictionService(database_path=db_path)
+    p_map = ps.get_projections_dict(season, round_number, league=league.value)
+    missing = [pid for pid in player_ids if pid not in p_map]
+    if missing:
+        raise ValueError(f"Player IDs {missing} not in {league.value} pool for round {round_number}.")
+    contracts = [p_map[pid] for pid in player_ids]
+    if round_number == 1:
+        val = validate_squad_constraints(contracts, budget_tenths=1000)
+    else:
+        val = validate_squad_constraints(contracts, check_budget=False)
+    if not val.is_valid:
+        raise ValueError(f"Invalid squad: {'; '.join(val.errors)}")
+
+    lineup = OptimizationService(ps, team_service).lineup_optimizer.optimize(contracts, round_number=round_number)
+    starters = set(lineup.starter_ids)
+    bench = set(lineup.bench_ids)
+    return [
+        TeamRosterUnit(
+            player_id=c.player_id,
+            position=c.position.name if hasattr(c.position, "name") else str(c.position),
+            name=c.player_name,
+            team_code=c.team_code,
+            purchase_price_tenths=c.price_tenths,
+            current_price_tenths=c.price_tenths,
+            is_starter=(c.player_id in starters),
+            is_captain=(c.player_id == lineup.captain_id),
+            is_sixth_man=(c.player_id == lineup.sixth_man_id),
+            is_bench=(c.player_id in bench),
+            is_coach=(c.player_id == lineup.head_coach_id),
+            turn_number=c.turn_number,
+        )
+        for c in contracts
+    ]
 
 
 def _format_lineup_console(

@@ -38,7 +38,7 @@ class CandidateGenerator:
     def __init__(
         self,
         constraints: OptimizationConstraints | None = None,
-        max_candidates_per_pos: int = 30,
+        max_candidates_per_pos: int = 15,
         min_probability_play: float = 0.05,
     ) -> None:
         self.constraints = constraints or OptimizationConstraints()
@@ -88,45 +88,24 @@ class CandidateGenerator:
 
         filtered: dict[Position, list[PlayerProjectionContract]] = {}
         for pos, players in by_pos.items():
-            base_limit = self.max_candidates_per_pos
+            limit = self.max_candidates_per_pos
             if pos == Position.CENTER:
-                pos_limit = min(base_limit, max(8, int(base_limit * 0.75)))
+                limit = min(limit, max(4, limit // 2))
             elif pos == Position.HEAD_COACH:
-                pos_limit = min(base_limit, max(6, int(base_limit * 0.6)))
-            else:
-                pos_limit = base_limit
+                limit = min(limit, max(2, limit // 2))
 
-            # Multi-tier candidate selection to ensure multi-player trades can balance budget:
-            # 1. Top by raw expected points (elite talent)
-            top_raw = sorted(
+            sorted_players = sorted(
                 players,
-                key=lambda x: (x.expected_fp, -x.price_tenths, -x.player_id),
+                key=lambda x: (
+                    score_candidate(x)[0],
+                    score_candidate(x)[1],
+                    score_candidate(x)[2],
+                    -x.price_tenths,
+                    -x.player_id,
+                ),
                 reverse=True,
-            )[:pos_limit]
-
-            # 2. Top by value efficiency (expected points per credit)
-            top_eff = sorted(
-                players,
-                key=lambda x: (x.expected_fp / max(0.5, x.credits), x.expected_fp, -x.price_tenths),
-                reverse=True,
-            )[:pos_limit]
-
-            # 3. Budget enablers (credits <= 8.0, top by expected points)
-            budget_cands = sorted(
-                [p for p in players if p.credits <= 8.0],
-                key=lambda x: (x.expected_fp, -x.price_tenths),
-                reverse=True,
-            )[:max(4, pos_limit // 2)]
-
-            # Merge unique candidates preserving rank priority
-            merged: list[PlayerProjectionContract] = []
-            seen_ids: set[int] = set()
-            for cand in top_raw + top_eff + budget_cands:
-                if cand.player_id not in seen_ids:
-                    seen_ids.add(cand.player_id)
-                    merged.append(cand)
-
-            filtered[pos] = merged[:pos_limit]
+            )
+            filtered[pos] = sorted_players[:limit]
 
         g = tuple(filtered.get(Position.GUARD, []))
         f = tuple(filtered.get(Position.FORWARD, []))

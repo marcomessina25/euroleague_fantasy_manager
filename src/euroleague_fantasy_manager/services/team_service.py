@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -28,6 +29,8 @@ from euroleague_fantasy_manager.multi_team.store import (
     MAX_TEAMS,
     TeamStore,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class TeamService:
@@ -95,76 +98,67 @@ class TeamService:
             )
         return created
 
-    def get_team(self, team_id: str, auto_sync: bool = True) -> Team:
+    def get_team(self, team_id: str) -> Team:
         """Retrieve team by ID, raising KeyError if not found."""
         team = self.store.get_team(team_id)
         if not team:
             raise KeyError(f"Team '{team_id}' not found.")
-        if auto_sync and hasattr(self.store, "db_path"):
-            try:
-                from euroleague_fantasy_manager.storage import SnapshotStore
-                from euroleague_fantasy_manager.competition.ruleset import League, get_league_ruleset
-                snap_store = SnapshotStore(self.store.db_path)
-                league_enum = League.from_str(getattr(team, "league", "euroleague"))
-                ruleset = get_league_ruleset(league_enum)
-                summary = snap_store.get_latest_summary(league_id=ruleset.league_id)
-                if summary and summary.round_number > team.round_number:
-                    return self.sync_team_to_live_round(team_id)
-            except Exception:
-                pass
         return team
 
     def sync_team_to_live_round(self, team_id: str) -> Team:
-        """Advance a team's active round and squad to the latest competition snapshot round."""
-        team = self.store.get_team(team_id)
-        if not team or not hasattr(self.store, "db_path"):
-            return team if team else self.get_team(team_id, auto_sync=False)
+        """Roll a team's squad forward to the latest competition snapshot round.
 
+        Called explicitly after a data update (``elf update`` / ``POST /api/workstation/update-data``),
+        never on read. The previous round's squad is carried forward with refreshed prices and
+        the per-round transfer allowance is reset, since a new round has started.
+        """
+        from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
         from euroleague_fantasy_manager.storage import SnapshotStore
-        from euroleague_fantasy_manager.competition.ruleset import League, get_league_ruleset
-        from euroleague_fantasy_manager.rules import MAX_TRADES_PER_ROUND
 
-        snap_store = SnapshotStore(self.store.db_path)
-        league_enum = League.from_str(getattr(team, "league", "euroleague"))
-        ruleset = get_league_ruleset(league_enum)
+        team = self.get_team(team_id)
+        db_path = getattr(self.store, "db_path", None)
+        if db_path is None:
+            return team
+
+        snap_store = SnapshotStore(db_path)
+        ruleset = get_league_ruleset(League.from_str(team.league))
         summary = snap_store.get_latest_summary(league_id=ruleset.league_id)
         if summary is None or summary.round_number <= team.round_number:
             return team
 
         live_round = summary.round_number
-        curr_units = self.store.get_squad(team_id, team.round_number)
-        if not curr_units:
-            curr_units = list(team.squad)
+        curr_units = self.store.get_squad(team_id, team.round_number) or list(team.squad)
 
-        # Update player current_price_tenths from latest snapshot
-        try:
-            latest_players = {p.id: p for p in snap_store.load_latest_players(league_id=ruleset.league_id)}
-            for u in curr_units:
-                p = latest_players.get(u.player_id)
-                if p:
-                    u.current_price_tenths = p.price_tenths
-        except Exception:
-            pass
+        latest_prices = {
+            p.id: p.price_tenths for p in snap_store.load_latest_players(league_id=ruleset.league_id)
+        }
+        for u in curr_units:
+            if u.player_id in latest_prices:
+                u.current_price_tenths = latest_prices[u.player_id]
 
-        self.set_squad(team_id, live_round, curr_units, validate=False, advance_team_round=True)
-        return self.update_team(team_id, transfers_remaining=MAX_TRADES_PER_ROUND)
+        # Composition is carried forward unchanged (already accepted when stored), so it is not
+        # re-validated; legacy placeholder rosters (e.g. config imports) must still roll forward.
+        self.update_team(team_id, transfers_remaining=MAX_TRADES_PER_ROUND)
+        return self.set_squad(team_id, live_round, curr_units, validate=False, advance_team_round=True)
 
-    def sync_all_teams_to_live_round(self, league: Any = None) -> list[Team]:
-        """Advance all managed teams whose round is behind the latest competition snapshot."""
-        updated = []
+    def sync_all_teams_to_live_round(self, league: Any = None) -> tuple[list[Team], dict[str, str]]:
+        """Roll forward every managed team (optionally of one league) behind the latest snapshot.
+
+        Returns ``(synced_teams, failures)`` where ``failures`` maps team_id to an error message;
+        one failing team never blocks the others.
+        """
+        target_league = League.from_str(league).value if league is not None else None
+        synced: list[Team] = []
+        failures: dict[str, str] = {}
         for team in self.store.list_teams():
-            if league is not None:
-                from euroleague_fantasy_manager.competition.ruleset import League
-                try:
-                    target_league = League.from_str(league).value
-                    team_league = League.from_str(getattr(team, "league", "euroleague")).value
-                    if team_league != target_league:
-                        continue
-                except Exception:
-                    pass
-            synced = self.sync_team_to_live_round(team.team_id)
-            updated.append(synced)
-        return updated
+            if target_league is not None and League.from_str(team.league).value != target_league:
+                continue
+            try:
+                synced.append(self.sync_team_to_live_round(team.team_id))
+            except Exception as e:  # noqa: BLE001 - reported to caller, not swallowed
+                logger.warning("Failed to sync team %s to live round: %s", team.team_id, e)
+                failures[team.team_id] = str(e)
+        return synced, failures
 
     def list_teams(self) -> list[Team]:
         """List all active teams."""

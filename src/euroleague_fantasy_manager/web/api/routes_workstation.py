@@ -72,7 +72,7 @@ class OptimizeTransfersRequest(BaseModel):
     unlimited: bool = False
     exhaustive: bool = False
     strategy_preset: str = "balanced_value"
-    top_n: int = 30
+    top_n: int = Field(default=30, ge=1, le=50)
 
 
 class MultiRoundRequest(BaseModel):
@@ -1077,23 +1077,26 @@ def update_data_endpoint(
         store = SnapshotStore(prediction_service.database_path)
         summary = store.save_snapshot(payload, raw_directory=RAW_ARCHIVE_DIRECTORY)
         prediction_service.clear_cache()
-        # Synchronize managed teams to new round
-        team_service.sync_all_teams_to_live_round(league)
-        return {
-            "success": True,
-            "message": f"Successfully updated snapshot #{summary.snapshot_id} for {summary.season_code} round {summary.round_number}.",
-            "summary": {
-                "snapshot_id": summary.snapshot_id,
-                "season_code": summary.season_code,
-                "round_number": summary.round_number,
-                "player_count": summary.player_count,
-                "coach_count": summary.coach_count,
-                "team_count": summary.team_count,
-                "fixture_count": summary.fixture_count,
-                "created_at": summary.created_at,
-            },
-        }
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to fetch live data from EuroLeague API: {e}")
+
+    # Roll managed teams forward; a failing team is reported, not fatal to the data update.
+    synced, sync_failures = team_service.sync_all_teams_to_live_round(league)
+    return {
+        "success": True,
+        "message": f"Successfully updated snapshot #{summary.snapshot_id} for {summary.season_code} round {summary.round_number}.",
+        "summary": {
+            "snapshot_id": summary.snapshot_id,
+            "season_code": summary.season_code,
+            "round_number": summary.round_number,
+            "player_count": summary.player_count,
+            "coach_count": summary.coach_count,
+            "team_count": summary.team_count,
+            "fixture_count": summary.fixture_count,
+            "created_at": summary.created_at,
+        },
+        "synced_team_ids": [t.team_id for t in synced],
+        "sync_failures": sync_failures,
+    }
 
 
