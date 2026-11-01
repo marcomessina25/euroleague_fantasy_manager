@@ -475,8 +475,8 @@
           <div class="form-group">
             <label for="copilot-provider">LLM Provider</label>
             <select id="copilot-provider" class="form-control" onchange="onProviderSelected()">
+              <option value="heuristic" selected>Heuristic (100% Offline Fallback)</option>
               <option value="auto">Auto (First Configured Provider)</option>
-              <option value="heuristic">Heuristic (100% Offline Fallback)</option>
               <option value="gemini">Google Gemini</option>
               <option value="openai">OpenAI (ChatGPT / GPT-4o)</option>
               <option value="claude">Anthropic Claude</option>

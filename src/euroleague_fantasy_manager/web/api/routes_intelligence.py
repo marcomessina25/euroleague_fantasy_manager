@@ -39,6 +39,7 @@ class CopilotAdviseRequest(BaseModel):
     tier: str = "standard"
     model: str | None = None
     api_key: str | None = None
+    consent_remote: bool = False
 
 
 @router.get("/dossier")
@@ -119,14 +120,19 @@ def copilot_advise_endpoint(
             prediction_service=prediction_service,
             optimization_service=optimization_service,
         )
+        effective_provider = req.provider
+        if effective_provider == "auto" and not req.consent_remote:
+            effective_provider = "heuristic"
+
         advice = generate_copilot_advice(
             dossier=dossier,
             persona=req.persona,
-            provider_name=req.provider,
+            provider_name=effective_provider,
             api_key=req.api_key,
             model=req.model,
             database_path=prediction_service.database_path,
             tier=tier,
+            consent_remote=req.consent_remote,
         )
         return advice.to_dict()
     except KeyError:

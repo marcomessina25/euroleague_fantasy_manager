@@ -2558,6 +2558,8 @@ function populateProvidersDropdown(providers) {
   });
   if (previous && providers.some((p) => p.provider_name === previous)) {
     sel.value = previous;
+  } else {
+    sel.value = "heuristic";
   }
   populateCopilotModelDropdown();
   restoreCopilotApiKey();
@@ -2781,6 +2783,25 @@ async function triggerCopilotAdvise() {
     keyHint.style.display = "block";
   }
 
+  let consentRemote = sessionStorage.getItem("elf_remote_llm_consent") === "true";
+  if (provider !== "heuristic" && provider !== "local") {
+    if (!consentRemote) {
+      const consentMsg =
+        `Warning: You have selected a remote LLM provider (${provider.toUpperCase()}).\n\n` +
+        `This will transmit the following fantasy team data to the third-party service:\n` +
+        `• Fantasy Team Name\n` +
+        `• Squad Lineup (Starters, Bench, Captain, Sixth Man)\n` +
+        `• Player Projections & Valuations\n\n` +
+        `Do you acknowledge and consent to sending this fantasy team data for this session?`;
+      if (typeof window !== "undefined" && typeof window.confirm === "function" && window.confirm(consentMsg)) {
+        sessionStorage.setItem("elf_remote_llm_consent", "true");
+        consentRemote = true;
+      } else {
+        return;
+      }
+    }
+  }
+
   if (btn) btn.disabled = true;
   if (spinner) spinner.style.display = "inline";
   if (icon) icon.style.display = "none";
@@ -2798,6 +2819,7 @@ async function triggerCopilotAdvise() {
         tier: tier,
         model: model,
         api_key: apiKey,
+        consent_remote: consentRemote,
       }),
     });
 
