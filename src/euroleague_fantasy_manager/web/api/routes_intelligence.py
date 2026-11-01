@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from euroleague_fantasy_manager.intelligence.copilot import (
     generate_copilot_advice,
@@ -33,7 +33,7 @@ router = APIRouter(prefix="/api/workstation", tags=["intelligence"])
 class CopilotAdviseRequest(BaseModel):
     team_id: str
     season: str = "2026/27"
-    round_number: int | None = None
+    round_number: int | None = Field(default=None, ge=1, le=50)
     persona: str = "briefing"
     provider: str = "heuristic"
     tier: str = "standard"
@@ -45,7 +45,7 @@ class CopilotAdviseRequest(BaseModel):
 def get_manager_dossier_endpoint(
     team_id: str = Query(..., description="Target managed team ID"),
     season: str = Query("2026/27", description="Season code"),
-    round_number: int | None = Query(None, description="Round number"),
+    round_number: int | None = Query(None, ge=1, le=50, description="Round number"),
     team_service: TeamService = Depends(get_team_service),
     prediction_service: PredictionService = Depends(get_prediction_service),
     optimization_service: OptimizationService = Depends(get_optimization_service),
@@ -71,7 +71,7 @@ def get_manager_dossier_endpoint(
 def get_strategic_analysis_endpoint(
     team_id: str = Query(..., description="Target managed team ID"),
     season: str = Query("2026/27", description="Season code"),
-    round_number: int | None = Query(None, description="Round number"),
+    round_number: int | None = Query(None, ge=1, le=50, description="Round number"),
     team_service: TeamService = Depends(get_team_service),
     prediction_service: PredictionService = Depends(get_prediction_service),
     optimization_service: OptimizationService = Depends(get_optimization_service),

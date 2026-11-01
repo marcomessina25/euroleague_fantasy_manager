@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field, confloat, conint
 
 from euroleague_fantasy_manager.competition.ruleset import League
@@ -57,7 +57,7 @@ router = APIRouter(prefix="/api/workstation", tags=["workstation"])
 class OptimizeLineupRequest(BaseModel):
     team_id: str
     season: str = "2026/27"
-    round_number: int | None = None
+    round_number: int | None = Field(default=None, ge=1, le=50)
     risk_mode: str = "expected"
     option_value_mode: str = "captain_eligible"
 
@@ -65,7 +65,7 @@ class OptimizeLineupRequest(BaseModel):
 class OptimizeTransfersRequest(BaseModel):
     team_id: str
     season: str = "2026/27"
-    round_number: int | None = None
+    round_number: int | None = Field(default=None, ge=1, le=50)
     max_trades: int = MAX_TRADES_PER_ROUND
     unlimited: bool = False
     exhaustive: bool = False
@@ -86,7 +86,7 @@ class MultiRoundRequest(BaseModel):
 class SimulateTurnSubRequest(BaseModel):
     team_id: str
     season: str = "2026/27"
-    round_number: int | None = None
+    round_number: int | None = Field(default=None, ge=1, le=50)
     turn_1_scores: dict[str, float] = Field(default_factory=dict)
 
 
@@ -112,7 +112,7 @@ class UpdateScoresRequest(BaseModel):
 class LogDecisionRequest(BaseModel):
     team_id: str
     season: str = "2026/27"
-    round_number: int
+    round_number: int = Field(..., ge=1, le=50)
     turn_number: int = 1
     decision_type: str = "lineup"
     notes: str = ""
@@ -133,7 +133,7 @@ class SuggestInitialTeamRequest(BaseModel):
 def get_dashboard(
     team_id: str,
     season: str = "2026/27",
-    round_number: int | None = None,
+    round_number: int | None = Query(None, ge=1, le=50),
     model_name: str = "price_prior_v1",
     team_service: TeamService = Depends(get_team_service),
     prediction_service: PredictionService = Depends(get_prediction_service),
@@ -730,7 +730,7 @@ def update_scores_endpoint(
 def list_players_endpoint(
     response: Response,
     season: str = "2026/27",
-    round_number: int = 1,
+    round_number: int = Query(1, ge=1, le=50),
     position: str | None = None,
     search: str | None = None,
     min_price: float | None = None,
@@ -738,7 +738,7 @@ def list_players_endpoint(
     league: League = Depends(parse_league),
     sort: str = "expected_fp",
     offset: int = 0,
-    limit: int = 50,
+    limit: int = Query(50, ge=1, le=500),
     prediction_service: PredictionService = Depends(get_prediction_service),
 ) -> list[dict[str, Any]]:
     """Player browser for Trade Studio with valuation metrics.

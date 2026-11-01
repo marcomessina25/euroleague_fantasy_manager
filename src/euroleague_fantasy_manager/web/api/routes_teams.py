@@ -43,7 +43,7 @@ class CreateTeamRequest(BaseModel):
     league: str = "euroleague"
     mode: str = "classic"
     season: str = "2026/27"
-    round_number: int = 1
+    round_number: int = Field(default=1, ge=1, le=50)
     turn_number: int = 1
     bank_tenths: int | None = None
     credits: float | None = None
@@ -357,7 +357,7 @@ class ExecuteTransfersRequest(BaseModel):
     transfers_in_ids: list[int]
     unlimited: bool = False
     season: str = "2026/27"
-    round_number: int | None = None
+    round_number: int | None = Field(default=None, ge=1, le=50)
     discard_conflicting: bool = False
 
 

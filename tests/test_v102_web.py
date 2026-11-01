@@ -235,3 +235,43 @@ def test_p5_3_new_empty_team_defaults_to_100_credits(tmp_path: Path):
     team_data = res.json()
     assert team_data["bank_tenths"] == 1000
     assert team_data["bank_credits"] == 100.0
+
+
+@pytest.mark.parametrize("payload,endpoint", [
+    ({"team_id": "t1", "round_number": 0}, "/api/workstation/optimize/lineup"),
+    ({"team_id": "t1", "round_number": 51}, "/api/workstation/optimize/lineup"),
+    ({"team_id": "t1", "round_number": -1}, "/api/workstation/optimize/transfers"),
+    ({"team_id": "t1", "round_number": 55}, "/api/workstation/optimize/transfers"),
+    ({"team_id": "t1", "top_n": 0}, "/api/workstation/optimize/transfers"),
+    ({"team_id": "t1", "top_n": 51}, "/api/workstation/optimize/transfers"),
+    ({"team_id": "t1", "max_evaluations": 50}, "/api/workstation/optimize/transfers"),
+    ({"team_id": "t1", "max_evaluations": 60000}, "/api/workstation/optimize/transfers"),
+    ({"team_id": "t1", "time_budget_s": 0.05}, "/api/workstation/optimize/transfers"),
+    ({"team_id": "t1", "time_budget_s": 70.0}, "/api/workstation/optimize/transfers"),
+    ({"name": "New Team", "league": "euroleague", "round_number": 0}, "/api/teams"),
+    ({"name": "New Team", "league": "euroleague", "round_number": 51}, "/api/teams"),
+])
+def test_p5_4_input_boundary_validation_post(tmp_path: Path, payload: dict, endpoint: str):
+    """WEB-9, OPT-12: POST endpoints reject out-of-range boundary values with 422."""
+    db_file = tmp_path / "bounds.sqlite3"
+    app = create_app(db_path=db_file)
+    client = TestClient(app)
+
+    res = client.post(endpoint, json=payload)
+    assert res.status_code == 422
+
+
+@pytest.mark.parametrize("query_param,value", [
+    ("round_number", 0),
+    ("round_number", 51),
+    ("limit", 0),
+    ("limit", 501),
+])
+def test_p5_4_input_boundary_validation_query(tmp_path: Path, query_param: str, value: int):
+    """WEB-9: Query params reject out-of-range boundary values with 422."""
+    db_file = tmp_path / "bounds_q.sqlite3"
+    app = create_app(db_path=db_file)
+    client = TestClient(app)
+
+    res = client.get(f"/api/workstation/players?{query_param}={value}")
+    assert res.status_code == 422
