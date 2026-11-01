@@ -70,7 +70,7 @@ def predict_player_price_prior(
         raw_exp = exp_min * fp_per_min * loc_mult
         exp_fp = round(p_play * raw_exp, 2)
 
-        if player.avg_fantasy_pts > 0 and not has_played:
+        if player.avg_fantasy_pts is not None and player.avg_fantasy_pts > 0 and not has_played:
             exp_fp = round(0.6 * player.avg_fantasy_pts + 0.4 * exp_fp, 2)
 
     unc_val = round(max(3.0, exp_fp * 0.25), 2)

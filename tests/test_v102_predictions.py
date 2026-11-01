@@ -294,3 +294,115 @@ def test_p3_3_ingest_model_fields_and_preserve_null(tmp_path: Path):
 
     sum_query = store_fail.get_latest_summary(league_id=10)
     assert "avg_fantasy_pts" in sum_query.missing_fields
+
+
+def test_p3_4_app_scoped_prediction_service_and_cache(tmp_path: Path):
+    from unittest.mock import MagicMock
+    from euroleague_fantasy_manager.multi_team.store import TeamStore
+    from euroleague_fantasy_manager.services.team_service import TeamService
+
+    # 1. WEB-7 isolation test: two apps on two DBs
+    db_a = tmp_path / "app_a.db"
+    db_b = tmp_path / "app_b.db"
+
+    store_a = SnapshotStore(db_a)
+    store_b = SnapshotStore(db_b)
+
+    squad_a = _make_legal_squad(offset=101)
+    squad_b = _make_legal_squad(offset=201)
+
+    payload_a = {
+        "league_id": 10,
+        "competition_code": "E",
+        "season_code": "2026/27",
+        "round_number": 1,
+        "players": [
+            {
+                "id": u.player_id,
+                "name": f"Player {u.player_id}",
+                "position": u.position,
+                "price_tenths": 100,
+                "status": "starter",
+                "probability_of_playing": 1.0,
+            }
+            for u in squad_a
+        ],
+    }
+    store_a.save_snapshot(payload_a)
+
+    payload_b = {
+        "league_id": 10,
+        "competition_code": "E",
+        "season_code": "2026/27",
+        "round_number": 1,
+        "players": [
+            {
+                "id": u.player_id,
+                "name": f"Player {u.player_id}",
+                "position": u.position,
+                "price_tenths": 100,
+                "status": "starter",
+                "probability_of_playing": 1.0,
+            }
+            for u in squad_b
+        ],
+    }
+    store_b.save_snapshot(payload_b)
+
+    # Initialize app A and seed team_alpha
+    app_a = create_app(db_path=db_a)
+    ts_a = TeamService(TeamStore(db_a))
+    ts_a.create_team(team_id="team_alpha", name="Alpha Team", season="2026/27", round_number=1)
+    ts_a.set_squad("team_alpha", round_number=1, roster_units=squad_a, validate=False)
+
+    # Initialize app B and seed team_beta
+    app_b = create_app(db_path=db_b)
+    ts_b = TeamService(TeamStore(db_b))
+    ts_b.create_team(team_id="team_beta", name="Beta Team", season="2026/27", round_number=1)
+    ts_b.set_squad("team_beta", round_number=1, roster_units=squad_b, validate=False)
+
+    client_a = TestClient(app_a)
+    client_b = TestClient(app_b)
+
+    # Interleaved requests verify complete DB and service isolation
+    resp_a1 = client_a.get("/api/teams/")
+    assert resp_a1.status_code == 200
+    ids_a1 = [t["team_id"] for t in resp_a1.json()]
+    assert "team_alpha" in ids_a1
+    assert "team_beta" not in ids_a1
+
+    resp_b1 = client_b.get("/api/teams/")
+    assert resp_b1.status_code == 200
+    ids_b1 = [t["team_id"] for t in resp_b1.json()]
+    assert "team_beta" in ids_b1
+    assert "team_alpha" not in ids_b1
+
+    resp_a2 = client_a.get("/api/teams/")
+    assert "team_alpha" in [t["team_id"] for t in resp_a2.json()]
+    assert "team_beta" not in [t["team_id"] for t in resp_a2.json()]
+
+    resp_b2 = client_b.get("/api/teams/")
+    assert "team_beta" in [t["team_id"] for t in resp_b2.json()]
+    assert "team_alpha" not in [t["team_id"] for t in resp_b2.json()]
+
+    # 2. Projection cache test: verify second dashboard call hits cache
+    real_build_contracts = app_a.state.prediction_service._build_contracts
+    call_counter = MagicMock(side_effect=real_build_contracts)
+    app_a.state.prediction_service._build_contracts = call_counter
+
+    dash_1 = client_a.get("/api/workstation/dashboard?team_id=team_alpha&round_number=1")
+    assert dash_1.status_code == 200
+    assert call_counter.call_count == 1
+
+    # Second call should hit the in-memory cache and not invoke _build_contracts
+    dash_2 = client_a.get("/api/workstation/dashboard?team_id=team_alpha&round_number=1")
+    assert dash_2.status_code == 200
+    assert call_counter.call_count == 1
+
+    # Invalidate cache via clear_cache()
+    app_a.state.prediction_service.clear_cache()
+
+    # Third call rebuilds contracts
+    dash_3 = client_a.get("/api/workstation/dashboard?team_id=team_alpha&round_number=1")
+    assert dash_3.status_code == 200
+    assert call_counter.call_count == 2

@@ -28,7 +28,6 @@ from euroleague_fantasy_manager.tracking.models import (
 )
 from euroleague_fantasy_manager.tracking.store import DecisionStore
 from euroleague_fantasy_manager.web.app import create_app
-from euroleague_fantasy_manager.web.deps import set_db_path
 
 from tests.helpers import make_standard_squad, make_test_player
 
@@ -388,7 +387,6 @@ def test_decision_and_evaluation_service_lifecycle(tmp_path: Path):
 # 3. Local Web GUI & FastAPI Workstation Integration Tests
 def test_fastapi_workstation_endpoints(tmp_path: Path):
     db_file = tmp_path / "web_test.sqlite3"
-    set_db_path(db_file)
     app = create_app(db_path=db_file)
     client = TestClient(app)
 
@@ -472,7 +470,6 @@ def test_fastapi_workstation_endpoints(tmp_path: Path):
 def test_initial_team_builder_optimization_and_api(tmp_path: Path):
     """Test initial team suggestion (scratch & partial locked) and team creation via Web API."""
     db_file = tmp_path / "initial_builder_test.sqlite3"
-    set_db_path(db_file)
     app = create_app(db_path=db_file)
     client = TestClient(app)
 
@@ -1403,7 +1400,6 @@ def test_revert_round_start_checkpoint_lifecycle(tmp_path: Path):
 def test_workstation_simulate_and_apply_intra_round_routes(tmp_path: Path):
     """Verify workstation routes for intra-round simulation, application, and revert."""
     db_file = tmp_path / "routes_test.sqlite3"
-    set_db_path(db_file)
     app = create_app(db_path=db_file)
     client = TestClient(app)
 
@@ -1526,10 +1522,8 @@ def test_court_score_breakdown_consistency(tmp_path: Path):
     import sqlite3
     from euroleague_fantasy_manager.services.team_service import TeamService
     from euroleague_fantasy_manager.web.app import create_app
-    from euroleague_fantasy_manager.web.deps import get_prediction_service, set_db_path
 
     db_file = tmp_path / "court_breakdown_test.sqlite3"
-    set_db_path(db_file)
     app = create_app(db_path=db_file)
     client = TestClient(app)
 
@@ -1598,7 +1592,7 @@ def test_court_score_breakdown_consistency(tmp_path: Path):
     with sqlite3.connect(db_file) as conn:
         conn.execute("UPDATE players SET has_played = 1, last_match_pts = 16.5 WHERE id IN (101, 102, 105, 110)")
 
-    get_prediction_service().clear_cache()
+    app.state.prediction_service.clear_cache()
 
     resp = client.get("/api/workstation/dashboard?team_id=cb_team&round_number=1")
     assert resp.status_code == 200
@@ -1613,7 +1607,7 @@ def test_court_score_breakdown_consistency(tmp_path: Path):
     with sqlite3.connect(db_file) as conn:
         conn.execute("UPDATE players SET has_played = 1, last_match_pts = 14.0")
 
-    get_prediction_service().clear_cache()
+    app.state.prediction_service.clear_cache()
 
     resp = client.get("/api/workstation/dashboard?team_id=cb_team&round_number=1")
     assert resp.status_code == 200

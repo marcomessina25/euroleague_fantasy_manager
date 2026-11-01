@@ -13,11 +13,6 @@ def _hermetic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv(k, raising=False)
     from euroleague_fantasy_manager.prediction import learned_models
     learned_models.reset_default_learned_pipeline()
-    try:
-        from euroleague_fantasy_manager.web import deps
-        deps.set_db_path(None)
-    except Exception:
-        pass
     yield
 
 

@@ -73,7 +73,7 @@ class PredictionService:
         self,
         season: str,
         round_number: int,
-        model_name: str = "fp_decomposed_v03",
+        model_name: str = "price_prior_v1",
         risk_lambda: float = 0.5,
         league: str | League | None = None,
     ) -> dict[int, dict[str, Any]]:
@@ -195,6 +195,19 @@ class PredictionService:
             season_code=season,
             round_number=round_number,
         )
+        if snap is None:
+            norm_season = normalize_season_code(season)
+            digits = "".join(c for c in season if c.isdigit())
+            bare_year = digits[:4] if len(digits) >= 4 else digits
+            for cand in (norm_season, bare_year, f"E{bare_year}"):
+                if cand and cand != season:
+                    snap = store.get_snapshot_for_round(
+                        league_id=league_id,
+                        season_code=cand,
+                        round_number=round_number,
+                    )
+                    if snap is not None:
+                        break
         if snap is None:
             raise NoSnapshotForRoundError(round_number=round_number, season=season, league=league)
 

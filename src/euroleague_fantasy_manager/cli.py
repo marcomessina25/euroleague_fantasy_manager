@@ -821,7 +821,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         summary = store.save_snapshot(payload, raw_directory=paths.raw_archive_dir(args.db))
         from .multi_team.store import TeamStore
+        from .services.prediction_service import PredictionService
         from .services.team_service import TeamService
+        PredictionService(database_path=store.database_path).clear_cache()
         synced, sync_failures = TeamService(TeamStore(store.database_path)).sync_all_teams_to_live_round(resolved_league)
         if synced:
             print(f"Synced {len(synced)} team(s) to round {summary.round_number}.", file=sys.stderr)

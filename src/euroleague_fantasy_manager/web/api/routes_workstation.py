@@ -918,7 +918,7 @@ def get_player_details_endpoint(
 @router.get("/current-round")
 def get_current_round_endpoint(
     league: League = Depends(parse_league),
-    db_path: str = Depends(get_db_path),
+    db_path: Path = Depends(get_db_path),
 ) -> dict[str, Any]:
     """Return the active current round for the given league."""
     from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
