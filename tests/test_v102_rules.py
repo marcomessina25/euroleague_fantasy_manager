@@ -57,3 +57,66 @@ def test_backfill_snapshot_game_rules_is_idempotent(tmp_path: Path):
     assert rules2 is not None
     assert rules2.max_num_same_team_players == 6
     assert rules2.raw_json == rules1.raw_json
+
+
+def test_resolve_ruleset_official_vs_fallback(tmp_path: Path):
+    """P1.2 / RULE-1: With official config 6 -> 6; without config -> fallback 6."""
+    from euroleague_fantasy_manager.competition.ruleset import League, resolve_ruleset
+
+    # Without db_path -> returns fallback
+    base_el = resolve_ruleset(League.EUROLEAGUE)
+    assert base_el.max_court_players_per_club == 6
+    assert base_el.source == "fallback"
+
+    # With DB containing snapshot fixture (quota 6)
+    db_file = tmp_path / "rules_official.sqlite3"
+    store = SnapshotStore(db_file)
+    fixture_path = Path(__file__).resolve().parent / "fixtures" / "official_config_el.json"
+    payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+    summary = store.save_snapshot(payload)
+    assert summary is not None
+
+    resolved = resolve_ruleset(League.EUROLEAGUE, db_path=db_file)
+    assert resolved.max_court_players_per_club == 6
+    assert resolved.source == "official_config"
+
+
+def test_resolve_ruleset_override_logs_warning(tmp_path: Path, caplog):
+    """P1.2: Changing config to 4 -> 4 and logs warning."""
+    import logging
+    from euroleague_fantasy_manager.competition.ruleset import League, resolve_ruleset
+
+    db_file = tmp_path / "rules_warn.sqlite3"
+    store = SnapshotStore(db_file)
+    fixture_path = Path(__file__).resolve().parent / "fixtures" / "official_config_el.json"
+    payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+    payload["config"]["game_modes_configs"][0]["max_num_same_team_players"] = 4
+
+    summary = store.save_snapshot(payload)
+    assert summary is not None
+
+    with caplog.at_level(logging.WARNING):
+        resolved = resolve_ruleset(League.EUROLEAGUE, db_path=db_file)
+        assert resolved.max_court_players_per_club == 4
+        assert resolved.source == "official_config"
+        assert "Official config overrides fallback ruleset" in caplog.text
+        assert "max_court_players_per_club: 6 -> 4" in caplog.text
+
+
+def test_eurocup_ruleset_and_unlimited_trade_rounds():
+    """P1.2 / DATA-15: EuroCup window lookup uses EuroCup ruleset."""
+    from euroleague_fantasy_manager.competition.ruleset import (
+        League,
+        is_unlimited_trade_round,
+        resolve_ruleset,
+    )
+
+    ec_rules = resolve_ruleset(League.EUROCUP)
+    assert ec_rules.league == League.EUROCUP
+    assert ec_rules.max_court_players_per_club == 6
+    assert is_unlimited_trade_round(7, ec_rules) is True
+    assert is_unlimited_trade_round(14, ec_rules) is True
+    assert is_unlimited_trade_round(19, ec_rules) is False  # EL has 19, EC does not
+
+    el_rules = resolve_ruleset(League.EUROLEAGUE)
+    assert is_unlimited_trade_round(19, el_rules) is True
