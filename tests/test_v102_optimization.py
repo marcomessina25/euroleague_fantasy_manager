@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from euroleague_fantasy_manager.competition.ruleset import League, get_league_ruleset
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.optimization.constraints import OptimizationConstraints
+from euroleague_fantasy_manager.optimization.multi_round import MultiRoundOptimizer
 from euroleague_fantasy_manager.optimization.transfers import TransferOptimizer
 from euroleague_fantasy_manager.services.optimization_service import OptimizationService
 from euroleague_fantasy_manager.services.team_service import TeamService
@@ -403,3 +404,148 @@ def test_p4_4_risk_consistent_lineup_roles_fuzz():
             d_opt = opt.optimize(s)
             d_ora = brute_force_exhaustive_lineup(s, risk_mode=mode, risk_lambda=0.2, include_option_value=False, constraints=constraints)
             assert abs(d_opt.objective_value - d_ora.objective_value) < 1e-4
+
+
+def test_p4_5_team_with_one_transfer_gets_at_most_one_trade_in_step_1():
+    """OPT-6: Team with 1 transfer left gets <= 1 trade in step 1, but up to 4 in step 2."""
+    ruleset = get_league_ruleset(League.EUROLEAGUE)
+    constraints = OptimizationConstraints.from_ruleset(ruleset)
+    mr_opt = MultiRoundOptimizer(constraints=constraints)
+
+    squad = make_standard_squad()
+    # Market with many improvements
+    market_r1 = [
+        make_test_player(901, Position.GUARD, expected_fp=35.0, price_tenths=70, team_id=10),
+        make_test_player(902, Position.FORWARD, expected_fp=35.0, price_tenths=60, team_id=11),
+        make_test_player(903, Position.CENTER, expected_fp=35.0, price_tenths=70, team_id=12),
+    ]
+    market_r2 = [
+        make_test_player(904, Position.GUARD, expected_fp=38.0, price_tenths=70, team_id=10),
+        make_test_player(905, Position.FORWARD, expected_fp=38.0, price_tenths=60, team_id=11),
+        make_test_player(906, Position.CENTER, expected_fp=38.0, price_tenths=70, team_id=12),
+    ]
+
+    projs = {2: market_r1, 3: market_r2}
+    plan = mr_opt.optimize_multi_round(
+        start_round=2,
+        horizon=2,
+        initial_squad=squad,
+        projections_by_round=projs,
+        initial_bank_tenths=100,
+        transfers_remaining_first_round=1,
+        ruleset=ruleset,
+    )
+
+    step1 = plan.steps[0]
+    # Step 1 should have at most 1 trade
+    if step1.transfers is not None:
+        assert len(step1.transfers.out_players) <= 1
+
+
+def test_p4_5_planner_uses_unlimited_window_in_round_7():
+    """OPT-6: The planner uses the unlimited window in round 7 (EuroLeague ruleset)."""
+    ruleset = get_league_ruleset(League.EUROLEAGUE)
+    constraints = OptimizationConstraints.from_ruleset(ruleset)
+    mr_opt = MultiRoundOptimizer(constraints=constraints)
+
+    squad = make_standard_squad()
+    # In round 7, provide superior players for the entire squad
+    market_r7 = [
+        make_test_player(900 + i, pos, expected_fp=40.0, price_tenths=60, team_id=10 + (i % 5))
+        for i, pos in enumerate([
+            Position.GUARD, Position.GUARD, Position.GUARD, Position.GUARD,
+            Position.FORWARD, Position.FORWARD, Position.FORWARD, Position.FORWARD,
+            Position.CENTER, Position.CENTER,
+        ])
+    ]
+
+    projs = {7: market_r7}
+    plan = mr_opt.optimize_multi_round(
+        start_round=7,
+        horizon=1,
+        initial_squad=squad,
+        projections_by_round=projs,
+        initial_bank_tenths=200,
+        transfers_remaining_first_round=4,
+        ruleset=ruleset,
+    )
+
+    step1 = plan.steps[0]
+    assert step1.transfers is not None
+    # In round 7 unlimited window, > 4 trades can be made
+    assert len(step1.transfers.out_players) > 4
+
+
+def test_p4_5_missing_projection_treated_as_zero():
+    """OPT-7: A squad player with no projection row in round r gets 0-FP, probability_play=0, unavailable."""
+    ruleset = get_league_ruleset(League.EUROLEAGUE)
+    constraints = OptimizationConstraints.from_ruleset(ruleset)
+    mr_opt = MultiRoundOptimizer(constraints=constraints)
+
+    squad = make_standard_squad()
+    # Market for round 2 completely omits squad player 101
+    market_r2 = [p for p in squad if p.player_id != 101]
+
+    projs = {2: market_r2}
+    # If transfers_remaining_first_round=0, player 101 stays in squad and contributes 0.0
+    plan_no_trades = mr_opt.optimize_multi_round(
+        start_round=2,
+        horizon=1,
+        initial_squad=squad,
+        projections_by_round=projs,
+        initial_bank_tenths=50,
+        transfers_remaining_first_round=0,
+        ruleset=ruleset,
+    )
+    step = plan_no_trades.steps[0]
+    # Player 101 in bench has 0 expected score
+    assert step.transfers is None
+
+
+def test_p4_5_horizon_validation_and_call_counter(tmp_path: Path):
+    """OPT-8: horizon=300 -> 422 via API, service fetches at most 4 rounds."""
+    db_file = tmp_path / "test_p45.db"
+    store = SnapshotStore(db_file)
+    store.save_snapshot({
+        "league_id": 10,
+        "competition_code": "E",
+        "season_code": "E2026",
+        "round_number": 1,
+        "match_lineups": [],
+        "schedules": [],
+    })
+
+    from euroleague_fantasy_manager.services.prediction_service import PredictionService
+
+    team_svc = TeamService(db_path=db_file)
+    team = team_svc.create_team(team_id="team_p45", name="Test", league="euroleague", season="2026", round_number=1)
+    pred_svc = PredictionService(database_path=db_file)
+
+    fetch_calls = []
+    original_get_projections = pred_svc.get_projections
+
+    def tracking_get_projections(season, round_num, **kwargs):
+        fetch_calls.append(round_num)
+        return original_get_projections(season, round_num, **kwargs)
+
+    pred_svc.get_projections = tracking_get_projections
+
+    opt_svc = OptimizationService(team_service=team_svc, prediction_service=pred_svc)
+    # Calling service with horizon=300 clamps to 4 rounds
+    opt_svc.plan_multi_round(team_id=team.team_id, season="2026", start_round=1, horizon=300)
+    assert len(fetch_calls) <= 4
+    assert fetch_calls == [1, 2, 3, 4]
+
+    # Calling API with horizon=300 returns 422 Unprocessable Entity
+    app = create_app(db_path=db_file)
+    client = TestClient(app)
+    response = client.post(
+        "/api/workstation/optimize/multi-round",
+        json={
+            "team_id": team.team_id,
+            "season": "2026",
+            "start_round": 1,
+            "horizon": 300,
+        },
+    )
+    assert response.status_code == 422

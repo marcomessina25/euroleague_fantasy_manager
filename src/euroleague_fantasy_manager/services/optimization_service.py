@@ -338,12 +338,15 @@ class OptimizationService:
         beam_width: int = 4,
     ) -> MultiRoundPlan:
         """Run beam search multi-round transfer planner across N rounds."""
+        # OPT-8: Clamp horizon to 1..4 before fetching projections
+        eff_horizon = max(1, min(horizon, 4))
         team = self.team_service.get_team(team_id)
         s_rnd = start_round or team.round_number
 
         league = _team_league(team)
+        ruleset = get_league_ruleset(league)
         pool_by_round: dict[int, list[PlayerProjectionContract]] = {}
-        for r in range(s_rnd, s_rnd + horizon):
+        for r in range(s_rnd, s_rnd + eff_horizon):
             pool_by_round[r] = self.prediction_service.get_projections(season, r, league=league)
 
         squad_contracts = self._resolve_squad_contracts(team.squad, season, s_rnd, league=league)
@@ -359,10 +362,12 @@ class OptimizationService:
 
         return mr_opt.optimize_multi_round(
             start_round=s_rnd,
-            horizon=horizon,
+            horizon=eff_horizon,
             initial_squad=squad_contracts,
             projections_by_round=pool_by_round,
             initial_bank_tenths=team.bank_tenths,
+            transfers_remaining_first_round=team.transfers_remaining,
+            ruleset=ruleset,
         )
 
     def recommend_initial_team(

@@ -103,6 +103,8 @@ class MultiRoundOptimizer:
         initial_bank_tenths: int = 0,
         current_squad: Sequence[PlayerProjectionContract | Player] | None = None,
         round_projections: Mapping[int, Any] | None = None,
+        transfers_remaining_first_round: int | None = None,
+        ruleset: Any = None,
     ) -> MultiRoundPlan:
         """Find the optimal sequential plan over rounds [start_round, start_round + horizon - 1]."""
         eff_squad = initial_squad if initial_squad is not None else current_squad
@@ -124,6 +126,11 @@ class MultiRoundOptimizer:
             (0.0, 0.0, initial_contracts, initial_bank_tenths, [])
         ]
 
+        eff_ruleset = ruleset
+        if eff_ruleset is None:
+            from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
+            eff_ruleset = get_league_ruleset()
+
         for step_idx, r_num in enumerate(rounds):
             discount = self.discount_factor ** step_idx
             raw_market = eff_projs.get(r_num, ())
@@ -133,13 +140,46 @@ class MultiRoundOptimizer:
                 market_r = list(raw_market)
             proj_dict = {p.player_id: p for p in market_r}
 
+            # Determine trade limit and unlimited status for this round (OPT-6)
+            is_unlimited = eff_ruleset.is_unlimited_trade_round(r_num)
+            if is_unlimited:
+                round_max_trades = self.constraints.squad_size
+                round_unlimited = True
+            elif step_idx == 0 and transfers_remaining_first_round is not None:
+                round_max_trades = min(self.max_trades_per_round, transfers_remaining_first_round)
+                round_unlimited = False
+            else:
+                round_max_trades = self.max_trades_per_round
+                round_unlimited = False
+
             next_states: list[tuple[float, float, list[PlayerProjectionContract], int, list[RoundDecisionStep]]] = []
 
             for cum_disc, cum_raw, squad_units, bank, prior_steps in states:
-                # Update squad units to round r_num projections
-                updated_squad = [
-                    proj_dict.get(p.player_id, p) for p in squad_units
-                ]
+                # OPT-7: Update squad units to round r_num projections.
+                # A squad player with no projection row in round r gets a 0-FP,
+                # probability_play=0 contract flagged unavailable. Nothing is carried forward.
+                updated_squad = []
+                for p in squad_units:
+                    if p.player_id in proj_dict:
+                        updated_squad.append(proj_dict[p.player_id])
+                    else:
+                        updated_squad.append(
+                            PlayerProjectionContract(
+                                player_id=p.player_id,
+                                player_name=p.player_name,
+                                position=p.position,
+                                team_id=p.team_id,
+                                team_code=p.team_code,
+                                price_tenths=p.price_tenths,
+                                expected_fp=0.0,
+                                probability_play=0.0,
+                                expected_minutes=0.0,
+                                fp_per_minute=0.0,
+                                uncertainty=0.0,
+                                turn_number=p.turn_number,
+                                pre_round_status="unavailable",
+                            )
+                        )
 
                 # Option 0: No transfers (hold current squad)
                 hold_lineup = self.lineup_optimizer.optimize(
@@ -161,16 +201,21 @@ class MultiRoundOptimizer:
                 ))
 
                 # Options 1..K: legal transfers
-                trans_res = self.transfer_optimizer.optimize_transfers(
-                    current_squad=updated_squad,
-                    market=market_r,
-                    bank_tenths=bank,
-                    round_number=r_num,
-                    max_trades=self.max_trades_per_round,
-                    top_n=self.branching_factor,
-                )
+                if round_max_trades > 0:
+                    trans_res = self.transfer_optimizer.optimize_transfers(
+                        current_squad=updated_squad,
+                        market=market_r,
+                        bank_tenths=bank,
+                        round_number=r_num,
+                        max_trades=round_max_trades,
+                        unlimited=round_unlimited,
+                        top_n=self.branching_factor,
+                    )
+                    recs = trans_res.recommendations
+                else:
+                    recs = []
 
-                for rec in trans_res.recommendations:
+                for rec in recs:
                     out_ids = {p.player_id for p in rec.out_players}
                     new_squad = [p for p in updated_squad if p.player_id not in out_ids] + list(rec.in_players)
                     trade_step = RoundDecisionStep(
@@ -205,3 +250,5 @@ class MultiRoundOptimizer:
             beam_width=self.branching_factor,
             discount_factor=self.discount_factor,
         )
+
+    plan = optimize_multi_round

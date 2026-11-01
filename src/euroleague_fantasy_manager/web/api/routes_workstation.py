@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, confloat, conint
 
 from euroleague_fantasy_manager.competition.ruleset import League
 from euroleague_fantasy_manager.models import ModelUnavailableError, Position
@@ -77,8 +77,8 @@ class MultiRoundRequest(BaseModel):
     team_id: str
     season: str = "2026/27"
     start_round: int | None = None
-    horizon: int = 3
-    gamma: float = 0.95
+    horizon: conint(ge=1, le=4) = 3
+    gamma: confloat(gt=0, le=1) = 0.95
 
 
 class SimulateTurnSubRequest(BaseModel):
