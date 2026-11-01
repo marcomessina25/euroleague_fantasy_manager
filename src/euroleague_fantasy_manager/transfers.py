@@ -1,11 +1,10 @@
 """Deterministic EuroLeague/EuroCup Fantasy Challenge Classic Mode trade validation."""
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Any, Iterable
 
 from .models import Player
 from .rules import (
-    MAX_TRADES_PER_ROUND,
     ValidationResult,
     is_unlimited_trade_round,
     validate_squad,
@@ -87,13 +86,18 @@ def validate_trades(
     moves: Iterable[TradeMove],
     players_by_id: dict[int, Player],
     unlimited_window: bool = False,
+    ruleset: Any = None,
 ) -> TradeValidationReport:
     """Validate 1..N proposed trades against current squad state, budget, positions, and club limits."""
+    if ruleset is None:
+        from .competition.ruleset import resolve_ruleset
+        ruleset = resolve_ruleset(getattr(state, "league", None))
+
     move_list = list(moves)
     errors: list[str] = []
 
-    unlimited_active = is_unlimited_trade_round(state.round_number, unlimited_flag=unlimited_window)
-    max_allowed = len(state.player_ids) if unlimited_active else min(MAX_TRADES_PER_ROUND, state.free_trades)
+    unlimited_active = is_unlimited_trade_round(state.round_number, ruleset=ruleset, unlimited_flag=unlimited_window)
+    max_allowed = len(state.player_ids) if unlimited_active else min(ruleset.max_trades_per_round, state.free_trades)
 
     if len(move_list) > max_allowed:
         errors.append(
@@ -142,7 +146,7 @@ def validate_trades(
     if len(resulting_ids) == len(state.player_ids) and all(pid in players_by_id for pid in resulting_ids):
         resulting_players = [players_by_id[pid] for pid in resulting_ids]
         # Pass budget_tenths=None here because bank_after >= 0 already verifies affordability with capital gains
-        squad_check: ValidationResult = validate_squad(resulting_players, budget_tenths=None)
+        squad_check: ValidationResult = validate_squad(resulting_players, ruleset=ruleset, budget_tenths=None)
         errors.extend(squad_check.errors)
 
     free_after = state.free_trades if unlimited_active else max(0, state.free_trades - len(move_list))

@@ -86,7 +86,11 @@ class OptimizationService:
         self.team_service = team_service
         self.prediction_service = prediction_service
         self._custom_constraints = constraints is not None
-        self.constraints = constraints or OptimizationConstraints()
+        if constraints is None:
+            from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
+            self.constraints = OptimizationConstraints.from_ruleset(get_league_ruleset())
+        else:
+            self.constraints = constraints
         self.lineup_optimizer = FixedSquadLineupOptimizer(constraints=self.constraints)
         self.transfer_optimizer = TransferOptimizer(constraints=self.constraints)
         self.multi_round_optimizer = MultiRoundOptimizer(constraints=self.constraints)
@@ -96,8 +100,9 @@ class OptimizationService:
         """Resolve constraints parameterized by the league ruleset unless custom constraints are set."""
         if self._custom_constraints:
             return self.constraints
-        from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
-        ruleset = get_league_ruleset(league)
+        from euroleague_fantasy_manager.competition.ruleset import resolve_ruleset
+        db_path = getattr(self.team_service, "db_path", None)
+        ruleset = resolve_ruleset(league, db_path=db_path)
         return OptimizationConstraints.from_ruleset(ruleset)
 
     def optimize_intra_round(
@@ -365,11 +370,14 @@ class OptimizationService:
         if not market:
             return []
         try:
+            resolved_league = league or "euroleague"
+            c_cfg = self._resolve_constraints(resolved_league)
             return optimize_initial_team(
                 pool=market,
                 budget_credits=budget_credits,
                 risk_mode=risk_mode,
                 locked_player_ids=locked_player_ids,
+                constraints=c_cfg,
             )
         except ValueError:
             return []
@@ -402,12 +410,15 @@ class OptimizationService:
                 "strategy_description": "Round-1 starting squad optimization under budget & fantasy rules",
             }
 
+        resolved_league = league or "euroleague"
+        c_cfg = self._resolve_constraints(resolved_league)
         try:
             detailed = optimize_initial_team_detailed(
                 pool=market,
                 budget_credits=budget_credits,
                 risk_mode=risk_mode,
                 locked_player_ids=locked_player_ids,
+                constraints=c_cfg,
             )
             contracts = detailed.squad
             obj_name = detailed.objective_name
@@ -425,7 +436,7 @@ class OptimizationService:
                 "strategy_description": "Round-1 starting squad optimization under budget & fantasy rules",
             }
 
-        val = validate_squad_constraints(contracts, budget_tenths=budget_limit_tenths)
+        val = validate_squad_constraints(contracts, budget_tenths=budget_limit_tenths, constraints=c_cfg)
 
         player_views = []
         for c in contracts:

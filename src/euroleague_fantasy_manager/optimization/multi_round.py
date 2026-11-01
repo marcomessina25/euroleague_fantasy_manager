@@ -78,7 +78,11 @@ class MultiRoundOptimizer:
         branching_factor : int, default 4
             Number of top beam states retained at each round transition.
         """
-        self.constraints = constraints or OptimizationConstraints()
+        if constraints is None:
+            from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
+            self.constraints = OptimizationConstraints.from_ruleset(get_league_ruleset())
+        else:
+            self.constraints = constraints
         self.discount_factor = discount_factor
         self.max_trades_per_round = max_trades_per_round
         self.branching_factor = branching_factor

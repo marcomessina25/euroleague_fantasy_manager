@@ -129,7 +129,11 @@ class HistoricalDecisionBacktester:
         risk_mode: RiskMode = RiskMode.EXPECTED,
         risk_lambda: float = 0.15,
     ) -> None:
-        self.constraints = constraints or OptimizationConstraints()
+        if constraints is None:
+            from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
+            self.constraints = OptimizationConstraints.from_ruleset(get_league_ruleset())
+        else:
+            self.constraints = constraints
         self.risk_mode = risk_mode
         self.risk_lambda = risk_lambda
         self.optimizer = FixedSquadLineupOptimizer(

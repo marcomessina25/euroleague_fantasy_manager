@@ -5,11 +5,12 @@ from dataclasses import dataclass
 from itertools import combinations, product
 from typing import Mapping, Sequence
 
-from ..models import Player, Position
+from ..models import Player
 from .candidates import CandidateGenerator
 from .constraints import (
     OptimizationConstraints,
     PlayerProjectionContract,
+    club_key,
     validate_transfers_constraints,
 )
 from .lineup import FixedSquadLineupOptimizer, OptimalLineupDecision
@@ -17,11 +18,7 @@ from .lineup import FixedSquadLineupOptimizer, OptimalLineupDecision
 
 def _club_key(p: PlayerProjectionContract) -> int | str | None:
     """Club identity used by the court-player club quota (mirrors validate_squad_constraints)."""
-    if p.position == Position.HEAD_COACH:
-        return None
-    if p.team_id is not None:
-        return p.team_id
-    return p.team_code or None
+    return club_key(p)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +95,11 @@ class TransferOptimizer:
         min_net_gain_threshold : float, default 0.0
             Minimum net score gain required to justify speculative trades of healthy assets.
         """
-        self.constraints = constraints or OptimizationConstraints()
+        if constraints is None:
+            from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
+            self.constraints = OptimizationConstraints.from_ruleset(get_league_ruleset())
+        else:
+            self.constraints = constraints
         self.lineup_optimizer = lineup_optimizer or FixedSquadLineupOptimizer(
             constraints=self.constraints
         )

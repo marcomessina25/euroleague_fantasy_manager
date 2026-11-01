@@ -16,7 +16,6 @@ from euroleague_fantasy_manager.rules import (
     MAX_TRADES_PER_ROUND,
     SQUAD_QUOTAS,
     SQUAD_SIZE,
-    UNLIMITED_TRADE_ROUNDS,
 )
 from euroleague_fantasy_manager.multi_team.models import (
     PointInTimeTeamState,
@@ -36,6 +35,7 @@ class TeamService:
 
     def __init__(self, store: TeamStore | None = None, db_path: str | Path = "data/euroleague.sqlite3") -> None:
         self.store = store or TeamStore(db_path=db_path)
+        self.db_path = getattr(self.store, "db_path", Path(db_path))
 
     def create_team(
         self,
@@ -486,22 +486,16 @@ class TeamService:
         league: str = "euroleague",
     ) -> None:
         """Enforce the competition-specific max court players per club."""
-        from collections import Counter
-        from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
-        ruleset = get_league_ruleset(league)
-        court_clubs = [
-            u.team_code
-            for u in units
-            if str(u.position).upper() not in ("HC", "HEAD_COACH", "4") and u.team_code
-        ]
-        if court_clubs:
-            club_counts = Counter(court_clubs)
-            if not ruleset.is_club_quota_legal(club_counts):
-                max_allowed = ruleset.max_court_players_per_club
-                violating = [f"{c}: {n}" for c, n in club_counts.items() if n > max_allowed]
-                raise ValueError(
-                    f"Squad violates club quota for {ruleset.name} (max {max_allowed} per club): {', '.join(violating)}"
-                )
+        from euroleague_fantasy_manager.competition.ruleset import resolve_ruleset
+        from euroleague_fantasy_manager.optimization.constraints import club_counts
+        ruleset = resolve_ruleset(league, db_path=self.db_path)
+        counts = club_counts(units, ruleset)
+        if not ruleset.is_club_quota_legal(counts):
+            max_allowed = ruleset.max_court_players_per_club
+            violating = [f"{c}: {n}" for c, n in counts.items() if n > max_allowed]
+            raise ValueError(
+                f"Squad violates club quota for {ruleset.name} (max {max_allowed} per club): {', '.join(violating)}"
+            )
 
     def revert_to_round_start(
         self,
@@ -688,7 +682,9 @@ class TeamService:
         if len(out_ids) != len(in_ids):
             raise ValueError("Number of players sold must match number of players bought.")
 
-        is_unlimited = unlimited or (target_round in UNLIMITED_TRADE_ROUNDS)
+        from euroleague_fantasy_manager.competition.ruleset import is_unlimited_trade_round, resolve_ruleset
+        ruleset = resolve_ruleset(getattr(team, "league", "euroleague"), db_path=self.db_path)
+        is_unlimited = unlimited or is_unlimited_trade_round(target_round, ruleset)
         if not is_unlimited and len(out_ids) > base_transfers_remaining:
             raise ValueError(
                 f"Requested {len(out_ids)} trades, but only {base_transfers_remaining} transfers remaining."

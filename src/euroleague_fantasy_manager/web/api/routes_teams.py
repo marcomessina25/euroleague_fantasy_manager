@@ -122,15 +122,19 @@ def create_team(
             spent_tenths = sum(c.price_tenths for c in contracts)
 
             # Validate squad
+            from ...competition.ruleset import resolve_ruleset
+            from ...optimization.constraints import OptimizationConstraints
+            ruleset = resolve_ruleset(league, db_path=service.db_path)
+            c_cfg = OptimizationConstraints.from_ruleset(ruleset)
             if round_num == 1:
-                val = validate_squad_constraints(contracts, budget_tenths=1000)
+                val = validate_squad_constraints(contracts, budget_tenths=1000, constraints=c_cfg)
                 if not val.is_valid:
                     raise HTTPException(status_code=400, detail=f"Invalid squad: {'; '.join(val.errors)}")
                 if bank_tenths is None:
                     bank_tenths = max(0, 1000 - spent_tenths)
             else:
                 # Mid-season creation: squad value reflects market changes; validate structure & quotas
-                val = validate_squad_constraints(contracts, check_budget=False)
+                val = validate_squad_constraints(contracts, check_budget=False, constraints=c_cfg)
                 if not val.is_valid:
                     raise HTTPException(status_code=400, detail=f"Invalid squad: {'; '.join(val.errors)}")
 

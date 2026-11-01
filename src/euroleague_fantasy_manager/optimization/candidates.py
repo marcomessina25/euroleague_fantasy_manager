@@ -41,7 +41,11 @@ class CandidateGenerator:
         max_candidates_per_pos: int = 15,
         min_probability_play: float = 0.05,
     ) -> None:
-        self.constraints = constraints or OptimizationConstraints()
+        if constraints is None:
+            from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
+            self.constraints = OptimizationConstraints.from_ruleset(get_league_ruleset())
+        else:
+            self.constraints = constraints
         self.max_candidates_per_pos = max_candidates_per_pos
         self.min_probability_play = min_probability_play
 

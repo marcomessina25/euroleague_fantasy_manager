@@ -856,7 +856,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
         players_by_id = {p.id: p for p in players_list}
         moves = parse_trade_specs(args.trade, players_by_id, by_name=args.by_name)
-        report = validate_trades(state, moves, players_by_id, unlimited_window=args.unlimited)
+        from .competition.ruleset import resolve_ruleset
+        ruleset = resolve_ruleset(resolved_league, db_path=args.db)
+        report = validate_trades(state, moves, players_by_id, unlimited_window=args.unlimited, ruleset=ruleset)
         print(json.dumps(asdict(report), indent=2))
         return 0 if report.is_valid else 2
 
@@ -1079,7 +1081,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ewma_alpha=args.alpha,
             )
             squad_contracts, bank_tenths = _resolve_squad(args.squad, contracts)
-            tx_opt = TransferOptimizer()
+            from .competition.ruleset import resolve_ruleset
+            from .optimization.constraints import OptimizationConstraints
+            norm_league = getattr(args, "league", "euroleague")
+            ruleset = resolve_ruleset(norm_league, db_path=args.db)
+            tx_opt = TransferOptimizer(constraints=OptimizationConstraints.from_ruleset(ruleset))
             res = tx_opt.optimize_transfers(
                 current_squad=squad_contracts,
                 market=list(contracts.values()),
@@ -1110,7 +1116,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 proj_by_r[r_num] = list(c_map.values())
 
             initial_contracts, initial_bank = _resolve_squad(args.squad, {p.player_id: p for p in proj_by_r[args.start_round]})
+            from .competition.ruleset import resolve_ruleset
+            from .optimization.constraints import OptimizationConstraints
+            norm_league = getattr(args, "league", "euroleague")
+            ruleset = resolve_ruleset(norm_league, db_path=args.db)
             mr_opt = MultiRoundOptimizer(
+                constraints=OptimizationConstraints.from_ruleset(ruleset),
                 discount_factor=args.discount,
                 max_trades_per_round=args.max_trades,
             )
@@ -1858,10 +1869,14 @@ def _build_cli_roster(
     if missing:
         raise ValueError(f"Player IDs {missing} not in {league.value} pool for round {round_number}.")
     contracts = [p_map[pid] for pid in player_ids]
+    from .competition.ruleset import resolve_ruleset
+    from .optimization.constraints import OptimizationConstraints
+    ruleset = resolve_ruleset(league, db_path=db_path)
+    c_cfg = OptimizationConstraints.from_ruleset(ruleset)
     if round_number == 1:
-        val = validate_squad_constraints(contracts, budget_tenths=1000)
+        val = validate_squad_constraints(contracts, budget_tenths=1000, constraints=c_cfg)
     else:
-        val = validate_squad_constraints(contracts, check_budget=False)
+        val = validate_squad_constraints(contracts, check_budget=False, constraints=c_cfg)
     if not val.is_valid:
         raise ValueError(f"Invalid squad: {'; '.join(val.errors)}")
 

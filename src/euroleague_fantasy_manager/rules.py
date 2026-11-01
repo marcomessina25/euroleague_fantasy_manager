@@ -2,7 +2,7 @@
 
 from collections import Counter
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Any, Iterable
 
 from .models import Player, Position
 
@@ -18,7 +18,6 @@ HEAD_COACH_SIZE = 1
 
 MAX_BUDGET_TENTHS = 1000  # 100.0 Credits
 LATE_REGISTRATION_BONUS_TENTHS_PER_ROUND = 3  # +0.3 Cr per round already played
-MAX_PLAYERS_PER_TEAM = 6
 MAX_TRADES_PER_ROUND = 4
 
 SQUAD_QUOTAS: dict[Position, int] = {
@@ -37,8 +36,6 @@ LEGAL_COURT_FORMATIONS: frozenset[tuple[int, int, int]] = frozenset({
     (3, 1, 1),
 })
 
-# Rounds whose pre-deadline trade window allows unlimited trades (after R6, R13, R18, R23, R28, R34)
-UNLIMITED_TRADE_ROUNDS: frozenset[int] = frozenset({7, 14, 19, 24, 29, 35})
 
 # Classic Mode slot scoring multipliers
 CAPTAIN_MULTIPLIER = 2.0
@@ -48,13 +45,21 @@ HEAD_COACH_MULTIPLIER = 1.0
 BENCH_MULTIPLIER = 0.5
 
 
-def is_unlimited_trade_round(round_number: int | None, unlimited_flag: bool = False) -> bool:
-    """Return True if unlimited trades are allowed for the target round or explicit flag."""
+def is_unlimited_trade_round(
+    round_number: int | None,
+    ruleset: Any = None,
+    unlimited_flag: bool = False,
+) -> bool:
+    """Return True if unlimited trades are allowed for the target round or explicit flag under ruleset."""
     if unlimited_flag:
         return True
     if round_number is None:
         return False
-    return int(round_number) in UNLIMITED_TRADE_ROUNDS or int(round_number) > 38
+    if ruleset is None:
+        from .competition.ruleset import get_league_ruleset
+        ruleset = get_league_ruleset()
+    unlimited_rounds = getattr(ruleset, "unlimited_trade_rounds", frozenset())
+    return int(round_number) in unlimited_rounds or int(round_number) > 38
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,22 +73,30 @@ class ValidationResult:
 
 def validate_squad(
     players: Iterable[Player],
-    budget_tenths: int | None = MAX_BUDGET_TENTHS,
+    ruleset: Any,
+    budget_tenths: int | None = None,
 ) -> ValidationResult:
-    """Validate a complete 11-unit squad (4G, 4F, 2C, 1HC) against Classic Mode constraints."""
+    """Validate a complete 11-unit squad against Classic Mode constraints under the given ruleset."""
+    from .optimization.constraints import club_counts
+
     squad = tuple(players)
     errors: list[str] = []
     ids = [player.id for player in squad]
 
-    if len(squad) != SQUAD_SIZE:
-        errors.append(f"A squad must contain {SQUAD_SIZE} units (10 players + 1 Head Coach); received {len(squad)}.")
+    squad_size = getattr(ruleset, "squad_size", SQUAD_SIZE)
+    if len(squad) != squad_size:
+        errors.append(f"A squad must contain {squad_size} units (10 players + 1 Head Coach); received {len(squad)}.")
     if len(set(ids)) != len(ids):
         errors.append("A squad cannot contain the same player or coach more than once.")
 
+    effective_budget = budget_tenths
+    if effective_budget is None and getattr(ruleset, "budget_credits", None) is not None:
+        effective_budget = int(ruleset.budget_credits * 10)
+
     total_cost = sum(player.price_tenths for player in squad)
-    if budget_tenths is not None and total_cost > budget_tenths:
+    if effective_budget is not None and total_cost > effective_budget:
         errors.append(
-            f"Squad costs {total_cost / 10:.1f} Cr, exceeding the {budget_tenths / 10:.1f} Cr budget."
+            f"Squad costs {total_cost / 10:.1f} Cr, exceeding the {effective_budget / 10:.1f} Cr budget."
         )
 
     positions = Counter(player.position for player in squad)
@@ -93,12 +106,12 @@ def validate_squad(
             label = "head coaches" if position == Position.HEAD_COACH else f"{position.name.lower()}s"
             errors.append(f"Squad requires {required} {label}; received {actual}.")
 
-    # Max 6 players from the same EuroLeague club
-    court_players = [p for p in squad if p.position != Position.HEAD_COACH]
-    teams = Counter(player.team_id for player in court_players)
+    # Club quota
+    max_quota = getattr(ruleset, "max_court_players_per_club", 6)
+    teams = club_counts(squad, ruleset)
     for team_id, count in sorted(teams.items()):
-        if count > MAX_PLAYERS_PER_TEAM:
-            errors.append(f"Team {team_id} has {count} players; maximum is {MAX_PLAYERS_PER_TEAM}.")
+        if count > max_quota:
+            errors.append(f"Team {team_id} has {count} players; maximum is {max_quota}.")
 
     return ValidationResult(tuple(errors))
 

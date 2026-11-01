@@ -10,7 +10,8 @@ from .expected_points import PlayerProjection, project_all_players
 from .fixtures import DATABASE_PATH, DEFAULT_SQUAD_PATH, PROJECT_ROOT, get_current_round
 from .lineup import optimize_court_lineup
 from .models import Player, Position
-from .rules import MAX_PLAYERS_PER_TEAM, MAX_TRADES_PER_ROUND, is_unlimited_trade_round
+from .rules import is_unlimited_trade_round
+from .competition.ruleset import resolve_ruleset
 from .squad_state import CurrentSquadState, load_current_squad
 from .storage import SnapshotStore
 from .transfers import TradeMove, selling_price_tenths, validate_trades
@@ -87,8 +88,9 @@ def suggest_trades(
     eff_league_id = league_id if league_id is not None else getattr(state, "league_id", None)
     target_round = round_number if round_number is not None else (state.round_number or get_current_round(store, league_id=eff_league_id))
 
-    unlimited_active = is_unlimited_trade_round(target_round, unlimited_flag=unlimited_window)
-    max_legal_trades = len(state.player_ids) if unlimited_active else min(MAX_TRADES_PER_ROUND, state.free_trades)
+    ruleset = resolve_ruleset(eff_league_id, db_path=database_path)
+    unlimited_active = is_unlimited_trade_round(target_round, ruleset=ruleset, unlimited_flag=unlimited_window)
+    max_legal_trades = len(state.player_ids) if unlimited_active else min(ruleset.max_trades_per_round, state.free_trades)
     k = max(1, min(int(num_trades), max_legal_trades))
 
     all_players = store.load_latest_players(league_id=eff_league_id)
@@ -189,7 +191,7 @@ def suggest_trades(
             new_bank = current_bank_tenths + sell_val - in_p.price_tenths
             if remaining_moves == 1 and new_bank < 0:
                 continue
-            if in_p.position != Position.HEAD_COACH and team_counts[in_p.team_id] + 1 > MAX_PLAYERS_PER_TEAM:
+            if in_p.position != Position.HEAD_COACH and team_counts[in_p.team_id] + 1 > ruleset.max_court_players_per_club:
                 continue
 
             in_xp = projections[in_p.id].expected_pdk
@@ -253,7 +255,7 @@ def suggest_trades(
     for delta_xp, bank_after, moves, lineup_rec in scored_bundles:
         if len(suggestions) >= top_k:
             break
-        val_report = validate_trades(state, moves, players_by_id, unlimited_window=unlimited_active)
+        val_report = validate_trades(state, moves, players_by_id, unlimited_window=unlimited_active, ruleset=ruleset)
         if not val_report.is_valid:
             continue
 

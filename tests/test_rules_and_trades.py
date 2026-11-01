@@ -3,6 +3,7 @@
 import pytest
 
 from euroleague_fantasy_manager.models import Player, Position
+from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
 from euroleague_fantasy_manager.rules import (
     LEGAL_COURT_FORMATIONS,
     validate_court_lineup,
@@ -52,7 +53,7 @@ def make_valid_squad(pool: dict[int, Player]) -> list[Player]:
 def test_validate_squad_legal_11_units() -> None:
     pool = make_sample_pool()
     squad = make_valid_squad(pool)
-    result = validate_squad(squad)
+    result = validate_squad(squad, get_league_ruleset())
     assert result.is_valid, f"Expected valid squad, got errors: {result.errors}"
 
 
@@ -60,13 +61,13 @@ def test_validate_squad_rejects_budget_and_position_violations() -> None:
     pool = make_sample_pool()
     squad = make_valid_squad(pool)
     # Exceed budget (100.0 Cr = 1000 tenths; squad costs 1000 tenths, test against 950 tenths)
-    over_budget = validate_squad(squad, budget_tenths=950)
+    over_budget = validate_squad(squad, get_league_ruleset(), budget_tenths=950)
     assert not over_budget.is_valid
     assert any("exceeding" in err for err in over_budget.errors)
 
     # Replace Head Coach (401) with a 5th Guard (105)
     bad_positions = [p for p in squad if p.id != 401] + [pool[105]]
-    pos_res = validate_squad(bad_positions, budget_tenths=1200)
+    pos_res = validate_squad(bad_positions, get_league_ruleset(), budget_tenths=1200)
     assert not pos_res.is_valid
     assert any("guards" in err for err in pos_res.errors)
     assert any("head coaches" in err for err in pos_res.errors)

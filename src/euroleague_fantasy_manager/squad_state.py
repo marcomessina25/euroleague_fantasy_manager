@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from .rules import EUROLEAGUE_LEAGUE_ID, MAX_TRADES_PER_ROUND, SQUAD_SIZE, UNLIMITED_TRADE_ROUNDS
+from .rules import EUROLEAGUE_LEAGUE_ID, MAX_TRADES_PER_ROUND, SQUAD_SIZE
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,8 +45,10 @@ def load_current_squad(path: Path) -> CurrentSquadState:
         raise ValueError("Free trades cannot be negative.")
 
     raw_round = raw.get("round_number") or raw.get("gameweek") or 1
-    windows = tuple(int(w) for w in raw.get("unlimited_windows_remaining", sorted(UNLIMITED_TRADE_ROUNDS)))
     league_id = int(raw.get("league_id", EUROLEAGUE_LEAGUE_ID))
+    from .competition.ruleset import resolve_ruleset
+    ruleset = resolve_ruleset(league_id)
+    windows = tuple(int(w) for w in raw.get("unlimited_windows_remaining", sorted(ruleset.unlimited_trade_rounds)))
 
     return CurrentSquadState(
         player_ids=player_ids,

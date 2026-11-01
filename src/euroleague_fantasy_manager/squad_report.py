@@ -6,7 +6,8 @@ from typing import Any
 
 from .fixtures import DATABASE_PATH, DEFAULT_SQUAD_PATH, PROJECT_ROOT, get_current_round
 from .models import Player, Position
-from .rules import MAX_PLAYERS_PER_TEAM, SQUAD_QUOTAS, UNLIMITED_TRADE_ROUNDS, validate_squad
+from .rules import SQUAD_QUOTAS, validate_squad
+from .competition.ruleset import resolve_ruleset
 from .squad_state import load_current_squad
 from .storage import SnapshotStore
 from .transfers import selling_price_tenths
@@ -138,11 +139,12 @@ def generate_squad_report(
             }
         )
 
-    validation = validate_squad(squad_models, budget_tenths=None)
+    ruleset = resolve_ruleset(eff_league_id, db_path=database_path)
+    validation = validate_squad(squad_models, ruleset=ruleset, budget_tenths=None)
     total_capital_gain_tenths = total_selling_tenths - total_purchase_tenths
     total_team_value_tenths = state.bank_tenths + total_selling_tenths
     active_round = round_number if round_number is not None else (state.round_number or get_current_round(store))
-    next_windows = [w for w in sorted(UNLIMITED_TRADE_ROUNDS) if w >= active_round]
+    next_windows = [w for w in sorted(ruleset.unlimited_trade_rounds) if w >= active_round]
 
     report: dict[str, Any] = {
         "season": state.season,
@@ -175,7 +177,7 @@ def generate_squad_report(
             "positions": position_counts,
             "required_positions": {k.short_code: v for k, v in SQUAD_QUOTAS.items()},
             "teams": team_counts,
-            "max_players_per_team": MAX_PLAYERS_PER_TEAM,
+            "max_players_per_team": ruleset.max_court_players_per_club,
         },
         "units": units_detail,
     }

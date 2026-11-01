@@ -96,7 +96,11 @@ def optimize_initial_team_detailed(
     constraints: OptimizationConstraints | None = None,
 ) -> InitialTeamOptimizationResult:
     """Detailed version of optimize_initial_team returning metadata and objective value."""
-    cfg = constraints or OptimizationConstraints()
+    if constraints is None:
+        from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
+        cfg = OptimizationConstraints.from_ruleset(get_league_ruleset())
+    else:
+        cfg = constraints
     budget_limit_tenths = int(round(budget_credits * 10))
 
     if not pool:

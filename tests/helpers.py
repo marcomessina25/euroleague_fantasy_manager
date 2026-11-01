@@ -6,6 +6,7 @@ from collections import Counter
 from itertools import combinations
 from typing import Any, Sequence
 
+from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.optimization.constraints import (
     OptimizationConstraints,
@@ -135,7 +136,7 @@ def brute_force_transfers(
     penalty: float = 0.0,
 ) -> TransferRecommendation | None:
     """Enumerate every legal transfer package on small markets and return the best by net value."""
-    constraints = ruleset if isinstance(ruleset, OptimizationConstraints) else OptimizationConstraints()
+    constraints = ruleset if isinstance(ruleset, OptimizationConstraints) else OptimizationConstraints.from_ruleset(ruleset or get_league_ruleset())
     lineup_opt = FixedSquadLineupOptimizer(constraints=constraints)
     base_lineup = lineup_opt.optimize(list(squad))
     base_score = base_lineup.objective_value

@@ -34,7 +34,6 @@ from euroleague_fantasy_manager.optimization.objective import LineupScoreBreakdo
 from euroleague_fantasy_manager.optimization.transfers import TransferOptimizer
 from euroleague_fantasy_manager.rules import (
     MAX_TRADES_PER_ROUND,
-    UNLIMITED_TRADE_ROUNDS,
 )
 
 
@@ -300,7 +299,11 @@ class SequentialDecisionSimulator:
     """
 
     def __init__(self, constraints: OptimizationConstraints | None = None) -> None:
-        self.constraints = constraints or OptimizationConstraints()
+        if constraints is None:
+            from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
+            self.constraints = OptimizationConstraints.from_ruleset(get_league_ruleset())
+        else:
+            self.constraints = constraints
         self.lineup_optimizer = FixedSquadLineupOptimizer(constraints=self.constraints)
         self.sub_optimizer = IntraRoundSubstitutionOptimizer()
         self.transfer_optimizer = TransferOptimizer(constraints=self.constraints)
@@ -387,12 +390,20 @@ class SequentialDecisionSimulator:
         self,
         contracts: Mapping[int, PlayerProjectionContract],
     ) -> list[PlayerProjectionContract]:
-        """Select a legal reference squad (4G, 4F, 2C, 1HC) by highest expectation under budget."""
-        guards = sorted([c for c in contracts.values() if c.position == Position.GUARD], key=lambda x: -x.expected_fp)[:4]
-        forwards = sorted([c for c in contracts.values() if c.position == Position.FORWARD], key=lambda x: -x.expected_fp)[:4]
-        centers = sorted([c for c in contracts.values() if c.position == Position.CENTER], key=lambda x: -x.expected_fp)[:2]
-        coaches = sorted([c for c in contracts.values() if c.position == Position.HEAD_COACH], key=lambda x: -x.expected_fp)[:1]
-        return guards + forwards + centers + coaches
+        """Select a legal reference squad (4G, 4F, 2C, 1HC) by highest expectation under budget and rules."""
+        from .initial_team import optimize_initial_team
+        try:
+            return optimize_initial_team(
+                pool=list(contracts.values()),
+                budget_credits=(self.constraints.budget_tenths or 1000) / 10.0,
+                constraints=self.constraints,
+            )
+        except Exception:
+            guards = sorted([c for c in contracts.values() if c.position == Position.GUARD], key=lambda x: -x.expected_fp)[:4]
+            forwards = sorted([c for c in contracts.values() if c.position == Position.FORWARD], key=lambda x: -x.expected_fp)[:4]
+            centers = sorted([c for c in contracts.values() if c.position == Position.CENTER], key=lambda x: -x.expected_fp)[:2]
+            coaches = sorted([c for c in contracts.values() if c.position == Position.HEAD_COACH], key=lambda x: -x.expected_fp)[:1]
+            return guards + forwards + centers + coaches
 
     def _optimize_transfers(
         self,
@@ -404,8 +415,8 @@ class SequentialDecisionSimulator:
         is_oracle: bool = False,
     ) -> tuple[list[PlayerProjectionContract], int, list[tuple[int, int]], float]:
         """Simulate between-round transfers."""
-        is_unlimited = round_number in UNLIMITED_TRADE_ROUNDS
-        allowed_trades = 11 if is_unlimited else min(max_transfers, MAX_TRADES_PER_ROUND)
+        is_unlimited = round_number in self.constraints.unlimited_trade_rounds
+        allowed_trades = self.constraints.squad_size if is_unlimited else min(max_transfers, self.constraints.max_transfers)
 
         # Map current squad to updated round contracts
         mapped_squad: list[PlayerProjectionContract] = []

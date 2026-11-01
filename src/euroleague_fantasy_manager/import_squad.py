@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from .competition.ruleset import League, get_league_ruleset
-from .rules import EUROLEAGUE_LEAGUE_ID, MAX_BUDGET_TENTHS, MAX_TRADES_PER_ROUND, UNLIMITED_TRADE_ROUNDS
+from .rules import EUROLEAGUE_LEAGUE_ID, MAX_BUDGET_TENTHS, MAX_TRADES_PER_ROUND
+from .competition.ruleset import resolve_ruleset
 from . import paths
 from .storage import SnapshotStore
 
@@ -63,7 +64,7 @@ def import_squad_from_file(
             "purchase_prices_tenths": {},
             "bank_tenths": 0,
             "free_trades": MAX_TRADES_PER_ROUND,
-            "unlimited_windows_remaining": sorted(UNLIMITED_TRADE_ROUNDS),
+            "unlimited_windows_remaining": sorted(resolve_ruleset(league_id).unlimited_trade_rounds),
         }
 
     lines = players_path.read_text(encoding="utf-8").splitlines()
