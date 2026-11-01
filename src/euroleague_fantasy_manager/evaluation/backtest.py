@@ -406,6 +406,7 @@ def run_walk_forward_evaluation(
     history_preds: dict[str, list[float]] = {}
     history_acts: dict[str, list[float]] = {}
     history_pos: dict[str, list[str]] = {}
+    history_rounds: dict[str, list[int]] = {}
 
     total_rounds_evaluated: list[int] = []
 
@@ -448,6 +449,7 @@ def run_walk_forward_evaluation(
                             past_actuals=history_acts.get(source_key, []),
                             positions=history_pos.get(source_key, []),
                             method=calibration_method,
+                            rounds=history_rounds.get(source_key, []),
                         )
                         calibrators[m] = calibrator
                     elif m == "xpdk_calibrated_v03":
@@ -457,6 +459,7 @@ def run_walk_forward_evaluation(
                             past_actuals=history_acts.get(source_key, []),
                             positions=history_pos.get(source_key, []),
                             method=calibration_method,
+                            rounds=history_rounds.get(source_key, []),
                         )
                         calibrators[m] = calibrator
 

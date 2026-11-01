@@ -92,14 +92,14 @@ def test_cli_json_and_exit_codes(tmp_path: Path, capsys: pytest.CaptureFixture[s
     assert ret == 0
     captured = capsys.readouterr()
     rep_data = json.loads(captured.out)
-    assert "snapshot_id" in rep_data or "league_id" in rep_data or "player_count" in rep_data
+    assert {"snapshot_id", "league_id", "round_number", "player_count", "fixture_count"}.issubset(rep_data.keys())
 
     # 6. Evaluation inspect with --json
     ret = main(["--db", str(db_path), "evaluation", "inspect", "--season", "2025", "--round", "1", "--json"])
     assert ret == 0
     captured = capsys.readouterr()
     eval_data = json.loads(captured.out)
-    assert "players" in eval_data or "features" in eval_data or "season" in eval_data
+    assert {"dataset_version", "season", "round", "decision_cutoff", "player_count", "players"}.issubset(eval_data.keys())
 
 
 def test_read_only_safety_guarantee(tmp_path: Path) -> None:

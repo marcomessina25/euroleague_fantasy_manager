@@ -129,36 +129,50 @@ def test_unavailable_data_fallback_safety(tmp_path: Path, sample_feature_row: Po
 
 
 def test_temporal_calibration_protocol() -> None:
-    """Verify availability model uses chronological temporal splits during calibration."""
+    """Verify availability model and calibrators strictly use past rounds < evaluated_round."""
     import numpy as np
+    from euroleague_fantasy_manager.prediction.calibration import fit_out_of_sample_calibrator
 
+    # 1. Availability temporal split
     model = LearnedAvailabilityModel(random_state=42)
     rng = np.random.RandomState(42)
     X = rng.uniform(0.0, 1.0, size=(60, len(LEARNED_FEATURE_NAMES)))
     y = np.ones(60, dtype=int)
     y[:10] = 0
     y[30:35] = 0
-
     model.fit(X, y, temporal_split=True)
     assert model.is_fitted
 
+    # 2. Assert every calibration-fit row has round < evaluated_round
+    calibrator = fit_out_of_sample_calibrator(
+        past_predictions=[12.0, 15.0, 18.0],
+        past_actuals=[10.0, 16.0, 17.0],
+        rounds=[1, 2, 2],
+    )
+    evaluated_round = 3
+    assert len(calibrator.fit_rounds) == 3
+    assert all(r < evaluated_round for r in calibrator.fit_rounds)
+
 
 def test_explainability_counterfactual_bounds(sample_feature_row: PointInTimeFeatureRow) -> None:
-    """Verify explanation outputs are deterministically bounded counterfactuals."""
+    """Verify explanation outputs are deterministically bounded counterfactuals with monotone properties."""
     import numpy as np
 
+    rng = np.random.RandomState(42)
     model = LearnedMinutesModel(random_state=42)
-    X = np.random.uniform(0.0, 1.0, size=(50, len(LEARNED_FEATURE_NAMES)))
-    y = np.random.uniform(12.0, 32.0, size=50)
+    X = rng.uniform(0.0, 1.0, size=(50, len(LEARNED_FEATURE_NAMES)))
+    y = rng.uniform(12.0, 32.0, size=50)
     model.fit(X, y)
 
     expl = model.explain(sample_feature_row)
-    assert isinstance(expl["base_minutes"], float)
-    assert isinstance(expl["home_adj"], float)
-    assert isinstance(expl["drw_adj"], float)
-    assert isinstance(expl["spread_adj"], float)
-    assert isinstance(expl["final_minutes"], float)
+    assert 0.0 <= expl["final_minutes"] <= 40.0
     assert "counterfactual" in LearnedMinutesModel.explain.__doc__.lower()
+
+    # Monotone check: home game gives non-negative home adjustment
+    from dataclasses import replace
+    home_row = replace(sample_feature_row, home=True)
+    away_row = replace(sample_feature_row, home=False)
+    assert model.explain(home_row)["home_adj"] >= model.explain(away_row)["home_adj"]
 
 
 # ============================================================================

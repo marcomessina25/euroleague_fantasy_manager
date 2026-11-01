@@ -330,17 +330,18 @@ def test_w1_temporal_calibration_protocol() -> None:
 
 
 def test_w1_explainability_counterfactual_bounds(sample_feature_row: PointInTimeFeatureRow) -> None:
-    """Verify explanation outputs are deterministically bounded counterfactuals."""
+    """Verify explanation outputs are deterministically bounded counterfactuals with monotone properties."""
+    rng = np.random.RandomState(42)
     model = LearnedMinutesModel(random_state=42)
-    X = np.random.uniform(0.0, 1.0, size=(50, len(LEARNED_FEATURE_NAMES)))
-    y = np.random.uniform(12.0, 32.0, size=50)
+    X = rng.uniform(0.0, 1.0, size=(50, len(LEARNED_FEATURE_NAMES)))
+    y = rng.uniform(12.0, 32.0, size=50)
     model.fit(X, y)
 
     expl = model.explain(sample_feature_row)
-    assert isinstance(expl["base_minutes"], float)
-    assert isinstance(expl["home_adj"], float)
-    assert isinstance(expl["drw_adj"], float)
-    assert isinstance(expl["spread_adj"], float)
-    assert isinstance(expl["final_minutes"], float)
-    # Explanation docstring must clarify counterfactual nature
+    assert 0.0 <= expl["final_minutes"] <= 40.0
     assert "counterfactual" in LearnedMinutesModel.explain.__doc__.lower()
+
+    from dataclasses import replace
+    home_row = replace(sample_feature_row, home=True)
+    away_row = replace(sample_feature_row, home=False)
+    assert model.explain(home_row)["home_adj"] >= model.explain(away_row)["home_adj"]
