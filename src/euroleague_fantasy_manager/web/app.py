@@ -6,9 +6,15 @@ import logging
 from pathlib import Path
 import webbrowser
 
+from urllib.parse import urlparse
+
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.responses import Response
+
+from euroleague_fantasy_manager import __version__
 
 from euroleague_fantasy_manager import paths
 from euroleague_fantasy_manager.multi_team.store import TeamStore
@@ -33,8 +39,36 @@ def create_app(db_path: str | Path = "data/euroleague.sqlite3") -> FastAPI:
     app = FastAPI(
         title="EuroLeague Fantasy Manager Workstation",
         description="Local-first decision-support and multi-team management workstation.",
-        version="1.0.1",
+        version=__version__,
     )
+
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=["127.0.0.1", "localhost", "[::1]", "testserver"],
+    )
+
+    @app.middleware("http")
+    async def same_origin_json_only(request, call_next):
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+            origin = request.headers.get("origin")
+            if origin:
+                parsed = urlparse(origin)
+                if parsed.hostname not in {"127.0.0.1", "localhost", "::1", "testserver"}:
+                    return Response("Cross-origin mutation forbidden", status_code=403)
+            # Require JSON content type on mutations with body
+            ct = request.headers.get("content-type", "")
+            if request.headers.get("content-length") not in {None, "0"}:
+                if not ct.startswith("application/json") and not ct.startswith("multipart/form-data"):
+                    return Response("Content-Type must be application/json", status_code=415)
+        response = await call_next(request)
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'",
+        )
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        return response
 
     team_store = TeamStore(db_path=db_path)
     team_service = TeamService(store=team_store)
@@ -75,6 +109,10 @@ def create_app(db_path: str | Path = "data/euroleague.sqlite3") -> FastAPI:
 
     # Initialize default team if none exist
     _ensure_initial_team(team_service)
+
+    @app.get("/api/version")
+    def get_version() -> dict[str, str]:
+        return {"version": __version__}
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
@@ -124,6 +162,8 @@ def run_server(
     db_path: str | Path = "data/euroleague.sqlite3",
 ) -> None:
     """Run local uvicorn development server."""
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        raise ValueError(f"Binding to external host '{host}' is forbidden for local workstation security.")
     import uvicorn
 
     app = create_app(db_path=db_path)

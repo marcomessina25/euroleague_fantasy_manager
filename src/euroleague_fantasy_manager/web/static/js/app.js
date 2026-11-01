@@ -44,7 +44,21 @@ let state = {
 };
 
 // Initialize
+async function loadVersion() {
+  try {
+    const res = await fetch("/api/version");
+    if (res.ok) {
+      const data = await res.json();
+      const el = document.querySelector(".badge-version");
+      if (el && data.version) el.textContent = `v${data.version}`;
+    }
+  } catch (e) {
+    console.warn("Failed to load version", e);
+  }
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
+  loadVersion();
   captureIntelligenceDefaults();
   initNav();
   await loadTeams();
