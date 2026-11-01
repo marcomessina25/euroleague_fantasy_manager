@@ -67,6 +67,25 @@ class Position(IntEnum):
         raise ValueError(f"Unrecognized EuroLeague Fantasy position: {value!r}")
 
 
+class UnknownPlayerError(ValueError):
+    """Raised when a player ID cannot be resolved in snapshots or market data."""
+
+    def __init__(self, player_id: int, message: str | None = None) -> None:
+        self.player_id = player_id
+        super().__init__(message or f"Player {player_id} not found in database snapshot.")
+
+
+def normalize_position(raw: object) -> Position:
+    """Normalize a raw position value (int, str, dict, or Position) to a Position enum.
+
+    Raises ValueError on unknown or missing values.
+    """
+    if raw is None:
+        raise ValueError("Position cannot be None")
+    return Position.from_raw(raw)
+
+
+
 @dataclass(frozen=True, slots=True)
 class Player:
     id: int

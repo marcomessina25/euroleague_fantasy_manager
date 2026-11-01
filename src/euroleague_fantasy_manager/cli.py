@@ -1460,15 +1460,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 norm_league = League.from_str(target_team.league)
                 pids = _resolve_players_file_ids(args.file, args.db, norm_league)
                 units = _build_cli_roster(args.db, ts, target_team.season, args.round, norm_league, pids)
+                bank_t = int(round(args.credits * 10))
+                ts.import_squad(
+                    team_id=target_id,
+                    round_number=args.round,
+                    bank_tenths=bank_t,
+                    roster_units=units,
+                )
+                print(f"Successfully imported {len(units)} units into team '{target_id}' for round {args.round} (Bank: {args.credits:.1f} cr).")
+                return 0
             except ValueError as e:
                 print(f"Error: {e}")
                 return 1
-
-            bank_t = int(round(args.credits * 10))
-            ts.update_team(target_id, round_number=args.round, bank_tenths=bank_t)
-            ts.set_squad(target_id, round_number=args.round, roster_units=units, validate=True, advance_team_round=True)
-            print(f"Successfully imported {len(units)} units into team '{target_id}' for round {args.round} (Bank: {args.credits:.1f} cr).")
-            return 0
 
         if args.team_command == "show":
             target_id = args.id

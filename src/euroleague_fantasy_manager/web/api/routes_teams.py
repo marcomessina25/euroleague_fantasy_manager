@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Any
+from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from euroleague_fantasy_manager.competition.ruleset import League
 from euroleague_fantasy_manager.multi_team.store import ConcurrentModificationError
@@ -44,14 +44,28 @@ class CreateTeamRequest(BaseModel):
     recommended_player_ids: list[int] = Field(default_factory=list)
 
 
+class TeamSettingsUpdate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    risk_mode: Literal["expected", "conservative", "aggressive"] | None = None
+    risk_lambda: float | None = None
+    option_value_mode: str | None = None
+    objective: str | None = None
+    custom_weights: dict[str, float] | None = None
+
+
 class UpdateTeamRequest(BaseModel):
-    name: str | None = None
-    round_number: int | None = None
-    turn_number: int | None = None
-    bank_tenths: int | None = None
-    transfers_remaining: int | None = None
-    settings: dict[str, Any] | None = None
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = Field(None, min_length=1, max_length=32)
+    round_number: int | None = Field(None, ge=1, le=40)
+    transfers_remaining: int | None = Field(None, ge=0, le=40)
+    turn_number: int | None = Field(None, ge=1)
+    settings: TeamSettingsUpdate | None = None
     updated_at: str | None = None
+
+
+class AdjustBankRequest(BaseModel):
+    delta_tenths: int
+    reason: str = "manual adjustment" 
 
 
 class UpdateLineupRequest(BaseModel):
@@ -146,8 +160,9 @@ def create_team(
             starter_set = set(lineup.starter_ids)
             bench_set = set(lineup.bench_ids)
 
+            from euroleague_fantasy_manager.models import normalize_position
             for c in contracts:
-                pos_str = c.position.name if hasattr(c.position, "name") else str(c.position)
+                pos_str = normalize_position(c.position).short_code
                 pid = c.player_id
                 squad_units.append(
                     TeamRosterUnit(
@@ -228,35 +243,45 @@ def get_team(team_id: str, service: TeamService = Depends(get_team_service)) -> 
         raise HTTPException(status_code=404, detail=f"Team '{team_id}' not found.")
 
 
+@router.post("/{team_id}/adjust-bank")
+def adjust_bank(
+    team_id: str,
+    req: AdjustBankRequest,
+    service: TeamService = Depends(get_team_service),
+    decision_service: DecisionService = Depends(get_decision_service),
+) -> dict[str, Any]:
+    try:
+        team = service.adjust_bank(
+            team_id=team_id,
+            delta_tenths=req.delta_tenths,
+            reason=req.reason,
+            audit=AuditIntent(decision_service=decision_service, notes=req.reason),
+        )
+        return team.to_dict()
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Team '{team_id}' not found.")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.put("/{team_id}")
 @router.patch("/{team_id}")
 def update_team(
     team_id: str,
     req: UpdateTeamRequest,
     service: TeamService = Depends(get_team_service),
-    decision_service: DecisionService = Depends(get_decision_service),
 ) -> dict[str, Any]:
     try:
-        existing = service.get_team(team_id)
-        if req.bank_tenths is not None and req.bank_tenths != existing.bank_tenths:
-            delta = req.bank_tenths - existing.bank_tenths
-            service.adjust_bank(
-                team_id=team_id,
-                delta_tenths=delta,
-                reason="Web API manual bank adjustment",
-                audit=AuditIntent(decision_service=decision_service, notes="Web API manual bank adjustment"),
-            )
-            # Fetch refreshed team
-            existing = service.get_team(team_id)
-
+        settings_dict = None
+        if req.settings is not None:
+            settings_dict = {k: v for k, v in req.settings.model_dump().items() if v is not None}
         team = service.update_team(
             team_id=team_id,
             name=req.name,
             round_number=req.round_number,
             turn_number=req.turn_number,
-            bank_tenths=existing.bank_tenths,
             transfers_remaining=req.transfers_remaining,
-            settings=req.settings,
+            settings=settings_dict,
             updated_at=req.updated_at,
         )
         return team.to_dict()

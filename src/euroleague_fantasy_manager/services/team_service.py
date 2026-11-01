@@ -76,7 +76,7 @@ class TeamService:
             parsed_settings = TeamSettings()
 
         if squad:
-            self._validate_club_quota(squad, league=league)
+            self._validate_roster(squad, league=league)
 
         team = Team(
             team_id=team_id,
@@ -289,8 +289,48 @@ class TeamService:
             team_id=team_id,
             round_number=team.round_number,
             roster_units=squad,
-            validate=False,
+            validate=True,
         )
+
+    def import_squad(
+        self,
+        team_id: str,
+        round_number: int,
+        bank_tenths: int,
+        roster_units: Sequence[TeamRosterUnit],
+        season: str | None = None,
+    ) -> Team:
+        """Import an 11-unit squad atomically after full validation."""
+        if round_number < 1:
+            raise ValueError(f"--round must be at least 1; got {round_number}.")
+        if bank_tenths < 0:
+            raise ValueError(f"Bank credits cannot be negative; got {bank_tenths}.")
+
+        team = self.get_team(team_id)
+        self._validate_roster(roster_units, league=team.league)
+
+        from euroleague_fantasy_manager.competition.ruleset import resolve_ruleset
+        ruleset = resolve_ruleset(team.league, db_path=self.db_path)
+
+        with self.store.transaction() as c:
+            self.store.save_squad(team_id, round_number, roster_units, conn=c)
+            self.store.save_round_checkpoint(
+                team_id=team_id,
+                round_number=round_number,
+                season=season or team.season,
+                bank_tenths=bank_tenths,
+                transfers_remaining=ruleset.max_trades_per_round,
+                squad=roster_units,
+                overwrite=True,
+                conn=c,
+            )
+            if round_number >= team.round_number:
+                team.round_number = round_number
+            team.bank_tenths = bank_tenths
+            team.squad = list(roster_units)
+            team.transfers_remaining = ruleset.max_trades_per_round
+            team = self.store.update_team(team, conn=c)
+        return team
 
     def update_lineup(
         self,
@@ -576,20 +616,15 @@ class TeamService:
                 f"Roster must have exactly {SQUAD_SIZE} units, got {len(units)}."
             )
 
+        from euroleague_fantasy_manager.models import normalize_position
         counts = {"G": 0, "F": 0, "C": 0, "HC": 0}
         for u in units:
-            raw = str(u.position).upper()
-            if "GUARD" in raw or raw == "G" or raw == "1":
-                pos = "G"
-            elif "FORWARD" in raw or raw == "F" or raw == "2":
-                pos = "F"
-            elif "CENTER" in raw or raw == "C" or raw == "3":
-                pos = "C"
-            elif "COACH" in raw or raw == "HC" or raw == "4":
-                pos = "HC"
-            else:
-                pos = "G"
-            counts[pos] += 1
+            if not getattr(u, "team_code", None) or not str(u.team_code).strip():
+                raise ValueError(
+                    f"Roster unit {getattr(u, 'player_id', getattr(u, 'name', 'unknown'))} has an empty team_code."
+                )
+            pos_enum = normalize_position(u.position)
+            counts[pos_enum.short_code] += 1
 
         for pos, req in SQUAD_QUOTAS.items():
             key = pos.short_code if hasattr(pos, "short_code") else str(pos)
@@ -607,6 +642,12 @@ class TeamService:
         league: str = "euroleague",
     ) -> None:
         """Enforce the competition-specific max court players per club."""
+        for u in units:
+            tc = getattr(u, "team_code", None)
+            if not tc or not str(tc).strip():
+                raise ValueError(
+                    f"Roster unit {getattr(u, 'player_id', getattr(u, 'name', 'unknown'))} has an empty team_code."
+                )
         from euroleague_fantasy_manager.competition.ruleset import resolve_ruleset
         from euroleague_fantasy_manager.optimization.constraints import club_counts
         ruleset = resolve_ruleset(league, db_path=self.db_path)
@@ -1135,40 +1176,47 @@ class TeamService:
         season: str,
         league: str = "euroleague",
     ) -> PlayerProjectionContract:
-        """Resolve a minimal projection contract from database snapshots or defaults."""
-        try:
-            from euroleague_fantasy_manager.storage import SnapshotStore
-            snap_store = SnapshotStore(self.store.db_path)
-            snap = snap_store.get_snapshot_by_round(season, round_number, league=league)
-            if snap:
-                players = snap_store.load_players_for_snapshot(snap["snapshot_id"])
-                p_row = next((p for p in players if p["player_id"] == player_id), None)
-                if p_row:
-                    pos_str = str(p_row.get("position", "G")).upper()
-                    if "COACH" in pos_str or pos_str == "HC":
-                        pos = Position.HEAD_COACH
-                    elif "C" in pos_str:
-                        pos = Position.CENTER
-                    elif "F" in pos_str:
-                        pos = Position.FORWARD
-                    else:
-                        pos = Position.GUARD
-                    return PlayerProjectionContract(
-                        player_id=player_id,
-                        player_name=p_row.get("name") or f"Player {player_id}",
-                        position=pos,
-                        team_code=p_row.get("team_code") or "",
-                        price_tenths=int(p_row.get("price_tenths", 100)),
-                        turn_number=int(p_row.get("turn_number", 1)),
-                    )
-        except Exception:
-            pass
+        """Resolve a minimal projection contract from database snapshots.
 
-        return PlayerProjectionContract(
-            player_id=player_id,
-            player_name=f"Player {player_id}",
-            position=Position.GUARD,
-            team_code="",
-            price_tenths=100,
-            turn_number=1,
+        Raises UnknownPlayerError if the player cannot be resolved.
+        """
+        from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset, League
+        from euroleague_fantasy_manager.models import normalize_position, UnknownPlayerError
+        from euroleague_fantasy_manager.storage import SnapshotStore
+
+        db_path = getattr(self.store, "db_path", None)
+        if db_path is None:
+            raise UnknownPlayerError(player_id, f"No snapshot database available to resolve player {player_id}.")
+
+        snap_store = SnapshotStore(db_path)
+        ruleset = get_league_ruleset(League.from_str(league))
+        snap = snap_store.get_snapshot_by_round(
+            round_number=round_number,
+            season_code=season,
+            league_id=ruleset.league_id,
+        )
+        if snap is None:
+            snap = snap_store.get_snapshot_by_round(
+                round_number=round_number,
+                league_id=ruleset.league_id,
+            ) or snap_store.get_latest_summary(league_id=ruleset.league_id)
+
+        if snap is not None:
+            players = snap_store.load_players_for_snapshot(snap.snapshot_id)
+            p_row = next((p for p in players if p.id == player_id), None)
+            if p_row is not None:
+                pos = normalize_position(p_row.position)
+                return PlayerProjectionContract(
+                    player_id=player_id,
+                    player_name=p_row.name or f"Player {player_id}",
+                    position=pos,
+                    team_id=p_row.team_id,
+                    team_code=p_row.team_code or "",
+                    price_tenths=int(p_row.price_tenths),
+                    turn_number=int(p_row.turn_number),
+                )
+
+        raise UnknownPlayerError(
+            player_id,
+            f"Player {player_id} not found in database snapshot for round {round_number}.",
         )

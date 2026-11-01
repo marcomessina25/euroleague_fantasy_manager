@@ -907,12 +907,12 @@ def test_p2_4_adjust_bank_atomic_with_checkpoint_and_audit(tmp_path: Path) -> No
     assert len(decisions) >= 1
     assert "Bonus credits" in decisions[-1].notes
 
-    # 2. Test via Web API PATCH /api/teams/{id}
+    # 2. Test via Web API POST /api/teams/{id}/adjust-bank (WEB-6: bank_tenths removed from PATCH)
     app = create_app(db_path=str(db_file))
     client = TestClient(app)
-    res_patch = client.patch(
-        f"/api/teams/{team.team_id}",
-        json={"bank_tenths": 260},
+    res_patch = client.post(
+        f"/api/teams/{team.team_id}/adjust-bank",
+        json={"delta_tenths": 60, "reason": "Web API adjust bank"},
     )
     assert res_patch.status_code == 200
     assert res_patch.json()["bank_tenths"] == 260
@@ -1097,4 +1097,135 @@ def test_p2_5_roll_forward_and_reconstruction_never_leave_gaps(tmp_path: Path) -
     assert 151 in live_pids
     assert 100 not in live_pids
     assert 101 not in live_pids
+def test_p2_6_validation_and_unified_position_normalizer(tmp_path: Path) -> None:
+    """VAL-1, VAL-2, DATA-9, CLI-3, WEB-6: unified position normaliser and strict validation."""
+    from euroleague_fantasy_manager.models import Position, UnknownPlayerError, normalize_position
+    from euroleague_fantasy_manager.multi_team.store import TeamStore
+    from euroleague_fantasy_manager.services.team_service import TeamService
+    from euroleague_fantasy_manager.web.app import create_app
+    from fastapi.testclient import TestClient
+
+    # 1. normalize_position
+    assert normalize_position("G") == Position.GUARD
+    assert normalize_position("guard") == Position.GUARD
+    assert normalize_position(1) == Position.GUARD
+    assert normalize_position("F") == Position.FORWARD
+    assert normalize_position("forward") == Position.FORWARD
+    assert normalize_position(2) == Position.FORWARD
+    assert normalize_position("C") == Position.CENTER
+    assert normalize_position("center") == Position.CENTER
+    assert normalize_position(3) == Position.CENTER
+    assert normalize_position("HC") == Position.HEAD_COACH
+    assert normalize_position("coach") == Position.HEAD_COACH
+    assert normalize_position(4) == Position.HEAD_COACH
+
+    for bad_pos in ["INVALID", "Point Guard", "PG", 999, None, ""]:
+        with pytest.raises(ValueError):
+            normalize_position(bad_pos)
+
+    # 2. TeamRosterUnit rejects invalid position
+    with pytest.raises(ValueError):
+        TeamRosterUnit(player_id=1, position="INVALID", team_code="RMB")
+
+    db_file = tmp_path / "val_test.sqlite3"
+    team_store = TeamStore(db_path=db_file)
+    team_service = TeamService(store=team_store)
+
+    # 3. Validation: empty team_code is rejected
+    bad_squad = _make_legal_squad(offset=10)
+    bad_squad[0] = TeamRosterUnit(
+        player_id=10, position="G", name="G10", team_code="",
+        purchase_price_tenths=100, current_price_tenths=100, is_starter=True,
+    )
+    with pytest.raises(ValueError, match="empty team_code"):
+        team_service.create_team(
+            team_id="team_empty_tc",
+            name="Empty TC Team",
+            round_number=1,
+            bank_tenths=100,
+            squad=bad_squad,
+        )
+    assert team_store.get_team("team_empty_tc") is None
+
+    # 4. create_team with legal squad succeeds
+    legal_squad = _make_legal_squad(offset=20)
+    team = team_service.create_team(
+        team_id="team_val",
+        name="Validation Team",
+        round_number=1,
+        bank_tenths=100,
+        squad=legal_squad,
+    )
+    assert team is not None
+
+    # 5. update_team_squad validates and rejects invalid squad
+    with pytest.raises(ValueError, match="empty team_code"):
+        team_service.update_team_squad("team_val", bad_squad)
+
+    # 6. import_squad validates before write: invalid squad leaves round and bank unchanged
+    initial_team = team_service.get_team("team_val")
+    assert initial_team.round_number == 1
+    assert initial_team.bank_tenths == 100
+
+    with pytest.raises(ValueError):
+        team_service.import_squad(
+            team_id="team_val",
+            round_number=5,
+            bank_tenths=500,
+            roster_units=bad_squad,
+        )
+    after_failed_import = team_service.get_team("team_val")
+    assert after_failed_import.round_number == 1
+    assert after_failed_import.bank_tenths == 100
+
+    # 7. _resolve_player_contract raises UnknownPlayerError on unknown player
+    with pytest.raises(UnknownPlayerError):
+        team_service._resolve_player_contract(
+            player_id=999999,
+            round_number=1,
+            season="2026/27",
+            league="euroleague",
+        )
+
+    # 8. Web API PATCH /api/teams/{id} (WEB-6)
+    app = create_app(db_path=str(db_file))
+    client = TestClient(app)
+
+    # name too short
+    r_empty_name = client.patch(f"/api/teams/{team.team_id}", json={"name": ""})
+    assert r_empty_name.status_code == 422
+
+    # name too long (> 32)
+    r_long_name = client.patch(f"/api/teams/{team.team_id}", json={"name": "A" * 33})
+    assert r_long_name.status_code == 422
+
+    # invalid round_number (< 1 or > 40)
+    r_bad_round = client.patch(f"/api/teams/{team.team_id}", json={"round_number": 0})
+    assert r_bad_round.status_code == 422
+
+    # invalid transfers_remaining (< 0)
+    r_bad_transfers = client.patch(f"/api/teams/{team.team_id}", json={"transfers_remaining": -1})
+    assert r_bad_transfers.status_code == 422
+
+    # bank_tenths in PATCH is forbidden (extra="forbid")
+    r_bank = client.patch(f"/api/teams/{team.team_id}", json={"bank_tenths": 300})
+    assert r_bank.status_code == 422
+
+    # invalid risk_mode
+    r_bad_risk = client.patch(f"/api/teams/{team.team_id}", json={"settings": {"risk_mode": "yolo"}})
+    assert r_bad_risk.status_code == 422
+
+    # valid PATCH
+    r_valid = client.patch(
+        f"/api/teams/{team.team_id}",
+        json={"name": "Valid New Name", "settings": {"risk_mode": "conservative"}},
+    )
+    assert r_valid.status_code == 200
+    assert r_valid.json()["name"] == "Valid New Name"
+    assert r_valid.json()["settings"]["risk_mode"] == "conservative"
+
+    # 9. CLI trade command with unknown player exits with code 1
+    from euroleague_fantasy_manager.cli import main
+    exit_code = main(["--db", str(db_file), "team", "trade", "--team", "team_val", "--out", "20", "--in", "999999"])
+    assert exit_code == 1
 

@@ -7,6 +7,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
+from euroleague_fantasy_manager.models import Position, normalize_position
+
 
 @dataclass(frozen=True, slots=True)
 class AuditIntent:
@@ -78,14 +80,22 @@ class TeamRosterUnit:
     is_coach: bool = False
     turn_number: int = 1
 
+    def __post_init__(self) -> None:
+        pos_enum = normalize_position(self.position)
+        self.position = pos_enum.short_code
+        if pos_enum == Position.HEAD_COACH:
+            self.is_coach = True
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> TeamRosterUnit:
+        if "position" not in data or data["position"] is None:
+            raise ValueError(f"Missing position in roster unit data: {data}")
         return cls(
             player_id=int(data["player_id"]),
-            position=str(data.get("position", "G")),
+            position=str(data["position"]),
             name=str(data.get("name", "")),
             team_code=str(data.get("team_code", "")),
             purchase_price_tenths=int(data.get("purchase_price_tenths", 100)),
