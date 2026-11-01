@@ -271,6 +271,8 @@ class OptimizationService:
         exhaustive: bool = False,
         strategy_preset: str = "balanced_value",
         top_n: int = 5,
+        max_evaluations: int = 20_000,
+        time_budget_s: float = 10.0,
     ) -> TransferOptimizationResult:
         """Find optimal trade combinations for the team."""
         team = self.team_service.get_team(team_id)
@@ -326,6 +328,8 @@ class OptimizationService:
             unlimited=unlimited,
             exhaustive_candidates=exhaustive,
             top_n=top_n,
+            max_evaluations=max_evaluations,
+            time_budget_s=time_budget_s,
         )
 
     def plan_multi_round(

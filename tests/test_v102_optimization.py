@@ -700,3 +700,120 @@ def test_p4_6_formation_matches_actual_starters():
     # Since all players have played and starters are optimal, no swap is made.
     # Formation MUST match actual starters (1-3-1), not default to "2-2-1"
     assert res.formation == "1-3-1"
+
+
+def test_p4_7_bounded_exhaustive_mode_stops_at_limit():
+    """OPT-12: 42-player market in exhaustive mode with evaluation limit stops with stopped_reason."""
+    ruleset = get_league_ruleset(League.EUROLEAGUE)
+    constraints = OptimizationConstraints.from_ruleset(ruleset)
+    optimizer = TransferOptimizer(constraints=constraints)
+
+    squad = make_standard_squad()
+    market = [
+        make_test_player(
+            1000 + i,
+            [Position.GUARD, Position.FORWARD, Position.CENTER][i % 3],
+            expected_fp=15.0 + (i % 10),
+            price_tenths=70 + (i % 50),
+            team_id=10 + (i % 10),
+        )
+        for i in range(42)
+    ]
+
+    result = optimizer.optimize_transfers(
+        current_squad=squad,
+        market=market,
+        max_trades=3,
+        exhaustive_candidates=True,
+        max_evaluations=100,
+    )
+    assert result.is_exhaustive is False
+    assert result.stopped_reason == "max_evaluations_reached"
+    assert result.objective == "lineup_objective"
+    assert result.total_evaluated_packages >= 100
+
+
+def test_p4_7_unlimited_mode_honest_exactness_and_objective():
+    """OPT-13: Rebuild/unlimited mode reports is_exhaustive=False and objective='sum_expected_fp'."""
+    ruleset = get_league_ruleset(League.EUROLEAGUE)
+    constraints = OptimizationConstraints.from_ruleset(ruleset).for_round(7, ruleset=ruleset)
+    optimizer = TransferOptimizer(constraints=constraints)
+
+    squad = make_standard_squad()
+    market = [
+        make_test_player(
+            1000 + i,
+            [Position.GUARD, Position.FORWARD, Position.CENTER][i % 3],
+            expected_fp=25.0 + (i % 10),
+            price_tenths=80,
+            team_id=10 + (i % 5),
+        )
+        for i in range(25)
+    ]
+
+    result = optimizer.optimize_transfers(
+        current_squad=squad,
+        market=market,
+        round_number=7,
+        unlimited=True,
+    )
+    assert result.is_exhaustive is False
+    assert result.objective == "sum_expected_fp"
+
+
+def test_p4_7_api_optimize_transfers_reports_bounds_and_exactness(tmp_path):
+    """OPT-12, OPT-13: API endpoint returns is_exhaustive, stopped_reason, and objective."""
+    from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit
+
+    db_file = tmp_path / "test.db"
+    store = SnapshotStore(db_file)
+    payload = {
+        "league_id": 10,
+        "competition_code": "E",
+        "season_code": "E2026",
+        "round_number": 5,
+        "match_lineups": [],
+        "schedules": [],
+    }
+    store.save_snapshot(payload)
+
+    team_svc = TeamService(db_path=db_file)
+    team_svc.create_team(
+        team_id="team_p47",
+        name="API Bounds Team",
+        league="euroleague",
+        season="2026",
+        round_number=5,
+    )
+    roster = [
+        TeamRosterUnit(player_id=101, name="G1", position="G", team_code="BAR", is_starter=True),
+        TeamRosterUnit(player_id=102, name="G2", position="G", team_code="MAD", is_starter=True),
+        TeamRosterUnit(player_id=103, name="G3", position="G", team_code="OLY", is_bench=True),
+        TeamRosterUnit(player_id=104, name="G4", position="G", team_code="PAO", is_bench=True),
+        TeamRosterUnit(player_id=201, name="F1", position="F", team_code="BAR", is_starter=True),
+        TeamRosterUnit(player_id=202, name="F2", position="F", team_code="MAD", is_starter=True),
+        TeamRosterUnit(player_id=203, name="F3", position="F", team_code="OLY", is_bench=True),
+        TeamRosterUnit(player_id=204, name="F4", position="F", team_code="PAO", is_bench=True),
+        TeamRosterUnit(player_id=301, name="C1", position="C", team_code="BAR", is_starter=True),
+        TeamRosterUnit(player_id=302, name="C2", position="C", team_code="MAD", is_bench=True),
+        TeamRosterUnit(player_id=401, name="Coach", position="HC", team_code="BAR", is_coach=True),
+    ]
+    team_svc.set_squad("team_p47", round_number=5, roster_units=roster, validate=False)
+
+    app = create_app(db_path=db_file)
+    client = TestClient(app)
+
+    res = client.post("/api/workstation/optimize/transfers", json={
+        "team_id": "team_p47",
+        "season": "2026",
+        "round_number": 5,
+        "exhaustive": True,
+        "max_evaluations": 100,
+        "time_budget_s": 5.0,
+    })
+    assert res.status_code == 200
+    data = res.json()
+    assert "is_exhaustive" in data
+    assert "stopped_reason" in data
+    assert "objective" in data
+    assert data["objective"] == "lineup_objective"

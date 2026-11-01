@@ -71,6 +71,8 @@ class OptimizeTransfersRequest(BaseModel):
     exhaustive: bool = False
     strategy_preset: str = "balanced_value"
     top_n: int = Field(default=30, ge=1, le=50)
+    max_evaluations: int = Field(default=20000, ge=100, le=50000)
+    time_budget_s: float = Field(default=10.0, ge=0.1, le=60.0)
 
 
 class MultiRoundRequest(BaseModel):
@@ -429,6 +431,8 @@ def optimize_transfers_endpoint(
             exhaustive=req.exhaustive,
             strategy_preset=req.strategy_preset,
             top_n=req.top_n,
+            max_evaluations=req.max_evaluations,
+            time_budget_s=req.time_budget_s,
         )
 
         recs = []
@@ -469,6 +473,9 @@ def optimize_transfers_endpoint(
             "best_recommendation": recs[0] if recs else None,
             "recommendations": recs,
             "evaluated_combinations": res.total_evaluated_packages,
+            "is_exhaustive": res.is_exhaustive,
+            "stopped_reason": res.stopped_reason,
+            "objective": res.objective,
         }
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))

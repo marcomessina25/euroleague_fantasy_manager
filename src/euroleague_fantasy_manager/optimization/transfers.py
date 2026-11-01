@@ -52,6 +52,8 @@ class TransferOptimizationResult:
     stage2_evaluations: int = 0
     widened: bool = False
     pruning_notes: tuple[str, ...] = ()
+    stopped_reason: str | None = None
+    objective: str = "lineup_objective" 
 
 
 class TransferOptimizer:
@@ -127,6 +129,8 @@ class TransferOptimizer:
         dynamic_opportunity_cost: bool | None = None,
         is_drw_approaching: bool | None = None,
         min_net_gain_threshold: float | None = None,
+        max_evaluations: int = 20_000,
+        time_budget_s: float = 10.0,
     ) -> TransferOptimizationResult:
         """Find the top legal trade packages ranked by net score gain.
 
@@ -136,6 +140,10 @@ class TransferOptimizer:
             When False, uses fast candidate pruning to accelerate large market searches.
             When True, runs exact exhaustive evaluation across all candidate combinations.
         """
+        import time
+        start_time = time.monotonic()
+        stopped_reason: str | None = None
+
         # 1. Resolve policy flags
         use_dynamic = self.dynamic_opportunity_cost if dynamic_opportunity_cost is None else dynamic_opportunity_cost
         drw_app = self.is_drw_approaching if is_drw_approaching is None else is_drw_approaching
@@ -316,7 +324,7 @@ class TransferOptimizer:
             base_cand_limit = cand_limits_by_k.get(k, 3) if not exhaustive_candidates else 50
 
             def _evaluate_level_k(limit: int) -> list[tuple[float, tuple[PlayerProjectionContract, ...], tuple[PlayerProjectionContract, ...], int, int]]:
-                nonlocal evaluated_count
+                nonlocal evaluated_count, stopped_reason
                 packages: list[tuple[float, tuple[PlayerProjectionContract, ...], tuple[PlayerProjectionContract, ...], int, int]] = []
                 for out_combo in combinations(squad_contracts, k):
                     out_positions = Counter(p.position for p in out_combo)
@@ -351,6 +359,8 @@ class TransferOptimizer:
                     if not valid_positions:
                         continue
 
+                    if stopped_reason is not None:
+                        break
                     out_exp_sum = sum(p.expected_fp for p in out_combo)
                     if unlimited:
                         cost_k = 0.0
@@ -362,6 +372,12 @@ class TransferOptimizer:
                         cost_k = round(self.transfer_penalty_cost * k, 2)
 
                     for in_tuple_of_tuples in product(*pos_candidate_lists):
+                        if evaluated_count >= max_evaluations:
+                            stopped_reason = "max_evaluations_reached"
+                            break
+                        if time.monotonic() - start_time >= time_budget_s:
+                            stopped_reason = "time_budget_exceeded"
+                            break
                         in_players: list[PlayerProjectionContract] = []
                         for sub_tuple in in_tuple_of_tuples:
                             in_players.extend(sub_tuple)
@@ -402,6 +418,8 @@ class TransferOptimizer:
             # Keep top candidates per trade size k
             k_packages.sort(key=lambda x: x[0], reverse=True)
             packages_by_k[k] = k_packages
+            if stopped_reason is not None:
+                break
 
         # Stage 2: Quota-based allocation per trade size k (OPT-4)
         if exhaustive_candidates:
@@ -425,6 +443,16 @@ class TransferOptimizer:
 
         stage2_evaluations = 0
         for proxy_gain, out_combo, in_players, new_bank, k in screened_packages:
+            if evaluated_count >= max_evaluations:
+                if stopped_reason is None:
+                    stopped_reason = "max_evaluations_reached"
+                break
+            if time.monotonic() - start_time >= time_budget_s:
+                if stopped_reason is None:
+                    stopped_reason = "time_budget_exceeded"
+                break
+            if len(all_recommendations) >= top_n and stopped_reason is not None:
+                break
             stage2_evaluations += 1
             val_res, _ = validate_transfers_constraints(
                 current_squad=squad_contracts,
@@ -500,13 +528,17 @@ class TransferOptimizer:
             reverse=True,
         )
 
+        is_exh = False if (unlimited or stopped_reason is not None) else candidate_pool.is_exhaustive
+        obj = "sum_expected_fp" if unlimited else "lineup_objective"
         return TransferOptimizationResult(
             round_number=round_number,
             current_lineup=current_lineup,
             recommendations=tuple(all_recommendations[:top_n]),
             total_evaluated_packages=max(1, evaluated_count),
-            is_exhaustive=False if unlimited else candidate_pool.is_exhaustive,
+            is_exhaustive=is_exh,
             stage2_evaluations=stage2_evaluations,
             widened=widened_flag,
             pruning_notes=tuple(pruning_notes_list),
+            stopped_reason=stopped_reason,
+            objective=obj,
         )
