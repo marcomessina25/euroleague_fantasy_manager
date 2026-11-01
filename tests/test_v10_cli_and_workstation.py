@@ -262,7 +262,7 @@ def test_critical_workstation_workflows_a_b_c_d(tmp_path: Path) -> None:
 def test_frontend_static_and_endpoint_smoke(tmp_path: Path) -> None:
     """12.4: Node.js JavaScript syntax verification and FastAPI template/API smoke tests."""
     # 1. Validate JavaScript syntax via Node.js
-    js_path = Path("src/euroleague_fantasy_manager/web/static/js/app.js")
+    js_path = Path(__file__).resolve().parents[1] / "src" / "euroleague_fantasy_manager" / "web" / "static" / "js" / "app.js"
     assert js_path.exists(), "app.js must exist"
 
     result = subprocess.run(

@@ -193,9 +193,9 @@ def test_w1_learned_minutes_model_regression_and_explanation(sample_feature_row:
     assert expl["final_minutes"] == pred_min
 
 
-def test_w1_learned_pipeline_singleton() -> None:
+def test_w1_learned_pipeline_singleton(learned_dataset_db: Path) -> None:
     """Verify default singleton pipeline initializes deterministically."""
-    pipeline = get_default_learned_pipeline()
+    pipeline = get_default_learned_pipeline(database_path=learned_dataset_db)
     assert pipeline is not None
     assert pipeline.is_fitted
     assert pipeline.availability_model.is_fitted
@@ -277,12 +277,12 @@ def test_w1_walk_forward_evaluation_with_learned_model(tmp_path: Path) -> None:
     assert (reports_dir / "e2025_baseline_comparison.md").exists()
 
 
-def test_w1_production_historical_training_and_provenance() -> None:
+def test_w1_production_historical_training_and_provenance(learned_dataset_db: Path) -> None:
     """Verify production pipeline trains on real PIT historical data and records provenance."""
     from euroleague_fantasy_manager.fixtures import DATABASE_PATH
 
     clear_learned_pipeline_cache()
-    pipe = get_default_learned_pipeline()
+    pipe = get_default_learned_pipeline(database_path=learned_dataset_db)
     assert pipe is not None
     assert pipe.is_fitted
     assert pipe.provenance.get("origin") == "production_historical"

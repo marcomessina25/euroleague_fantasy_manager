@@ -565,7 +565,7 @@ def test_w5_api_player_detail_league_scoping(tmp_path: Path):
 
 def test_w5_static_app_js_escaping_guard():
     """Ensure app.js uses escapeHtml helper for dynamic template interpolation."""
-    js_path = Path("src/euroleague_fantasy_manager/web/static/js/app.js")
+    js_path = Path(__file__).resolve().parents[1] / "src" / "euroleague_fantasy_manager" / "web" / "static" / "js" / "app.js"
     assert js_path.exists(), "app.js must exist"
 
     content = js_path.read_text(encoding="utf-8")

@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from euroleague_fantasy_manager import paths
 from euroleague_fantasy_manager.multi_team.store import TeamStore
 from euroleague_fantasy_manager.services.team_service import TeamService
 from euroleague_fantasy_manager.web.api.routes_intelligence import router as intelligence_router
@@ -63,9 +64,9 @@ def _ensure_initial_team(db_path: str | Path) -> None:
     if not teams:
         ts = TeamService(store=store)
         # Check if config squad exists
-        cfg_path = Path("config/current_squad.json")
+        cfg_path = paths.squad_config_path()
         if not cfg_path.exists():
-            cfg_path = Path("config/current_squad.example.json")
+            cfg_path = paths.elf_home() / "config" / "current_squad.example.json" 
 
         if cfg_path.exists():
             try:

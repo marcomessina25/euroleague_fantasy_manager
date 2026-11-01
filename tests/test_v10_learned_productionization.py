@@ -88,10 +88,10 @@ def sample_feature_row() -> PointInTimeFeatureRow:
 # ============================================================================
 
 
-def test_production_historical_training_and_provenance() -> None:
+def test_production_historical_training_and_provenance(learned_dataset_db: Path) -> None:
     """Verify production pipeline trains on real PIT historical data and records provenance."""
     clear_learned_pipeline_cache()
-    pipe = get_default_learned_pipeline()
+    pipe = get_default_learned_pipeline(database_path=learned_dataset_db)
     assert pipe is not None
     assert pipe.is_fitted
     assert pipe.provenance.get("origin") == "production_historical"

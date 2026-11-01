@@ -1709,13 +1709,18 @@ def test_v051_prediction_calibration_vs_v050(tmp_path: Path):
     assert hermetic_res.v051_mae <= hermetic_res.v050_mae + 0.05
     assert hermetic_res.v051_xm_mae < 10.0
 
-    # 2. If main database exists locally, verify full backtest passes regression gate
-    if DATABASE_PATH.exists():
-        real_res = run_v051_prediction_backtest(database_path=DATABASE_PATH)
-        assert real_res.total_samples > 0
-        assert real_res.passed_regression_gate
-        assert real_res.v051_mae <= real_res.v050_mae + 0.05
-        assert real_res.v051_spearman >= real_res.v050_spearman - 0.02
+
+
+
+@pytest.mark.realdata
+def test_realdata_v051_prediction_backtest() -> None:
+    if not DATABASE_PATH.exists():
+        pytest.skip("Real data database not present")
+    real_res = run_v051_prediction_backtest(database_path=DATABASE_PATH)
+    assert real_res.total_samples > 0
+    assert real_res.passed_regression_gate
+    assert real_res.v051_mae <= real_res.v050_mae + 0.05
+    assert real_res.v051_spearman >= real_res.v050_spearman - 0.02
 
 
 

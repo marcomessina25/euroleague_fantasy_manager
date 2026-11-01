@@ -254,7 +254,7 @@ def test_v10_golden_end_to_end_scenario(tmp_path: Path) -> None:
     # ------------------------------------------------------------------------
     # 4. Run learned_v09
     # ------------------------------------------------------------------------
-    learned_pipe = get_default_learned_pipeline()
+    learned_pipe = get_default_learned_pipeline(database_path=db_path)
     assert learned_pipe.is_fitted
     learned_contracts = pred_service.get_projections(
         season="E2025",
