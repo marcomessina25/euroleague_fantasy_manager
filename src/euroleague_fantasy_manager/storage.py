@@ -919,8 +919,8 @@ class SnapshotStore:
     def get_snapshot_for_round(
         self,
         league_id: int,
-        season_code: str | None,
-        round_number: int,
+        season_code: str | None = None,
+        round_number: int = 1,
         decision_cutoff: str | None = None,
     ) -> SnapshotSummary | None:
         """Fetch the point-in-time historical snapshot for a round (round_number <= R).
