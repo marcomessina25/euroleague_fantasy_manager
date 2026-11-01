@@ -1368,4 +1368,112 @@ def test_p2_7_round_and_season_correct_operations(tmp_path: Path) -> None:
     r8_squad_after = team_store.get_squad("team_r8", 8)
     r8_bytes_after = json.dumps([u.to_dict() for u in r8_squad_after], sort_keys=True).encode("utf-8")
     assert r8_bytes_before == r8_bytes_after
+def test_p2_8_get_routes_never_write_to_database(tmp_path: Path) -> None:
+    """P2.8 / WEB-1: Every registered GET route is strictly read-only and never mutates SQLite."""
+    import hashlib
+    from euroleague_fantasy_manager.multi_team.store import TeamStore
+    from euroleague_fantasy_manager.services.team_service import TeamService
+    from euroleague_fantasy_manager.storage import SnapshotStore
+    from euroleague_fantasy_manager.web.app import create_app
+    from fastapi.testclient import TestClient
+
+    def _file_sha256(path: Path) -> str:
+        hasher = hashlib.sha256()
+        with open(path, "rb") as f:
+            while chunk := f.read(65536):
+                hasher.update(chunk)
+        return hasher.hexdigest()
+
+    from euroleague_fantasy_manager.evaluation.dataset import EvaluationDatasetStore
+    from euroleague_fantasy_manager.tracking.store import DecisionStore
+
+    db_file = tmp_path / "p28_readonly_test.sqlite3"
+    team_store = TeamStore(db_path=db_file)
+    team_service = TeamService(store=team_store)
+    snap_store = SnapshotStore(database_path=db_file)
+    EvaluationDatasetStore(db_file)
+    DecisionStore(database_path=db_file)
+
+    # Seed snapshot
+    squad = _make_legal_squad(offset=10)
+    snap_store.save_snapshot({
+        "round_number": 1,
+        "season_code": "2026/27",
+        "league_id": 10,
+        "competition_code": "E",
+        "players": [
+            {
+                "id": u.player_id, "name": u.name, "first_name": "", "last_name": "",
+                "position": 1 if u.position == "G" else 2, "position_code": u.position,
+                "team_id": 1, "team_code": u.team_code, "team_name": u.team_code,
+                "price_tenths": u.current_price_tenths, "status": "AVAILABLE",
+                "probability_of_playing": 1.0, "turn_number": 1, "avg_fantasy_pts": 10.0,
+                "last_match_pts": 10.0, "total_plus_tenths": 0, "popularity": 1.0,
+            }
+            for u in squad
+        ],
+        "teams": {},
+    })
+
+    # Create team with unassigned roles (all is_starter=False, is_captain=False, is_sixth_man=False)
+    unassigned_squad = [
+        TeamRosterUnit(
+            player_id=u.player_id, position=u.position, name=u.name, team_code=u.team_code,
+            purchase_price_tenths=u.purchase_price_tenths, current_price_tenths=u.current_price_tenths,
+            is_starter=False, is_captain=False, is_sixth_man=False, is_bench=False, is_coach=(u.position == "HC"),
+        )
+        for u in squad
+    ]
+    team = team_service.create_team(
+        team_id="team_ro",
+        name="ReadOnly Team",
+        round_number=1,
+        bank_tenths=200,
+        squad=unassigned_squad,
+    )
+    team_service.set_active_team(team.team_id)
+
+    app = create_app(db_path=str(db_file))
+    client = TestClient(app)
+
+    # 1. Dashboard specific test: returns roles_assigned=False, suggested_lineup, but does NOT persist
+    with sqlite3.connect(db_file) as c:
+        c.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+    baseline_hash = _file_sha256(db_file)
+
+    res_dash = client.get(f"/api/workstation/dashboard?team_id={team.team_id}&round_number=1")
+    assert res_dash.status_code == 200
+    data_dash = res_dash.json()
+    assert data_dash["roles_assigned"] is False
+    assert "suggested_lineup" in data_dash
+    assert "optimal_lineup" in data_dash
+
+    with sqlite3.connect(db_file) as c:
+        c.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+    assert _file_sha256(db_file) == baseline_hash, "GET /api/workstation/dashboard mutated the database!"
+
+    # 2. Enumerate all registered GET routes from app.routes
+    for route in app.routes:
+        methods = getattr(route, "methods", set())
+        if "GET" not in methods:
+            continue
+        path = getattr(route, "path", None)
+        if not path:
+            continue
+
+        # Substitute known route path params
+        formatted_path = path.replace("{team_id}", team.team_id).replace("{decision_id}", "dec_1")
+        if "{" in formatted_path:
+            # Skip unmapped parameterized routes
+            continue
+
+        # Execute GET request
+        res = client.get(formatted_path)
+        # Should not raise 500
+        assert res.status_code in (200, 404), f"GET {formatted_path} returned {res.status_code}"
+
+        with sqlite3.connect(db_file) as c:
+            c.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        current_hash = _file_sha256(db_file)
+        assert current_hash == baseline_hash, f"GET {formatted_path} mutated the database!"
 

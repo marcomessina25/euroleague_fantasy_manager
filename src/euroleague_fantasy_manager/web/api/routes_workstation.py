@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from euroleague_fantasy_manager.competition.ruleset import League
 from euroleague_fantasy_manager.models import Position
+from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit
 from euroleague_fantasy_manager.optimization.ownership_strategy import (
     classify_ownership_archetype,
     compute_player_ownership_profile,
@@ -193,25 +194,28 @@ def get_dashboard(
     sixth_man_unit = next((u for u in squad_units if u.is_sixth_man), None)
     coach_unit = next((u for u in squad_units if u.is_coach or u.position == "HC"), None)
 
-    # If team roles have not been assigned yet (e.g. freshly imported or draft without role flags),
-    # sync with opt_lineup so the team gets its starting five, captain, 6th man, bench.
-    # round_number=rnd targets the round being viewed -- omitting it would silently rewrite
-    # the LIVE round's lineup while merely viewing a past round.
+    # P2.8 / WEB-1: GET must never write to database.
+    # If roles are not assigned yet, compute suggested roles in memory without persisting.
+    roles_assigned = True
     if len(starters_units) != 5 or not sixth_man_unit or not coach_unit:
-        team = team_service.update_lineup(
-            team_id=team_id,
-            starter_ids=[p["player_id"] for p in opt_lineup.starters],
-            captain_id=opt_lineup.captain_id,
-            sixth_man_id=opt_lineup.sixth_man_id,
-            bench_ids=[p["player_id"] for p in opt_lineup.bench],
-            coach_id=opt_lineup.coach_id,
-            round_number=rnd,
-        )
-        squad_units = team_service.store.get_squad(team_id, rnd) if is_viewing_past_round else team.squad
-        starters_units = [u for u in squad_units if u.is_starter]
-        bench_units = [u for u in squad_units if u.is_bench]
-        sixth_man_unit = next((u for u in squad_units if u.is_sixth_man), None)
-        coach_unit = next((u for u in squad_units if u.is_coach or u.position == "HC"), None)
+        roles_assigned = False
+        starter_pids = {p["player_id"] for p in opt_lineup.starters}
+        bench_pids = {p["player_id"] for p in opt_lineup.bench}
+        transient_units = []
+        for u in squad_units:
+            copy_u = TeamRosterUnit.from_dict(u.to_dict())
+            pid = copy_u.player_id
+            copy_u.is_starter = (pid in starter_pids)
+            copy_u.is_captain = (pid == opt_lineup.captain_id)
+            copy_u.is_sixth_man = (pid == opt_lineup.sixth_man_id)
+            copy_u.is_bench = (pid in bench_pids)
+            copy_u.is_coach = (pid == opt_lineup.coach_id or copy_u.position == "HC")
+            transient_units.append(copy_u)
+
+        starters_units = [u for u in transient_units if u.is_starter]
+        bench_units = [u for u in transient_units if u.is_bench]
+        sixth_man_unit = next((u for u in transient_units if u.is_sixth_man), None)
+        coach_unit = next((u for u in transient_units if u.is_coach or u.position == "HC"), None)
 
     def _fmt_lineup_unit(u: Any) -> dict[str, Any]:
         c = proj_dict.get(u.player_id)
@@ -341,6 +345,8 @@ def get_dashboard(
 
     return {
         "team": team.to_dict(),
+        "roles_assigned": roles_assigned,
+        "suggested_lineup": opt_lineup.to_dict(),
         "round_number": rnd,
         "bank_credits": round(team.bank_tenths / 10.0, 1),
         "squad_value_credits": round(team.total_squad_value_tenths / 10.0, 1),
