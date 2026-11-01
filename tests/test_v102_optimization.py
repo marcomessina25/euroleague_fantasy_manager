@@ -371,3 +371,35 @@ def test_p4_3_quota_allocation_includes_all_feasible_trade_sizes():
     assert len(res.recommendations) >= 4
     trade_sizes = {len(r.out_players) for r in res.recommendations}
     assert {1, 2, 3, 4}.issubset(trade_sizes)
+
+
+def test_p4_4_risk_consistent_lineup_roles_fuzz():
+    """OPT-5: 150-squad fuzz test against the brute-force lineup oracle in all three risk modes shows 0 mismatches."""
+    import random
+    from euroleague_fantasy_manager.optimization.lineup import FixedSquadLineupOptimizer, brute_force_exhaustive_lineup
+    from euroleague_fantasy_manager.optimization.objective import RiskMode
+
+    rng = random.Random(42)
+
+    def _make_random_squad():
+        squad = []
+        for i in range(4):
+            squad.append(make_test_player(101 + i, Position.GUARD, expected_fp=rng.uniform(5.0, 30.0), price_tenths=rng.randint(60, 180), team_id=rng.randint(1, 5), sigma=rng.uniform(1.0, 10.0), turn=rng.randint(1, 2)))
+        for i in range(4):
+            squad.append(make_test_player(201 + i, Position.FORWARD, expected_fp=rng.uniform(5.0, 30.0), price_tenths=rng.randint(60, 180), team_id=rng.randint(1, 5), sigma=rng.uniform(1.0, 10.0), turn=rng.randint(1, 2)))
+        for i in range(2):
+            squad.append(make_test_player(301 + i, Position.CENTER, expected_fp=rng.uniform(5.0, 30.0), price_tenths=rng.randint(60, 180), team_id=rng.randint(1, 5), sigma=rng.uniform(1.0, 10.0), turn=rng.randint(1, 2)))
+        squad.append(make_test_player(401, Position.HEAD_COACH, expected_fp=rng.uniform(10.0, 25.0), price_tenths=80, team_id=6, sigma=rng.uniform(1.0, 5.0)))
+        return squad
+
+    ruleset = get_league_ruleset(League.EUROLEAGUE)
+    constraints = OptimizationConstraints.from_ruleset(ruleset)
+
+    # 50 squads x 3 modes = 150 evaluations
+    for _ in range(50):
+        s = _make_random_squad()
+        for mode in (RiskMode.EXPECTED, RiskMode.CONSERVATIVE, RiskMode.AGGRESSIVE):
+            opt = FixedSquadLineupOptimizer(constraints=constraints, risk_mode=mode, risk_lambda=0.2, include_option_value=False)
+            d_opt = opt.optimize(s)
+            d_ora = brute_force_exhaustive_lineup(s, risk_mode=mode, risk_lambda=0.2, include_option_value=False, constraints=constraints)
+            assert abs(d_opt.objective_value - d_ora.objective_value) < 1e-4

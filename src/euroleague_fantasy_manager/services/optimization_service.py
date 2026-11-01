@@ -188,6 +188,7 @@ class OptimizationService:
             risk_mode=r_mode,
             risk_lambda=risk_lambda,
             include_option_value=include_opt_val,
+            constraints=eff_constraints,
         )
         oracle_match = (
             abs(opt_decision.objective_value - oracle_decision.objective_value) < 1e-4

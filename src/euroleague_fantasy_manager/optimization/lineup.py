@@ -5,9 +5,6 @@ from itertools import combinations
 from typing import Mapping, Sequence
 
 from ..models import Player, Position
-from ..rules import (
-    LEGAL_COURT_FORMATIONS,
-)
 from .constraints import (
     OptimizationConstraints,
     PlayerProjectionContract,
@@ -16,6 +13,7 @@ from .constraints import (
 from .objective import (
     LineupScoreBreakdown,
     RiskMode,
+    compute_risk_adjusted_player_score,
     evaluate_lineup_objective,
 )
 from .option_value import compute_turn_substitution_option_bonus
@@ -177,18 +175,20 @@ class FixedSquadLineupOptimizer:
                         bench_court = tuple(p for p in contracts if p.player_id not in starter_set and p.position != Position.HEAD_COACH)
 
                         # Best captain & vice-captain among the 5 starters
-                        # Deterministic sort starters by expected FP desc, price desc, id asc
+                        def _court_score_key(p: PlayerProjectionContract) -> tuple[float, int, int]:
+                            _, adj = compute_risk_adjusted_player_score(
+                                p.expected_fp, p.uncertainty, 1.0, self.risk_mode, self.risk_lambda
+                            )
+                            return (round(adj, 4), p.price_tenths, -p.player_id)
+
+                        # Deterministic sort starters by risk-adjusted score desc, price desc, id asc (OPT-5)
                         starters_sorted = sorted(
                             starters,
-                            key=lambda p: (
-                                p.expected_fp,
-                                p.price_tenths,
-                                -p.player_id,
-                            ),
+                            key=_court_score_key,
                             reverse=True,
                         )
 
-                        # When option value is not needed, top expected scorer is mathematically the optimal captain
+                        # When option value is not needed, top risk-adjusted scorer is mathematically the optimal captain
                         candidate_caps = starters_sorted if self.include_option_value else starters_sorted[:1]
 
                         for cap in candidate_caps:
@@ -199,16 +199,12 @@ class FixedSquadLineupOptimizer:
                             vc = later_turn_starters[0] if later_turn_starters else other_starters[0]
                             vc_id = vc.player_id
 
-                            # Best sixth man among the 5 court bench players
+                            # Best sixth man among the 5 court bench players (OPT-5)
                             # Sixth man gets 1.0x instead of 0.5x (+0.5x gain)
-                            # Top expected scorer on bench is always the optimal sixth man
+                            # Top risk-adjusted scorer on bench is mathematically the optimal sixth man
                             bench_sorted = sorted(
                                 bench_court,
-                                key=lambda p: (
-                                    p.expected_fp,
-                                    p.price_tenths,
-                                    -p.player_id,
-                                ),
+                                key=_court_score_key,
                                 reverse=True,
                             )
                             candidate_sixths = bench_sorted[:1]
@@ -320,6 +316,7 @@ def brute_force_exhaustive_lineup(
     risk_mode: RiskMode = RiskMode.EXPECTED,
     risk_lambda: float = 0.15,
     include_option_value: bool = False,
+    constraints: OptimizationConstraints | None = None,
 ) -> OptimalLineupDecision:
     """Independent unpruned exhaustive reference implementation (correctness oracle).
 
@@ -342,8 +339,10 @@ def brute_force_exhaustive_lineup(
             proj_map[item.id] = c
 
     # Validation
-    from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
-    val_res = validate_squad_constraints(contracts, check_budget=False, constraints=OptimizationConstraints.from_ruleset(get_league_ruleset()))
+    if constraints is None:
+        from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
+        constraints = OptimizationConstraints.from_ruleset(get_league_ruleset())
+    val_res = validate_squad_constraints(contracts, check_budget=False, constraints=constraints)
     if not val_res.is_valid:
         return OptimalLineupDecision(
             round_number=None,
@@ -380,7 +379,7 @@ def brute_force_exhaustive_lineup(
     best_candidate: OptimalLineupDecision | None = None
     best_key: tuple[float, float, int, int, int, tuple[int, ...]] | None = None
 
-    for num_g, num_f, num_c in sorted(LEGAL_COURT_FORMATIONS):
+    for num_g, num_f, num_c in sorted(constraints.legal_formations):
         formation_str = f"{num_g}-{num_f}-{num_c}"
         for g_combo in combinations(guards, num_g):
             for f_combo in combinations(forwards, num_f):
