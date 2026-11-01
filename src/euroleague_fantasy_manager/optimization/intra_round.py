@@ -168,7 +168,10 @@ class IntraRoundSubstitutionOptimizer:
         best_sixth: int = curr_sixth.player_id if curr_sixth else 0
         best_bench: tuple[int, ...] = tuple(u.player_id for u in curr_bench)
         best_cap: int = curr_cap_id
-        best_formation = "2-2-1"
+        g_init = sum(1 for u in curr_starters if _normalize_pos(u.position) == "G")
+        f_init = sum(1 for u in curr_starters if _normalize_pos(u.position) == "F")
+        c_init = sum(1 for u in curr_starters if _normalize_pos(u.position) == "C")
+        best_formation = f"{g_init}-{f_init}-{c_init}"
 
         # Precompute positions
         pos_map = {u.player_id: _normalize_pos(u.position) for u in court_units}

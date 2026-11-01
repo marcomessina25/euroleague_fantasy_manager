@@ -549,3 +549,154 @@ def test_p4_5_horizon_validation_and_call_counter(tmp_path: Path):
         },
     )
     assert response.status_code == 422
+
+
+def test_p4_6_replay_initial_squad_is_legal_under_ruleset_and_budget():
+    """OPT-9: Replay's initial squad passes validate_squad_constraints with the league ruleset and budget."""
+    from euroleague_fantasy_manager.optimization.sequential_replay import SequentialDecisionSimulator
+    from euroleague_fantasy_manager.optimization.constraints import validate_squad_constraints
+
+    ruleset = get_league_ruleset(League.EUROLEAGUE)
+    constraints = OptimizationConstraints.from_ruleset(ruleset)
+    sim = SequentialDecisionSimulator(constraints=constraints)
+
+    # Generate a rich market of 25 players across positions
+    contracts = {}
+    for i in range(10):
+        c = make_test_player(101 + i, Position.GUARD, expected_fp=15.0 + i, price_tenths=70 + i * 5, team_id=(i % 5) + 1)
+        contracts[c.player_id] = c
+    for i in range(10):
+        c = make_test_player(201 + i, Position.FORWARD, expected_fp=15.0 + i, price_tenths=70 + i * 5, team_id=(i % 5) + 1)
+        contracts[c.player_id] = c
+    for i in range(4):
+        c = make_test_player(301 + i, Position.CENTER, expected_fp=15.0 + i, price_tenths=70 + i * 5, team_id=(i % 5) + 1)
+        contracts[c.player_id] = c
+    for i in range(2):
+        c = make_test_player(401 + i, Position.HEAD_COACH, expected_fp=12.0 + i, price_tenths=70 + i * 5, team_id=(i % 5) + 1)
+        contracts[c.player_id] = c
+
+    initial_squad = sim._select_initial_squad(contracts)
+    assert len(initial_squad) == 11
+
+    val_res = validate_squad_constraints(
+        initial_squad,
+        budget_tenths=int(ruleset.budget_credits * 10),
+        constraints=constraints,
+    )
+    assert val_res.is_valid is True
+    total_cost = sum(p.price_tenths for p in initial_squad)
+    assert total_cost <= int(ruleset.budget_credits * 10)
+
+
+def test_p4_6_round_7_unlimited_window_records_more_than_4_trades():
+    """OPT-10: Round 7 records more than 4 trades when beneficial."""
+    from euroleague_fantasy_manager.optimization.sequential_replay import SequentialDecisionSimulator
+
+    ruleset = get_league_ruleset(League.EUROLEAGUE)
+    constraints = OptimizationConstraints.from_ruleset(ruleset)
+    sim = SequentialDecisionSimulator(constraints=constraints)
+
+    squad = make_standard_squad()
+    # Market for round 7 with massive upgrades across all court positions
+    market_r7 = {}
+    for i, pos in enumerate([
+        Position.GUARD, Position.GUARD, Position.GUARD, Position.GUARD,
+        Position.FORWARD, Position.FORWARD, Position.FORWARD, Position.FORWARD,
+        Position.CENTER, Position.CENTER,
+    ]):
+        c = make_test_player(900 + i, pos, expected_fp=45.0, price_tenths=60, team_id=10 + (i % 5))
+        market_r7[c.player_id] = c
+
+    new_squad, bank, moves, gain, err = sim._optimize_transfers(
+        current_squad=squad,
+        contracts=market_r7,
+        current_bank_tenths=200,
+        round_number=7,
+    )
+    assert err is None
+    # In round 7 unlimited window, > 4 trades are made
+    assert len(moves) > 4
+    assert gain > 0.0
+
+
+def test_p4_6_ledger_reconciles_to_hundredth():
+    """OPT-11: Regret attribution decomposition reconciles to +-0.01 with signed components."""
+    from euroleague_fantasy_manager.optimization.sequential_replay import SequentialDecisionSimulator
+    from euroleague_fantasy_manager.optimization.lineup import FixedSquadLineupOptimizer
+
+    ruleset = get_league_ruleset(League.EUROLEAGUE)
+    constraints = OptimizationConstraints.from_ruleset(ruleset)
+    sim = SequentialDecisionSimulator(constraints=constraints)
+    lineup_opt = FixedSquadLineupOptimizer(constraints=constraints)
+
+    squad = make_standard_squad()
+    pre_lineup = lineup_opt.optimize(squad)
+    post_lineup = pre_lineup
+
+    actuals = {p.player_id: p.expected_fp + 3.0 for p in squad}
+
+    # Model squad oracle lineup
+    model_squad_oracle = lineup_opt.optimize(squad)
+    # Oracle lineup with an upgraded player
+    oracle_lineup = model_squad_oracle
+
+    regret = sim._compute_regret_attribution(
+        pre_lineup=pre_lineup,
+        chosen_lineup=post_lineup,
+        model_squad_oracle_lineup=model_squad_oracle,
+        oracle_lineup=oracle_lineup,
+        actuals=actuals,
+        pre_sub_score=100.0,
+        post_sub_score=102.0,  # model gained 2.0 pts from sub -> turn_sub_regret is -2.0
+    )
+
+    # Component is signed (negative here)
+    assert regret.turn_substitution_regret == -2.0
+    # Invariant: total - sum(components) == residual, and residual == 0.00
+    comp_sum = round(
+        regret.turn_substitution_regret
+        + regret.captain_regret
+        + regret.sixth_man_regret
+        + regret.bench_regret
+        + regret.formation_regret
+        + regret.transfer_regret,
+        2,
+    )
+    assert abs(regret.total_regret - comp_sum) <= 0.01
+    assert abs(regret.residual) <= 0.01
+
+
+def test_p4_6_formation_matches_actual_starters():
+    """OPT-15: intra_round computes actual formation instead of defaulting to 2-2-1."""
+    from euroleague_fantasy_manager.optimization.intra_round import (
+        IntraRoundPlayerUnit,
+        IntraRoundSubstitutionOptimizer,
+    )
+
+    optimizer = IntraRoundSubstitutionOptimizer()
+    # 1 Guard, 3 Forwards, 1 Center starting
+    units = [
+        # Starters
+        IntraRoundPlayerUnit(player_id=1, name="G1", position="G", turn_number=1, expected_fp=15.0, current_role="starter", is_captain=True),
+        IntraRoundPlayerUnit(player_id=2, name="F1", position="F", turn_number=1, expected_fp=15.0, current_role="starter"),
+        IntraRoundPlayerUnit(player_id=3, name="F2", position="F", turn_number=1, expected_fp=15.0, current_role="starter"),
+        IntraRoundPlayerUnit(player_id=4, name="F3", position="F", turn_number=1, expected_fp=15.0, current_role="starter"),
+        IntraRoundPlayerUnit(player_id=5, name="C1", position="C", turn_number=1, expected_fp=15.0, current_role="starter"),
+        # Sixth Man
+        IntraRoundPlayerUnit(player_id=6, name="G2", position="G", turn_number=1, expected_fp=10.0, current_role="sixth_man"),
+        # Bench
+        IntraRoundPlayerUnit(player_id=7, name="G3", position="G", turn_number=1, expected_fp=5.0, current_role="bench"),
+        IntraRoundPlayerUnit(player_id=8, name="G4", position="G", turn_number=1, expected_fp=5.0, current_role="bench"),
+        IntraRoundPlayerUnit(player_id=9, name="F4", position="F", turn_number=1, expected_fp=5.0, current_role="bench"),
+        IntraRoundPlayerUnit(player_id=10, name="C2", position="C", turn_number=1, expected_fp=5.0, current_role="bench"),
+        # Coach
+        IntraRoundPlayerUnit(player_id=11, name="HC", position="HC", turn_number=1, expected_fp=10.0, current_role="coach"),
+    ]
+
+    res = optimizer.optimize(
+        squad_units=units,
+        captain_id=1,
+    )
+    # Since all players have played and starters are optimal, no swap is made.
+    # Formation MUST match actual starters (1-3-1), not default to "2-2-1"
+    assert res.formation == "1-3-1"
