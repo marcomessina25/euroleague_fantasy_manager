@@ -48,10 +48,40 @@ def generate_squad_report(
     team_counts: dict[str, int] = {}
     position_counts: dict[str, int] = {"G": 0, "F": 0, "C": 0, "HC": 0}
 
+    raw_squad_data: dict[str, Any] = {}
+    if squad_path.exists():
+        try:
+            raw_squad_data = json.loads(squad_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    raw_positions = raw_squad_data.get("positions", raw_squad_data.get("player_positions", {}))
+
     for pid in state.player_ids:
         p = players_by_id.get(pid)
         if p is None:
-            # BUG-EDGE-002: unit missing / left competition -> keep unit, project 0, flag unavailable
+            # SQR-1 / BUG-EDGE-002: unit missing / left competition -> keep unit, project 0, flag unavailable
+            resolved_pos = None
+            if str(pid) in raw_positions or pid in raw_positions:
+                pos_val = raw_positions.get(str(pid)) or raw_positions.get(pid)
+                if pos_val:
+                    try:
+                        resolved_pos = Position.from_raw(pos_val)
+                    except Exception:
+                        pass
+            if resolved_pos is None:
+                try:
+                    with store._connect() as conn:
+                        row = conn.execute(
+                            "SELECT position FROM snapshot_players WHERE player_id = ? ORDER BY id DESC LIMIT 1",
+                            (pid,),
+                        ).fetchone()
+                        if row and row[0]:
+                            resolved_pos = Position.from_raw(row[0])
+                except Exception:
+                    pass
+            if resolved_pos is None:
+                resolved_pos = Position.GUARD
+
             buy_tenths = state.purchase_prices_tenths.get(pid, 50)
             cur_tenths = buy_tenths
             sell_tenths = buy_tenths
@@ -61,7 +91,7 @@ def generate_squad_report(
                 first_name="Departed",
                 last_name=f"Unit {pid}",
                 name=f"Unit {pid} (Departed)",
-                position=Position.GUARD,
+                position=resolved_pos,
                 team_id=0,
                 team_code="OUT",
                 team_name="Unavailable",

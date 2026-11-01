@@ -166,3 +166,40 @@ def test_post_evaluation_update_scores(tmp_path: Path):
     data = resp.json()
     assert "updated_decisions" in data
     assert "outcomes" in data
+
+def test_squad_report_departed_player_preserves_position_and_flags_sell_candidate(tmp_path: Path):
+    """SQR-1: A departed unit keeps its last known position from squad file or prior snapshot and flags sell candidate."""
+    from euroleague_fantasy_manager.squad_report import generate_squad_report
+    from tests.test_v101_mid_season_squad import create_mock_snapshot
+
+    db_file = tmp_path / "squad_test.sqlite3"
+    create_mock_snapshot(db_file, round_number=2)
+
+    # Squad JSON contains units 101..110 + departed unit 999
+    squad_file = tmp_path / "current_squad.json"
+    all_pids = list(range(101, 111)) + [999]
+    squad_data = {
+        "season": "2026/27",
+        "league_id": 10,
+        "round_number": 2,
+        "player_ids": all_pids,
+        "purchase_prices_tenths": {str(pid): 100 for pid in all_pids},
+        "bank_tenths": 50,
+        "positions": {"999": "C"},
+    }
+    squad_file.write_text(json.dumps(squad_data), encoding="utf-8")
+
+    # Generate squad report
+    report = generate_squad_report(squad_path=squad_file, database_path=db_file, report_path=None)
+
+    assert report is not None
+    assert report["squad_size"] == 11
+
+    # Find departed player 999 in report
+    units = [u for u in report.get("units", []) if u.get("id") == 999]
+    if not units:
+        units = [u for u in report.get("units_detail", []) if u.get("id") == 999]
+    assert len(units) == 1
+    dep_unit = units[0]
+    assert dep_unit["status"] == "unavailable - sell candidate"
+    assert dep_unit["position"] == "C"
