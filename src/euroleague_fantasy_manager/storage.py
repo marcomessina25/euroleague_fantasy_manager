@@ -8,6 +8,7 @@ from pathlib import Path
 import sqlite3
 from typing import Any, Sequence
 
+from .db import connect_db
 from .models import Player, Position
 from .rules import EUROLEAGUE_LEAGUE_ID
 
@@ -60,9 +61,7 @@ class SnapshotStore:
         self._initialize_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.database_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return connect_db(self.database_path)
 
     def _get_schema_version(self, conn: sqlite3.Connection) -> int:
         conn.execute(

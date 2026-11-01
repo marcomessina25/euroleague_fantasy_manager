@@ -1,13 +1,15 @@
-"""SQLite persistence layer for multi-team management with strict isolation."""
+"""SQLite persistence layer for multi-team management with strict isolation and atomic units of work."""
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sqlite3
-from typing import Any, Sequence
+from typing import Any, Iterator, Sequence
 
+from euroleague_fantasy_manager.db import connect_db
 from euroleague_fantasy_manager.multi_team.models import (
     Team,
     TeamRosterUnit,
@@ -17,8 +19,14 @@ from euroleague_fantasy_manager.multi_team.models import (
 MAX_TEAMS = 6
 
 
+class ConcurrentModificationError(Exception):
+    """Raised when updating a team whose updated_at timestamp does not match the stored version."""
+
+    pass
+
+
 class TeamStore:
-    """Thread-safe SQLite store managing up to 6 isolated fantasy teams."""
+    """Thread-safe SQLite store managing up to 6 isolated fantasy teams with atomic transactions."""
 
     def __init__(self, db_path: str | Path = "data/euroleague.sqlite3") -> None:
         self.db_path = str(db_path)
@@ -27,10 +35,43 @@ class TeamStore:
         self._initialize_schema()
 
     def _get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON;")
-        return conn
+        return connect_db(self.db_path)
+
+    @contextmanager
+    def transaction(self, conn: sqlite3.Connection | None = None) -> Iterator[sqlite3.Connection]:
+        """Unit of work on the shared SQLite database.
+
+        If an existing connection is provided, yields it as part of the ongoing transaction.
+        Otherwise, opens a connection, executes BEGIN IMMEDIATE, yields it, commits on clean
+        exit, rolls back on exception, and reliably closes the connection in finally.
+        """
+        if conn is not None:
+            yield conn
+            return
+
+        c = self._get_connection()
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            yield c
+            c.commit()
+        except BaseException:
+            c.rollback()
+            raise
+        finally:
+            c.close()
+
+    @contextmanager
+    def _read_conn(self, conn: sqlite3.Connection | None = None) -> Iterator[sqlite3.Connection]:
+        """Context manager for read queries that reliably closes the connection if opened."""
+        if conn is not None:
+            yield conn
+            return
+
+        c = self._get_connection()
+        try:
+            yield c
+        finally:
+            c.close()
 
     def _initialize_schema(self) -> None:
         with self._get_connection() as conn:
@@ -113,10 +154,25 @@ class TeamStore:
                     "ALTER TABLE managed_teams ADD COLUMN league TEXT NOT NULL DEFAULT 'euroleague';"
                 )
 
-    def create_team(self, team: Team) -> Team:
-        """Create a new team, enforcing the strict max 6 teams limit."""
-        with self._get_connection() as conn:
-            count = conn.execute("SELECT COUNT(*) FROM managed_teams;").fetchone()[0]
+            # Deduplicate active teams before creating the unique index
+            conn.execute(
+                """
+                UPDATE managed_teams 
+                SET is_active = 0 
+                WHERE is_active = 1 
+                  AND team_id NOT IN (
+                      SELECT team_id FROM managed_teams WHERE is_active = 1 ORDER BY created_at ASC LIMIT 1
+                  );
+                """
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS one_active_team ON managed_teams(is_active) WHERE is_active = 1;"
+            )
+
+    def create_team(self, team: Team, conn: sqlite3.Connection | None = None) -> Team:
+        """Create a new team, enforcing the strict max 6 teams limit inside BEGIN IMMEDIATE."""
+        with self.transaction(conn) as c:
+            count = c.execute("SELECT COUNT(*) FROM managed_teams;").fetchone()[0]
             if count >= MAX_TEAMS:
                 raise ValueError(
                     f"Maximum limit of {MAX_TEAMS} teams reached. Cannot create '{team.team_id}'."
@@ -129,7 +185,7 @@ class TeamStore:
             updated_at = team.updated_at or now
             league_val = getattr(team, "league", "euroleague") or "euroleague"
 
-            conn.execute(
+            c.execute(
                 """
                 INSERT INTO managed_teams (
                     team_id, name, league, mode, season, round_number, turn_number,
@@ -157,21 +213,21 @@ class TeamStore:
             # Insert squad units if provided
             if team.squad:
                 self._save_squad_conn(
-                    conn, team.team_id, team.round_number, team.squad
+                    c, team.team_id, team.round_number, team.squad
                 )
 
-        return self.get_team(team.team_id)  # type: ignore[return-value]
+            return self.get_team(team.team_id, conn=c)  # type: ignore[return-value]
 
-    def get_team(self, team_id: str) -> Team | None:
+    def get_team(self, team_id: str, conn: sqlite3.Connection | None = None) -> Team | None:
         """Retrieve team by ID with current round squad."""
-        with self._get_connection() as conn:
-            row = conn.execute(
+        with self._read_conn(conn) as c:
+            row = c.execute(
                 "SELECT * FROM managed_teams WHERE team_id = ?;", (team_id,)
             ).fetchone()
             if not row:
                 return None
 
-            squad = self._get_squad_conn(conn, team_id, row["round_number"])
+            squad = self._get_squad_conn(c, team_id, row["round_number"])
             settings = TeamSettings.from_dict(json.loads(row["settings_json"]))
             league_val = str(row["league"]) if "league" in row.keys() else "euroleague"
 
@@ -191,16 +247,16 @@ class TeamStore:
                 updated_at=row["updated_at"],
             )
 
-    def list_teams(self) -> list[Team]:
+    def list_teams(self, conn: sqlite3.Connection | None = None) -> list[Team]:
         """List all managed teams (up to 6)."""
-        with self._get_connection() as conn:
-            rows = conn.execute(
+        with self._read_conn(conn) as c:
+            rows = c.execute(
                 "SELECT * FROM managed_teams ORDER BY created_at ASC;"
             ).fetchall()
             teams = []
             for row in rows:
                 squad = self._get_squad_conn(
-                    conn, row["team_id"], row["round_number"]
+                    c, row["team_id"], row["round_number"]
                 )
                 settings = TeamSettings.from_dict(
                     json.loads(row["settings_json"])
@@ -225,12 +281,25 @@ class TeamStore:
                 )
             return teams
 
-    def update_team(self, team: Team) -> Team:
-        """Update team attributes, bank, settings, and current round squad."""
-        now = datetime.now(timezone.utc).isoformat()
-        league_val = getattr(team, "league", "euroleague") or "euroleague"
-        with self._get_connection() as conn:
-            res = conn.execute(
+    def update_team(self, team: Team, conn: sqlite3.Connection | None = None) -> Team:
+        """Update team attributes, bank, settings, and current round squad with compare-and-set on updated_at."""
+        with self.transaction(conn) as c:
+            existing = c.execute(
+                "SELECT updated_at FROM managed_teams WHERE team_id = ?;", (team.team_id,)
+            ).fetchone()
+            if not existing:
+                raise KeyError(f"Team '{team.team_id}' not found.")
+
+            expected_updated_at = team.updated_at
+            if expected_updated_at and existing["updated_at"] != expected_updated_at:
+                raise ConcurrentModificationError(
+                    f"Team '{team.team_id}' was modified concurrently. "
+                    f"Expected updated_at '{expected_updated_at}', found '{existing['updated_at']}'."
+                )
+
+            now = datetime.now(timezone.utc).isoformat()
+            league_val = getattr(team, "league", "euroleague") or "euroleague"
+            res = c.execute(
                 """
                 UPDATE managed_teams SET
                     name = ?,
@@ -243,7 +312,7 @@ class TeamStore:
                     transfers_remaining = ?,
                     settings_json = ?,
                     updated_at = ?
-                WHERE team_id = ?;
+                WHERE team_id = ? AND updated_at = ?;
                 """,
                 (
                     team.name,
@@ -257,72 +326,74 @@ class TeamStore:
                     json.dumps(team.settings.to_dict()),
                     now,
                     team.team_id,
+                    existing["updated_at"],
                 ),
             )
             if res.rowcount == 0:
-                raise KeyError(f"Team '{team.team_id}' not found.")
+                raise ConcurrentModificationError(
+                    f"Team '{team.team_id}' was modified concurrently during update."
+                )
 
             if team.squad:
                 self._save_squad_conn(
-                    conn, team.team_id, team.round_number, team.squad
+                    c, team.team_id, team.round_number, team.squad
                 )
 
-        return self.get_team(team.team_id)  # type: ignore[return-value]
+            return self.get_team(team.team_id, conn=c)  # type: ignore[return-value]
 
-    def delete_team(self, team_id: str) -> bool:
+    def delete_team(self, team_id: str, conn: sqlite3.Connection | None = None) -> bool:
         """Delete a team and its associated squad units."""
-        with self._get_connection() as conn:
-            res = conn.execute(
+        with self.transaction(conn) as c:
+            res = c.execute(
                 "DELETE FROM managed_teams WHERE team_id = ?;", (team_id,)
             )
             if res.rowcount > 0:
-                # If deleted team was active, promote another team to active if available
-                active = conn.execute(
+                active = c.execute(
                     "SELECT team_id FROM managed_teams WHERE is_active = 1;"
                 ).fetchone()
                 if not active:
-                    first = conn.execute(
+                    first = c.execute(
                         "SELECT team_id FROM managed_teams ORDER BY created_at ASC LIMIT 1;"
                     ).fetchone()
                     if first:
-                        conn.execute(
+                        c.execute(
                             "UPDATE managed_teams SET is_active = 1 WHERE team_id = ?;",
                             (first["team_id"],),
                         )
                 return True
             return False
 
-    def get_active_team(self) -> Team | None:
+    def get_active_team(self, conn: sqlite3.Connection | None = None) -> Team | None:
         """Retrieve the currently selected active team."""
-        with self._get_connection() as conn:
-            row = conn.execute(
+        with self.transaction(conn) as c:
+            row = c.execute(
                 "SELECT team_id FROM managed_teams WHERE is_active = 1 LIMIT 1;"
             ).fetchone()
             if not row:
-                first = conn.execute(
+                first = c.execute(
                     "SELECT team_id FROM managed_teams ORDER BY created_at ASC LIMIT 1;"
                 ).fetchone()
                 if not first:
                     return None
                 team_id = first["team_id"]
-                conn.execute(
+                c.execute(
                     "UPDATE managed_teams SET is_active = 1 WHERE team_id = ?;",
                     (team_id,),
                 )
             else:
                 team_id = row["team_id"]
-        return self.get_team(team_id)
+            return self.get_team(team_id, conn=c)
 
-    def set_active_team(self, team_id: str) -> None:
+    def set_active_team(self, team_id: str, conn: sqlite3.Connection | None = None) -> None:
         """Set the active team context."""
-        with self._get_connection() as conn:
-            team_exists = conn.execute(
+        with self.transaction(conn) as c:
+            team_exists = c.execute(
                 "SELECT 1 FROM managed_teams WHERE team_id = ?;", (team_id,)
             ).fetchone()
             if not team_exists:
                 raise KeyError(f"Team '{team_id}' does not exist.")
-            conn.execute("UPDATE managed_teams SET is_active = 0;")
-            conn.execute(
+            c.execute("UPDATE managed_teams SET is_active = 0;")
+            c.execute(
                 "UPDATE managed_teams SET is_active = 1 WHERE team_id = ?;", (team_id,)
             )
 
@@ -331,15 +402,21 @@ class TeamStore:
         team_id: str,
         round_number: int,
         squad: Sequence[TeamRosterUnit],
+        conn: sqlite3.Connection | None = None,
     ) -> None:
         """Save roster units for a team in a specific round."""
-        with self._get_connection() as conn:
-            self._save_squad_conn(conn, team_id, round_number, squad)
+        with self.transaction(conn) as c:
+            self._save_squad_conn(c, team_id, round_number, squad)
 
-    def get_squad(self, team_id: str, round_number: int) -> list[TeamRosterUnit]:
+    def get_squad(
+        self,
+        team_id: str,
+        round_number: int,
+        conn: sqlite3.Connection | None = None,
+    ) -> list[TeamRosterUnit]:
         """Get roster units for a team in a specific round."""
-        with self._get_connection() as conn:
-            return self._get_squad_conn(conn, team_id, round_number)
+        with self._read_conn(conn) as c:
+            return self._get_squad_conn(c, team_id, round_number)
 
     def _save_squad_conn(
         self,
@@ -424,20 +501,21 @@ class TeamStore:
         transfers_remaining: int,
         squad: Sequence[TeamRosterUnit],
         overwrite: bool = False,
+        conn: sqlite3.Connection | None = None,
     ) -> None:
         """Save a snapshot of the squad state at the start of a round."""
         squad_data = [u.to_dict() for u in squad]
         squad_json = json.dumps(squad_data)
         now = datetime.now(timezone.utc).isoformat()
-        with self._get_connection() as conn:
+        with self.transaction(conn) as c:
             if not overwrite:
-                exists = conn.execute(
+                exists = c.execute(
                     "SELECT 1 FROM team_round_checkpoints WHERE team_id = ? AND round_number = ? AND season = ?;",
                     (team_id, round_number, season),
                 ).fetchone()
                 if exists:
                     return
-            conn.execute(
+            c.execute(
                 """
                 INSERT OR REPLACE INTO team_round_checkpoints (
                     team_id, round_number, season, bank_tenths, transfers_remaining,
@@ -453,21 +531,16 @@ class TeamStore:
         round_number: int,
         season: str,
         moves: Sequence[dict[str, Any]],
+        conn: sqlite3.Connection | None = None,
     ) -> list[int]:
-        """Record the individual trade events that produced a round's squad.
-
-        Only the resulting squad was persisted before V0.7, which made the trades
-        themselves unrecoverable. Sequential replay (W6) needs the events, not just
-        the outcome. Returns the inserted row ids so a caller can roll back exactly
-        these events (and no others) if a later step in the same request fails.
-        """
+        """Record the individual trade events that produced a round's squad."""
         if not moves:
             return []
         now = datetime.now(timezone.utc).isoformat()
         inserted_ids: list[int] = []
-        with self._get_connection() as conn:
+        with self.transaction(conn) as c:
             for m in moves:
-                cur = conn.execute(
+                cur = c.execute(
                     """
                     INSERT INTO team_transfers (
                         team_id, round_number, season, player_out_id, player_out_name,
@@ -490,17 +563,17 @@ class TeamStore:
                 inserted_ids.append(int(cur.lastrowid))
         return inserted_ids
 
-    def delete_transfers_by_ids(self, transfer_ids: Sequence[int]) -> None:
-        """Delete exactly the given trade events, e.g. to roll back a failed request.
-
-        Unlike ``clear_transfers`` this never touches events from other, already
-        successful requests in the same round.
-        """
+    def delete_transfers_by_ids(
+        self,
+        transfer_ids: Sequence[int],
+        conn: sqlite3.Connection | None = None,
+    ) -> None:
+        """Delete exactly the given trade events, e.g. to roll back a failed request."""
         if not transfer_ids:
             return
         placeholders = ",".join("?" for _ in transfer_ids)
-        with self._get_connection() as conn:
-            conn.execute(
+        with self.transaction(conn) as c:
+            c.execute(
                 f"DELETE FROM team_transfers WHERE id IN ({placeholders});",
                 tuple(int(i) for i in transfer_ids),
             )
@@ -510,6 +583,7 @@ class TeamStore:
         team_id: str,
         season: str,
         round_number: int | None = None,
+        conn: sqlite3.Connection | None = None,
     ) -> list[dict[str, Any]]:
         """Return recorded trade events, optionally scoped to a single round."""
         query = (
@@ -521,8 +595,8 @@ class TeamStore:
             params.append(round_number)
         query += " ORDER BY round_number ASC, id ASC;"
 
-        with self._get_connection() as conn:
-            rows = conn.execute(query, tuple(params)).fetchall()
+        with self._read_conn(conn) as c:
+            rows = c.execute(query, tuple(params)).fetchall()
         return [
             {
                 "id": row["id"],
@@ -540,22 +614,29 @@ class TeamStore:
             for row in rows
         ]
 
-    def clear_transfers(self, team_id: str, round_number: int, season: str) -> None:
+    def clear_transfers(
+        self,
+        team_id: str,
+        round_number: int,
+        season: str,
+        conn: sqlite3.Connection | None = None,
+    ) -> None:
         """Drop recorded trade events for a round before rewriting it."""
-        with self._get_connection() as conn:
-            conn.execute(
+        with self.transaction(conn) as c:
+            c.execute(
                 "DELETE FROM team_transfers WHERE team_id = ? AND round_number = ? AND season = ?;",
                 (team_id, round_number, season),
             )
 
-    def get_rounds_with_state(self, team_id: str, season: str) -> list[int]:
-        """Return every round this team has stored state for, ascending.
-
-        Backs the Lineup tab's round selector: a round is selectable if it has a
-        stored squad or a checkpoint.
-        """
-        with self._get_connection() as conn:
-            rows = conn.execute(
+    def get_rounds_with_state(
+        self,
+        team_id: str,
+        season: str,
+        conn: sqlite3.Connection | None = None,
+    ) -> list[int]:
+        """Return every round this team has stored state for, ascending."""
+        with self._read_conn(conn) as c:
+            rows = c.execute(
                 """
                 SELECT round_number FROM managed_team_squads WHERE team_id = ?
                 UNION
@@ -571,16 +652,11 @@ class TeamStore:
         team_id: str,
         round_number: int,
         season: str,
+        conn: sqlite3.Connection | None = None,
     ) -> int:
-        """Invalidate checkpoints that a past-round edit has made inconsistent.
-
-        Checkpoints are only ever written forward and
-        ``get_latest_checkpoint_before_round`` assumes chronological consistency,
-        so editing round *n* invalidates every checkpoint strictly after it.
-        Returns the number of checkpoints removed.
-        """
-        with self._get_connection() as conn:
-            cur = conn.execute(
+        """Invalidate checkpoints that a past-round edit has made inconsistent."""
+        with self.transaction(conn) as c:
+            cur = c.execute(
                 "DELETE FROM team_round_checkpoints WHERE team_id = ? AND season = ? AND round_number > ?;",
                 (team_id, season, round_number),
             )
@@ -591,10 +667,11 @@ class TeamStore:
         team_id: str,
         round_number: int,
         season: str,
+        conn: sqlite3.Connection | None = None,
     ) -> dict[str, Any]:
         """Get the exact round start checkpoint for a team. Raises ValueError if not found."""
-        with self._get_connection() as conn:
-            row = conn.execute(
+        with self._read_conn(conn) as c:
+            row = c.execute(
                 """
                 SELECT * FROM team_round_checkpoints
                 WHERE team_id = ? AND round_number = ? AND season = ?;
@@ -620,10 +697,11 @@ class TeamStore:
         team_id: str,
         round_number: int,
         season: str,
+        conn: sqlite3.Connection | None = None,
     ) -> dict[str, Any] | None:
         """Get the latest checkpoint at or before round_number. Returns None if not found."""
-        with self._get_connection() as conn:
-            row = conn.execute(
+        with self._read_conn(conn) as c:
+            row = c.execute(
                 """
                 SELECT * FROM team_round_checkpoints
                 WHERE team_id = ? AND season = ? AND round_number <= ?
@@ -648,19 +726,22 @@ class TeamStore:
         team_id: str,
         season: str = "2026/27",
         round_number: int | None = None,
+        conn: sqlite3.Connection | None = None,
     ) -> Team:
         """Revert team transfers and substitutions back to the round start baseline."""
-        team = self.get_team(team_id)
-        rnd = round_number or team.round_number
-        checkpoint = self.get_round_checkpoint(team_id, rnd, season)
+        with self.transaction(conn) as c:
+            team = self.get_team(team_id, conn=c)
+            if not team:
+                raise KeyError(f"Team '{team_id}' not found.")
+            rnd = round_number or team.round_number
+            checkpoint = self.get_round_checkpoint(team_id, rnd, season, conn=c)
 
-        restored_squad = checkpoint["squad"]
-        restored_bank = checkpoint["bank_tenths"]
-        restored_transfers = 4  # Standard fresh round transfers
+            restored_squad = checkpoint["squad"]
+            restored_bank = checkpoint["bank_tenths"]
+            restored_transfers = 4  # Standard fresh round transfers
 
-        with self._get_connection() as conn:
             if rnd == team.round_number:
-                conn.execute(
+                c.execute(
                     """
                     UPDATE managed_teams SET
                         bank_tenths = ?,
@@ -670,10 +751,13 @@ class TeamStore:
                     """,
                     (restored_bank, restored_transfers, datetime.now(timezone.utc).isoformat(), team_id),
                 )
-            self._save_squad_conn(conn, team_id, rnd, restored_squad)
-            conn.execute(
+            self._save_squad_conn(c, team_id, rnd, restored_squad)
+            c.execute(
                 "DELETE FROM team_transfers WHERE team_id = ? AND round_number = ? AND season = ?;",
                 (team_id, rnd, season),
             )
 
-        return self.get_team(team_id)
+            res = self.get_team(team_id, conn=c)
+            if not res:
+                raise KeyError(f"Team '{team_id}' not found after revert.")
+            return res

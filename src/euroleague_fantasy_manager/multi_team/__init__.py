@@ -8,11 +8,13 @@ from euroleague_fantasy_manager.multi_team.models import (
 )
 from euroleague_fantasy_manager.multi_team.store import (
     MAX_TEAMS,
+    ConcurrentModificationError,
     TeamStore,
 )
 
 __all__ = [
     "MAX_TEAMS",
+    "ConcurrentModificationError",
     "Team",
     "TeamRosterUnit",
     "TeamSettings",

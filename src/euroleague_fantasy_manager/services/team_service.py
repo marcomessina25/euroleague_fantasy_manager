@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
+from typing import Iterator
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -37,6 +39,10 @@ class TeamService:
         self.store = store or TeamStore(db_path=db_path)
         self.db_path = getattr(self.store, "db_path", Path(db_path))
 
+    def transaction(self, conn: sqlite3.Connection | None = None) -> Iterator[sqlite3.Connection]:
+        """Forward transaction context to the underlying store."""
+        return self.store.transaction(conn)
+
     def create_team(
         self,
         team_id: str,
@@ -49,6 +55,7 @@ class TeamService:
         bank_tenths: int = 0,
         settings: TeamSettings | dict[str, Any] | None = None,
         squad: Sequence[TeamRosterUnit] | None = None,
+        conn: sqlite3.Connection | None = None,
     ) -> Team:
         """Create a new isolated team profile (max 6)."""
         league = League.from_str(league).value
@@ -83,22 +90,24 @@ class TeamService:
             squad=list(squad or []),
             settings=parsed_settings,
         )
-        created = self.store.create_team(team)
-        if created.squad:
-            self.store.save_round_checkpoint(
-                team_id=team_id,
-                round_number=round_number,
-                season=season,
-                bank_tenths=bank_tenths,
-                transfers_remaining=4,
-                squad=created.squad,
-                overwrite=True,
-            )
-        return created
+        with self.store.transaction(conn) as c:
+            created = self.store.create_team(team, conn=c)
+            if created.squad:
+                self.store.save_round_checkpoint(
+                    team_id=team_id,
+                    round_number=round_number,
+                    season=season,
+                    bank_tenths=bank_tenths,
+                    transfers_remaining=4,
+                    squad=created.squad,
+                    overwrite=True,
+                    conn=c,
+                )
+            return created
 
-    def get_team(self, team_id: str) -> Team:
+    def get_team(self, team_id: str, conn: sqlite3.Connection | None = None) -> Team:
         """Retrieve team by ID, raising KeyError if not found."""
-        team = self.store.get_team(team_id)
+        team = self.store.get_team(team_id, conn=conn)
         if not team:
             raise KeyError(f"Team '{team_id}' not found.")
         return team
@@ -172,9 +181,11 @@ class TeamService:
         bank_tenths: int | None = None,
         transfers_remaining: int | None = None,
         settings: TeamSettings | dict[str, Any] | None = None,
+        updated_at: str | None = None,
+        conn: sqlite3.Connection | None = None,
     ) -> Team:
         """Update metadata, bank, or settings of an existing team."""
-        team = self.get_team(team_id)
+        team = self.get_team(team_id, conn=conn)
         if name is not None:
             team.name = name
         if round_number is not None:
@@ -190,7 +201,9 @@ class TeamService:
                 team.settings = TeamSettings.from_dict(settings)
             else:
                 team.settings = settings
-        return self.store.update_team(team)
+        if updated_at is not None:
+            team.updated_at = updated_at
+        return self.store.update_team(team, conn=conn)
 
     def delete_team(self, team_id: str) -> bool:
         """Delete an existing team."""

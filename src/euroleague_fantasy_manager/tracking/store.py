@@ -6,6 +6,10 @@ import sqlite3
 from typing import Any
 import uuid
 
+from contextlib import contextmanager
+from typing import Iterator
+
+from ..db import connect_db
 from .models import (
     DecisionEvent,
     DecisionOutcome,
@@ -30,10 +34,33 @@ class DecisionStore:
         self._initialize_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.database_path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON;")
-        return conn
+        return connect_db(self.database_path)
+
+    @contextmanager
+    def _get_conn(self, conn: sqlite3.Connection | None = None) -> Iterator[sqlite3.Connection]:
+        if conn is not None:
+            yield conn
+            return
+        c = self._connect()
+        try:
+            yield c
+            c.commit()
+        except BaseException:
+            c.rollback()
+            raise
+        finally:
+            c.close()
+
+    @contextmanager
+    def _read_conn(self, conn: sqlite3.Connection | None = None) -> Iterator[sqlite3.Connection]:
+        if conn is not None:
+            yield conn
+            return
+        c = self._connect()
+        try:
+            yield c
+        finally:
+            c.close()
 
     def _initialize_schema(self) -> None:
         with self._connect() as conn:
@@ -130,14 +157,14 @@ class DecisionStore:
     # Snapshots
     # ---------------------------------------------------------------------------
 
-    def save_snapshot(self, snapshot: StateSnapshot) -> None:
+    def save_snapshot(self, snapshot: StateSnapshot, conn: sqlite3.Connection | None = None) -> None:
         meta_json = (
             json.dumps({str(k): v for k, v in snapshot.player_metadata.items()})
             if snapshot.player_metadata
             else None
         )
-        with self._connect() as conn:
-            conn.execute(
+        with self._get_conn(conn) as c:
+            c.execute(
                 """
                 INSERT OR REPLACE INTO state_snapshots (
                     snapshot_id, team_id, season, round_number, turn_number,
@@ -161,9 +188,9 @@ class DecisionStore:
                 ),
             )
 
-    def get_snapshot(self, snapshot_id: str) -> StateSnapshot | None:
-        with self._connect() as conn:
-            row = conn.execute(
+    def get_snapshot(self, snapshot_id: str, conn: sqlite3.Connection | None = None) -> StateSnapshot | None:
+        with self._read_conn(conn) as c:
+            row = c.execute(
                 "SELECT * FROM state_snapshots WHERE snapshot_id = ?",
                 (snapshot_id,),
             ).fetchone()
@@ -195,7 +222,7 @@ class DecisionStore:
     # Decisions
     # ---------------------------------------------------------------------------
 
-    def log_decision(self, record: DecisionRecord) -> None:
+    def log_decision(self, record: DecisionRecord, conn: sqlite3.Connection | None = None) -> None:
         rec_lineup_json = (
             json.dumps(record.recommended_lineup.to_dict())
             if record.recommended_lineup
@@ -232,8 +259,8 @@ class DecisionStore:
             else None
         )
 
-        with self._connect() as conn:
-            conn.execute(
+        with self._get_conn(conn) as c:
+            c.execute(
                 """
                 INSERT OR REPLACE INTO decision_logs (
                     decision_id, team_id, season, round_number, turn_number,
@@ -278,12 +305,13 @@ class DecisionStore:
                     "round": record.round_number,
                     "is_override": record.is_override,
                 },
-            )
+            ),
+            conn=conn,
         )
 
-    def get_decision(self, decision_id: str) -> DecisionRecord | None:
-        with self._connect() as conn:
-            row = conn.execute(
+    def get_decision(self, decision_id: str, conn: sqlite3.Connection | None = None) -> DecisionRecord | None:
+        with self._read_conn(conn) as c:
+            row = c.execute(
                 "SELECT * FROM decision_logs WHERE decision_id = ?",
                 (decision_id,),
             ).fetchone()
@@ -297,6 +325,7 @@ class DecisionStore:
         season: str | None = None,
         round_number: int | None = None,
         league: str | None = None,
+        conn: sqlite3.Connection | None = None,
     ) -> list[DecisionRecord]:
         query = "SELECT * FROM decision_logs WHERE 1=1"
         params: list[Any] = []
@@ -314,8 +343,8 @@ class DecisionStore:
             params.append(league)
         query += " ORDER BY round_number ASC, turn_number ASC, created_at ASC"
 
-        with self._connect() as conn:
-            rows = conn.execute(query, params).fetchall()
+        with self._read_conn(conn) as c:
+            rows = c.execute(query, params).fetchall()
             return [self._row_to_decision(r) for r in rows]
 
     def _row_to_decision(self, row: sqlite3.Row) -> DecisionRecord:
@@ -383,9 +412,9 @@ class DecisionStore:
     # Outcomes
     # ---------------------------------------------------------------------------
 
-    def save_outcome(self, outcome: DecisionOutcome) -> None:
-        with self._connect() as conn:
-            conn.execute(
+    def save_outcome(self, outcome: DecisionOutcome, conn: sqlite3.Connection | None = None) -> None:
+        with self._get_conn(conn) as c:
+            c.execute(
                 """
                 INSERT OR REPLACE INTO decision_outcomes (
                     decision_id, outcome_status, human_actual_score,
@@ -431,12 +460,13 @@ class DecisionStore:
                     "oracle_score": outcome.oracle_actual_score,
                     "human_regret": outcome.human_regret,
                 },
-            )
+            ),
+            conn=conn,
         )
 
-    def get_outcome(self, decision_id: str) -> DecisionOutcome | None:
-        with self._connect() as conn:
-            row = conn.execute(
+    def get_outcome(self, decision_id: str, conn: sqlite3.Connection | None = None) -> DecisionOutcome | None:
+        with self._read_conn(conn) as c:
+            row = c.execute(
                 "SELECT * FROM decision_outcomes WHERE decision_id = ?",
                 (decision_id,),
             ).fetchone()
@@ -445,7 +475,7 @@ class DecisionStore:
             return self._row_to_outcome(row)
 
     def list_outcomes(
-        self, team_id: str | None = None, season: str | None = None
+        self, team_id: str | None = None, season: str | None = None, conn: sqlite3.Connection | None = None
     ) -> list[tuple[DecisionRecord, DecisionOutcome]]:
         query = """
             SELECT d.*, o.outcome_status, o.human_actual_score, o.recommended_actual_score,
@@ -466,8 +496,8 @@ class DecisionStore:
             params.append(season)
         query += " ORDER BY d.round_number ASC, d.turn_number ASC"
 
-        with self._connect() as conn:
-            rows = conn.execute(query, params).fetchall()
+        with self._read_conn(conn) as c:
+            rows = c.execute(query, params).fetchall()
             results: list[tuple[DecisionRecord, DecisionOutcome]] = []
             for r in rows:
                 dec = self._row_to_decision(r)
@@ -527,9 +557,9 @@ class DecisionStore:
     # Audit Events
     # ---------------------------------------------------------------------------
 
-    def log_event(self, event: DecisionEvent) -> None:
-        with self._connect() as conn:
-            conn.execute(
+    def log_event(self, event: DecisionEvent, conn: sqlite3.Connection | None = None) -> None:
+        with self._get_conn(conn) as c:
+            c.execute(
                 """
                 INSERT INTO decision_events (event_id, decision_id, event_type, payload_json, created_at)
                 VALUES (?, ?, ?, ?, ?)
@@ -543,9 +573,9 @@ class DecisionStore:
                 ),
             )
 
-    def list_events(self, decision_id: str) -> list[DecisionEvent]:
-        with self._connect() as conn:
-            rows = conn.execute(
+    def list_events(self, decision_id: str, conn: sqlite3.Connection | None = None) -> list[DecisionEvent]:
+        with self._read_conn(conn) as c:
+            rows = c.execute(
                 "SELECT * FROM decision_events WHERE decision_id = ? ORDER BY created_at ASC",
                 (decision_id,),
             ).fetchall()

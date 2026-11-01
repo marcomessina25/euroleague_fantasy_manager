@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from euroleague_fantasy_manager.competition.ruleset import League
+from euroleague_fantasy_manager.multi_team.store import ConcurrentModificationError
 from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit
 from euroleague_fantasy_manager.optimization.constraints import (
     PlayerProjectionContract,
@@ -50,6 +51,7 @@ class UpdateTeamRequest(BaseModel):
     bank_tenths: int | None = None
     transfers_remaining: int | None = None
     settings: dict[str, Any] | None = None
+    updated_at: str | None = None
 
 
 class UpdateLineupRequest(BaseModel):
@@ -238,10 +240,13 @@ def update_team(team_id: str, req: UpdateTeamRequest, service: TeamService = Dep
             bank_tenths=req.bank_tenths,
             transfers_remaining=req.transfers_remaining,
             settings=req.settings,
+            updated_at=req.updated_at,
         )
         return team.to_dict()
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Team '{team_id}' not found.")
+    except ConcurrentModificationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 @router.delete("/{team_id}")
