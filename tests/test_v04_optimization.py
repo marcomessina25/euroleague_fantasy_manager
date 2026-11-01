@@ -538,11 +538,10 @@ def test_cli_optimize_backtest(capsys):
 
 
 def test_club_quota_boundary_regression():
-    """Verify official EuroLeague Fantasy Challenge (Dunkest) club quota.
-
-    Rule: Maximum 6 players from the same EuroLeague club across the 10 court players.
-    Head Coach is a coach unit; court limit of 6 applies to court players.
-    """
+    """Verify official EuroLeague Fantasy Challenge (Dunkest) club quota asserting against resolve_ruleset."""
+    from euroleague_fantasy_manager.competition.ruleset import resolve_ruleset
+    ruleset = resolve_ruleset("euroleague")
+    quota = ruleset.max_court_players_per_club
     # 1. Exact boundary: 6 court players from club 10 + 4 from club 20 + coach from club 30
     squad_exact_6 = [
         make_test_player(101, Position.GUARD, expected_fp=15.0, team_id=10),
@@ -565,13 +564,13 @@ def test_club_quota_boundary_regression():
     squad_violation_7[6] = make_test_player(203, Position.FORWARD, expected_fp=16.0, team_id=10)
     res_7 = validate_squad_constraints(squad_violation_7, budget_tenths=2000)
     assert not res_7.is_valid
-    assert any("Club 10 has 7 players; maximum allowed is 6" in e for e in res_7.errors)
+    assert any(f"Club 10 has {quota + 1} players; maximum allowed is {quota}" in e for e in res_7.errors)
 
     # 3. Head coach from same club: 6 court players from club 10 + 1 coach from club 10 is VALID
     squad_6_plus_coach = list(squad_exact_6)
     squad_6_plus_coach[10] = make_test_player(401, Position.HEAD_COACH, expected_fp=15.0, team_id=10)
     res_coach = validate_squad_constraints(squad_6_plus_coach, budget_tenths=2000)
-    assert res_coach.is_valid, "Head coach from same club should not violate court player quota of 6"
+    assert res_coach.is_valid, f"Head coach from same club should not violate court player quota of {quota}"
 
 
 def test_captain_option_value_comprehensive():

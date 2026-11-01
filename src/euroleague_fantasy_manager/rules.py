@@ -71,10 +71,13 @@ class ValidationResult:
         return not self.errors
 
 
+_DEFAULT_BUDGET = object()
+
+
 def validate_squad(
     players: Iterable[Player],
     ruleset: Any,
-    budget_tenths: int | None = None,
+    budget_tenths: Any = _DEFAULT_BUDGET,
 ) -> ValidationResult:
     """Validate a complete 11-unit squad against Classic Mode constraints under the given ruleset."""
     from .optimization.constraints import club_counts
@@ -89,9 +92,10 @@ def validate_squad(
     if len(set(ids)) != len(ids):
         errors.append("A squad cannot contain the same player or coach more than once.")
 
-    effective_budget = budget_tenths
-    if effective_budget is None and getattr(ruleset, "budget_credits", None) is not None:
-        effective_budget = int(ruleset.budget_credits * 10)
+    if budget_tenths is _DEFAULT_BUDGET:
+        effective_budget = int(ruleset.budget_credits * 10) if getattr(ruleset, "budget_credits", None) is not None else None
+    else:
+        effective_budget = budget_tenths
 
     total_cost = sum(player.price_tenths for player in squad)
     if effective_budget is not None and total_cost > effective_budget:

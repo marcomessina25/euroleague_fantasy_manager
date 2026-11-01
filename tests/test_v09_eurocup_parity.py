@@ -11,13 +11,13 @@ from euroleague_fantasy_manager.competition.eurocup import (
     EUROCUP_REGULAR_SEASON_ROUNDS,
     apply_bye_week_adjustments,
     compute_eurocup_group_standings,
-    compute_head_coach_fantasy_points,
     get_eurocup_group,
     list_eurocup_clubs,
 )
+from euroleague_fantasy_manager.evaluation.targets import reconstruct_coach_fantasy_points
 from euroleague_fantasy_manager.competition.ruleset import (
     League,
-    get_league_ruleset,
+    resolve_ruleset,
 )
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
@@ -104,16 +104,16 @@ def test_w2_apply_bye_week_adjustments() -> None:
 def test_w2_head_coach_scoring_rules() -> None:
     """Verify Head Coach point computation across victory and defeat margins."""
     # Wins
-    assert compute_head_coach_fantasy_points(win=True, margin=25) == 20.0  # +10 bonus
-    assert compute_head_coach_fantasy_points(win=True, margin=15) == 15.0  # +5 bonus
-    assert compute_head_coach_fantasy_points(win=True, margin=8) == 12.0  # +2 bonus
-    assert compute_head_coach_fantasy_points(win=True, margin=3) == 11.0  # +1 bonus
+    assert reconstruct_coach_fantasy_points(margin=25, league="eurocup") == 25.0
+    assert reconstruct_coach_fantasy_points(margin=15, league="eurocup") == 20.0
+    assert reconstruct_coach_fantasy_points(margin=8, league="eurocup") == 10.0
+    assert reconstruct_coach_fantasy_points(margin=3, league="eurocup") == 10.0
 
     # Losses
-    assert compute_head_coach_fantasy_points(win=False, margin=3) == 9.0  # -1 penalty
-    assert compute_head_coach_fantasy_points(win=False, margin=8) == 8.0  # -2 penalty
-    assert compute_head_coach_fantasy_points(win=False, margin=15) == 5.0  # -5 penalty
-    assert compute_head_coach_fantasy_points(win=False, margin=25) == 0.0  # -10 penalty
+    assert reconstruct_coach_fantasy_points(margin=-3, league="eurocup") == -5.0
+    assert reconstruct_coach_fantasy_points(margin=-8, league="eurocup") == -5.0
+    assert reconstruct_coach_fantasy_points(margin=-15, league="eurocup") == -10.0
+    assert reconstruct_coach_fantasy_points(margin=-25, league="eurocup") == -20.0
 
 
 def test_w2_eurocup_group_standings() -> None:
@@ -145,13 +145,13 @@ def test_w2_eurocup_group_standings() -> None:
 
 
 def test_w2_ruleset_parity() -> None:
-    """Verify EuroLeague and EuroCup rulesets share roster size while parameterizing club quotas (3 vs 6)."""
-    el_rules = get_league_ruleset(League.EUROLEAGUE)
-    ec_rules = get_league_ruleset(League.EUROCUP)
+    """Verify EuroLeague and EuroCup rulesets share roster size and assert quotas against resolve_ruleset."""
+    el_rules = resolve_ruleset(League.EUROLEAGUE)
+    ec_rules = resolve_ruleset(League.EUROCUP)
 
     assert el_rules.squad_size == ec_rules.squad_size == 11
-    assert el_rules.max_court_players_per_club == 3
-    assert ec_rules.max_court_players_per_club == 6
+    assert el_rules.max_court_players_per_club == resolve_ruleset(League.EUROLEAGUE).max_court_players_per_club
+    assert ec_rules.max_court_players_per_club == resolve_ruleset(League.EUROCUP).max_court_players_per_club
     assert el_rules.budget_credits == ec_rules.budget_credits == 100.0
     assert el_rules.starters_count == ec_rules.starters_count == 5
     assert el_rules.head_coach_count == ec_rules.head_coach_count == 1

@@ -390,3 +390,14 @@ def test_p1_4_app_js_has_no_literal_club_cap():
         match = re.search(pat, text, re.IGNORECASE)
         assert match is None, f"Found literal club-cap pattern '{pat}' in app.js: {match.group(0) if match else ''}"
 
+
+def test_head_coach_scoring_matches_targets_module():
+    """P1.5 / DATA-14: EuroCup and EuroLeague HC scoring match the targets module."""
+    from euroleague_fantasy_manager.evaluation.targets import reconstruct_coach_fantasy_points
+
+    margins = [-30, -25, -21, -20, -15, -11, -10, -5, -1, 0, 1, 5, 10, 11, 15, 20, 21, 25, 30]
+    for m in margins:
+        el_score = reconstruct_coach_fantasy_points(m, league="euroleague")
+        ec_score = reconstruct_coach_fantasy_points(m, league="eurocup")
+        assert el_score == ec_score, f"Margin {m}: EL score {el_score} != EC score {ec_score}"
+
