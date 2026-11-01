@@ -303,8 +303,8 @@ class SnapshotStore:
         season_code = str(payload.get("season_code", "E2026"))
         config = payload.get("config", {})
         cur_md = config.get("current_matchday", {})
-        matchday_id = int(cur_md.get("id", 0))
-        round_number = int(cur_md.get("number", 1))
+        matchday_id = int(cur_md.get("id", payload.get("round_number", 0)))
+        round_number = int(cur_md.get("number", payload.get("round_number", 1)))
         num_turns = int(cur_md.get("num_rounds", 2))
 
         teams_list = config.get("teams", [])
@@ -402,6 +402,40 @@ class SnapshotStore:
                         "is_on_fire": is_on_fire,
                         "has_played": has_played_val,
                     }
+
+        if not players_by_id and "players" in payload:
+            for p in payload["players"]:
+                pid = int(p["id"])
+                pos_val = p.get("position", 1)
+                if isinstance(pos_val, str):
+                    pos = Position.from_raw(pos_val)
+                    pos_int = int(pos)
+                    pos_code = pos.short_code
+                else:
+                    pos_int = int(pos_val)
+                    pos_code = str(p.get("position_code", "G"))
+                players_by_id[pid] = {
+                    "id": pid,
+                    "first_name": str(p.get("first_name", "")),
+                    "last_name": str(p.get("last_name", "")),
+                    "name": str(p.get("name", "")),
+                    "position": pos_int,
+                    "position_code": pos_code,
+                    "team_id": int(p.get("team_id", 1)),
+                    "team_code": str(p.get("team_code", "")),
+                    "team_name": str(p.get("team_name", "")),
+                    "price_tenths": int(p.get("price_tenths", 0)),
+                    "status": str(p.get("status", "AVAILABLE")),
+                    "probability_of_playing": float(p.get("probability_of_playing", 1.0)),
+                    "turn_number": int(p.get("turn_number", 1)),
+                    "last_match_pts": float(p.get("last_match_pts", 0.0)),
+                    "avg_fantasy_pts": float(p.get("avg_fantasy_pts", 0.0)),
+                    "total_plus_tenths": int(p.get("total_plus_tenths", 0)),
+                    "popularity": float(p.get("popularity", 0.0)),
+                    "is_injured": int(p.get("is_injured", 0)),
+                    "is_on_fire": int(p.get("is_on_fire", 0)),
+                    "has_played": int(p.get("has_played", 0)),
+                }
 
         season_code_source = str(payload.get("season_code_source", "config"))
         official_clubs = payload.get("official_clubs", [])

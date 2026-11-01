@@ -147,8 +147,27 @@ class TeamService:
         # Validate before any write so a rejected roll-forward leaves the team untouched
         if curr_units:
             self._validate_roster(curr_units, league=team.league)
-        self.update_team(team_id, transfers_remaining=MAX_TRADES_PER_ROUND)
-        return self.set_squad(team_id, live_round, curr_units, validate=False, advance_team_round=True)
+
+        with self.store.transaction() as c:
+            for r in range(team.round_number + 1, live_round + 1):
+                advance = (r == live_round)
+                self.store.save_squad(team_id, r, curr_units, conn=c)
+                self.store.save_round_checkpoint(
+                    team_id=team_id,
+                    round_number=r,
+                    season=team.season,
+                    bank_tenths=team.bank_tenths,
+                    transfers_remaining=MAX_TRADES_PER_ROUND,
+                    squad=curr_units,
+                    overwrite=True,
+                    conn=c,
+                )
+                if advance:
+                    team.round_number = live_round
+                    team.squad = list(curr_units)
+                    team.transfers_remaining = MAX_TRADES_PER_ROUND
+                    team = self.store.update_team(team, conn=c)
+        return team
 
     def sync_all_teams_to_live_round(self, league: Any = None) -> tuple[list[Team], dict[str, str]]:
         """Roll forward every managed team (optionally of one league) behind the latest snapshot.
@@ -629,21 +648,60 @@ class TeamService:
         team = self.get_team(team_id)
         eff_season = season or team.season
 
-        # 1. Base squad at this round
+        # 1. Base squad and baseline bank at this round
         squad = self.store.get_squad(team_id, round_number, conn=conn)
-        if not squad:
-            chk = self.store.get_latest_checkpoint_before_round(team_id, round_number, eff_season, conn=conn)
-            squad = [TeamRosterUnit.from_dict(u.to_dict()) for u in chk["squad"]] if chk else [TeamRosterUnit.from_dict(u.to_dict()) for u in team.squad]
-
-        # 2. Checkpoint baseline for this round
+        chk = None
         try:
             chk = self.store.get_round_checkpoint(team_id, round_number, eff_season, conn=conn)
             start_bank = chk["bank_tenths"]
             start_rem = chk["transfers_remaining"]
         except ValueError:
-            chk = self.store.get_latest_checkpoint_before_round(team_id, round_number, eff_season)
-            start_bank = chk["bank_tenths"] if chk else team.bank_tenths
-            start_rem = chk["transfers_remaining"] if chk else MAX_TRADES_PER_ROUND
+            start_bank = None
+            start_rem = MAX_TRADES_PER_ROUND
+
+        if not squad or start_bank is None:
+            prev_chk = self.store.get_latest_checkpoint_before_round(team_id, round_number, eff_season, conn=conn)
+            if prev_chk:
+                pr = prev_chk["round_number"]
+                pr_trades = self.store.get_transfers(team_id, eff_season, round_number=pr, conn=conn)
+                if not squad:
+                    # Check if end-of-round squad was stored for pr
+                    pr_stored = self.store.get_squad(team_id, pr, conn=conn)
+                    if pr_stored:
+                        squad = [TeamRosterUnit.from_dict(u.to_dict()) for u in pr_stored]
+                    else:
+                        cur = [TeamRosterUnit.from_dict(u.to_dict()) for u in prev_chk["squad"]]
+                        for t in pr_trades:
+                            out_id = t["player_out_id"]
+                            in_id = t["player_in_id"]
+                            in_pos = t.get("player_in_position")
+                            in_tc = t.get("player_in_team_code")
+                            out_u = next((u for u in cur if u.player_id == out_id), None)
+                            if out_u:
+                                new_u = TeamRosterUnit(
+                                    player_id=in_id,
+                                    position=in_pos or out_u.position,
+                                    name=t.get("player_in_name") or f"Player {in_id}",
+                                    team_code=in_tc or out_u.team_code,
+                                    purchase_price_tenths=t.get("price_in_tenths", 0),
+                                    current_price_tenths=t.get("price_in_tenths", 0),
+                                    is_starter=out_u.is_starter,
+                                    is_captain=out_u.is_captain,
+                                    is_sixth_man=out_u.is_sixth_man,
+                                    is_bench=out_u.is_bench,
+                                    is_coach=(in_pos == "HC" or out_u.is_coach),
+                                    turn_number=out_u.turn_number,
+                                )
+                                cur = [u if u.player_id != out_id else new_u for u in cur]
+                        squad = cur
+                if start_bank is None:
+                    net_pr = sum(t["price_out_tenths"] - t["price_in_tenths"] for t in pr_trades)
+                    start_bank = prev_chk["bank_tenths"] + net_pr
+            else:
+                if not squad:
+                    squad = [TeamRosterUnit.from_dict(u.to_dict()) for u in team.squad]
+                if start_bank is None:
+                    start_bank = team.bank_tenths
 
         # 3. Apply any transfers executed within this round
         transfers = self.store.get_transfers(team_id, eff_season, round_number=round_number, conn=conn)

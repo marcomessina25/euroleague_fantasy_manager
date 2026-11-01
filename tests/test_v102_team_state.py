@@ -992,3 +992,109 @@ def test_p2_4_bank_invariant_over_multiround_sequence(tmp_path: Path) -> None:
 
     # Roster validity
     team_service._validate_roster(team_now.squad, league="euroleague")
+def test_p2_5_roll_forward_and_reconstruction_never_leave_gaps(tmp_path: Path) -> None:
+    """STATE-2: sync_team_to_live_round populates every intermediate round and reconstruction never leaves gaps.
+
+    Specification: trade 100 -> 150 in R1; sync to R4; backfill trade 101 -> 151 in R2.
+    The live squad contains 150 and 151 and not 100 or 101; rounds 2-4 all have squads and checkpoints.
+    """
+    from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
+    from euroleague_fantasy_manager.models import Position
+    from euroleague_fantasy_manager.storage import SnapshotStore
+
+    db_file = tmp_path / "sync_gap_test.sqlite3"
+    team_store = TeamStore(db_path=db_file)
+    team_service = TeamService(store=team_store)
+    snap_store = SnapshotStore(database_path=db_file)
+
+    squad_r1 = _make_legal_squad(offset=100)
+    # Set player 100 (Guard) and 101 (Forward)
+    squad_r1[0] = TeamRosterUnit(
+        player_id=100, position="G", name="G100", team_code="OLY",
+        purchase_price_tenths=80, current_price_tenths=80, is_starter=True,
+    )
+    squad_r1[4] = TeamRosterUnit(
+        player_id=101, position="F", name="F101", team_code="RMB",
+        purchase_price_tenths=80, current_price_tenths=80, is_starter=False,
+    )
+
+    team_service.create_team(
+        team_id="team_gap",
+        name="Gap Test Team",
+        league="euroleague",
+        round_number=1,
+        bank_tenths=200,
+        squad=squad_r1,
+    )
+
+    # 1. Trade 100 -> 150 in R1
+    market_r1 = {
+        150: PlayerProjectionContract(
+            player_id=150, player_name="G150", position=Position.GUARD,
+            team_id=1, team_code="OLY", price_tenths=80, turn_number=1, is_home=True, expected_fp=15.0,
+        )
+    }
+    team_service.execute_transfers(
+        team_id="team_gap",
+        transfers_out_ids=[100],
+        transfers_in_ids=[150],
+        round_number=1,
+        season="2026/27",
+        market_projections=market_r1,
+    )
+
+    # 2. Seed snapshot at R4 and sync to R4
+    snap_store.save_snapshot({
+        "round_number": 4,
+        "season_code": "2026/27",
+        "league_id": 10,
+        "competition_code": "E",
+        "players": [
+            {
+                "id": u.player_id, "name": u.name, "first_name": "", "last_name": "",
+                "position": 1 if u.position == "G" else 2, "position_code": u.position,
+                "team_id": 1, "team_code": u.team_code, "team_name": u.team_code,
+                "price_tenths": u.current_price_tenths, "status": "AVAILABLE",
+                "probability_of_playing": 1.0, "turn_number": 1, "avg_fantasy_pts": 10.0,
+                "last_match_pts": 10.0, "total_plus_tenths": 0, "popularity": 1.0,
+            }
+            for u in squad_r1
+        ],
+        "teams": {},
+    })
+
+    synced_team = team_service.sync_team_to_live_round("team_gap")
+    assert synced_team.round_number == 4
+
+    # Assert rounds 2, 3, 4 all have stored squads and checkpoints
+    for r in (2, 3, 4):
+        squad_r = team_store.get_squad("team_gap", r)
+        assert len(squad_r) == 11, f"Missing squad for round {r}"
+        chk_r = team_store.get_round_checkpoint("team_gap", r, "2026/27")
+        assert chk_r is not None, f"Missing checkpoint for round {r}"
+
+    # 3. Backfill trade 101 -> 151 in R2
+    market_r2 = {
+        151: PlayerProjectionContract(
+            player_id=151, player_name="F151", position=Position.FORWARD,
+            team_id=2, team_code="RMB", price_tenths=80, turn_number=1, is_home=True, expected_fp=15.0,
+        )
+    }
+    team_service.execute_transfers(
+        team_id="team_gap",
+        transfers_out_ids=[101],
+        transfers_in_ids=[151],
+        round_number=2,
+        season="2026/27",
+        market_projections=market_r2,
+    )
+
+    # 4. Live squad at R4 contains 150 and 151, and does not contain 100 or 101
+    live_team = team_service.get_team("team_gap")
+    assert live_team.round_number == 4
+    live_pids = {u.player_id for u in live_team.squad}
+    assert 150 in live_pids
+    assert 151 in live_pids
+    assert 100 not in live_pids
+    assert 101 not in live_pids
+
