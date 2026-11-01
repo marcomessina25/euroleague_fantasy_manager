@@ -662,19 +662,20 @@ class TeamService:
     def revert_to_round_start(
         self,
         team_id: str,
-        season: str = "2026/27",
+        season: str | None = None,
         round_number: int | None = None,
     ) -> Team:
         """Revert team squad, bank, and transfers remaining back to round start baseline."""
         team = self.get_team(team_id)
+        s_code = season or team.season
         rnd = round_number or team.round_number
         res = self.store.revert_to_round_start(
             team_id=team_id,
-            season=season,
+            season=s_code,
             round_number=rnd,
         )
         if rnd < team.round_number:
-            self.replay_transfers_forward(team_id, from_round=rnd, season=season)
+            self.replay_transfers_forward(team_id, from_round=rnd, season=s_code)
             return self.get_team(team_id)
         return res
 
@@ -799,36 +800,42 @@ class TeamService:
         self,
         team_id: str,
         from_round: int,
-        season: str,
+        season: str | None = None,
         discard_conflicting: bool = False,
         conn: sqlite3.Connection | None = None,
         audit: AuditIntent | None = None,
     ) -> None:
         """Propagate squad and bank changes forward from a past round edit up to live round (§3.2)."""
         team = self.get_team(team_id, conn=conn)
+        s_code = season or team.season
         live_round = team.round_number
         if from_round >= live_round:
             return
 
+        from euroleague_fantasy_manager.competition.ruleset import resolve_ruleset
+        ruleset = resolve_ruleset(getattr(team, "league", "euroleague"), db_path=self.db_path)
+
         for r in range(from_round + 1, live_round + 1):
-            prev_pit = self.reconstruct_point_in_time_state(team_id, r - 1, season=season, conn=conn)
+            prev_pit = self.reconstruct_point_in_time_state(team_id, r - 1, season=s_code, conn=conn)
             incoming_squad = [TeamRosterUnit.from_dict(u.to_dict()) for u in prev_pit.squad]
             incoming_bank = prev_pit.bank_tenths
+
+            is_unlim_round = ruleset.is_unlimited_trade_round(r)
 
             # Overwrite round r's start checkpoint with incoming state
             self.store.save_round_checkpoint(
                 team_id=team_id,
                 round_number=r,
-                season=season,
+                season=s_code,
                 bank_tenths=incoming_bank,
-                transfers_remaining=MAX_TRADES_PER_ROUND,
+                transfers_remaining=ruleset.max_trades_per_round,
                 squad=incoming_squad,
                 overwrite=True,
                 conn=conn,
             )
 
             # Replay any recorded trades in round r
-            r_transfers = self.store.get_transfers(team_id, season, round_number=r, conn=conn)
+            r_transfers = self.store.get_transfers(team_id, s_code, round_number=r, conn=conn)
             cur_squad = list(incoming_squad)
             cur_bank = incoming_bank
             applied_trades_count = 0
@@ -899,9 +906,14 @@ class TeamService:
                 )
                 cur_squad = [u if u.player_id != out_id else new_unit for u in cur_squad]
                 cur_bank += t["price_out_tenths"] - t["price_in_tenths"]
-                applied_trades_count += 1
+                if not t.get("is_unlimited_round") and not is_unlim_round:
+                    applied_trades_count += 1
 
-            cur_rem_trades = max(0, MAX_TRADES_PER_ROUND - applied_trades_count)
+            cur_rem_trades = (
+                ruleset.max_trades_per_round
+                if is_unlim_round
+                else max(0, ruleset.max_trades_per_round - applied_trades_count)
+            )
             self.store.save_squad(team_id, r, cur_squad, conn=conn)
 
             if r == live_round:
@@ -916,7 +928,7 @@ class TeamService:
         transfers_out_ids: Sequence[int],
         transfers_in_ids: Sequence[int],
         round_number: int | None = None,
-        season: str = "2026/27",
+        season: str | None = None,
         unlimited: bool = False,
         discard_conflicting: bool = False,
         market_projections: Mapping[int, Any] | None = None,
@@ -926,6 +938,7 @@ class TeamService:
     ) -> dict[str, Any]:
         """Execute one or more transfers for a live or past round with forward replay (§3.2)."""
         team = self.get_team(team_id)
+        season = season or team.season
         target_round = round_number if round_number is not None else team.round_number
         if target_round > team.round_number:
             raise ValueError(
@@ -949,9 +962,14 @@ class TeamService:
         if len(out_list) != len(in_list):
             raise ValueError("Number of players sold must match number of players bought.")
 
-        from euroleague_fantasy_manager.competition.ruleset import is_unlimited_trade_round, resolve_ruleset
+        from euroleague_fantasy_manager.competition.ruleset import resolve_ruleset
         ruleset = resolve_ruleset(getattr(team, "league", "euroleague"), db_path=self.db_path)
-        is_unlimited = unlimited or is_unlimited_trade_round(target_round, ruleset)
+        is_unlimited_window = ruleset.is_unlimited_trade_round(target_round)
+        if unlimited and not is_unlimited_window:
+            raise ValueError(
+                f"Round {target_round} is not an unlimited trade round in {ruleset.name}."
+            )
+        is_unlimited = is_unlimited_window
         if not is_unlimited and len(out_ids) > base_transfers_remaining:
             raise ValueError(
                 f"Requested {len(out_ids)} trades, but only {base_transfers_remaining} transfers remaining."

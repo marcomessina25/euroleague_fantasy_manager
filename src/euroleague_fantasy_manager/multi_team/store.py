@@ -747,7 +747,7 @@ class TeamStore:
     def revert_to_round_start(
         self,
         team_id: str,
-        season: str = "2026/27",
+        season: str | None = None,
         round_number: int | None = None,
         conn: sqlite3.Connection | None = None,
     ) -> Team:
@@ -756,12 +756,15 @@ class TeamStore:
             team = self.get_team(team_id, conn=c)
             if not team:
                 raise KeyError(f"Team '{team_id}' not found.")
+            s_code = season or team.season
             rnd = round_number or team.round_number
-            checkpoint = self.get_round_checkpoint(team_id, rnd, season, conn=c)
+            checkpoint = self.get_round_checkpoint(team_id, rnd, s_code, conn=c)
+            if not checkpoint:
+                raise KeyError(f"Checkpoint for team '{team_id}' round {rnd} ({s_code}) not found.")
 
             restored_squad = checkpoint["squad"]
             restored_bank = checkpoint["bank_tenths"]
-            restored_transfers = 4  # Standard fresh round transfers
+            restored_transfers = checkpoint.get("transfers_remaining", 4)
 
             if rnd == team.round_number:
                 c.execute(
@@ -777,7 +780,7 @@ class TeamStore:
             self._save_squad_conn(c, team_id, rnd, restored_squad)
             c.execute(
                 "DELETE FROM team_transfers WHERE team_id = ? AND round_number = ? AND season = ?;",
-                (team_id, rnd, season),
+                (team_id, rnd, s_code),
             )
 
             res = self.get_team(team_id, conn=c)

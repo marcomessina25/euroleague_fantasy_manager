@@ -1228,4 +1228,144 @@ def test_p2_6_validation_and_unified_position_normalizer(tmp_path: Path) -> None
     from euroleague_fantasy_manager.cli import main
     exit_code = main(["--db", str(db_file), "team", "trade", "--team", "team_val", "--out", "20", "--in", "999999"])
     assert exit_code == 1
+def test_p2_7_round_and_season_correct_operations(tmp_path: Path) -> None:
+    """STATE-7, STATE-8, WEB-3: unlimited trade windows, non-default season, and intra-round round targeting."""
+    import json
+    from euroleague_fantasy_manager.models import Position
+    from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
+    from euroleague_fantasy_manager.multi_team.store import TeamStore
+    from euroleague_fantasy_manager.services.team_service import TeamService
+    from euroleague_fantasy_manager.web.app import create_app
+    from fastapi.testclient import TestClient
+
+    db_file = tmp_path / "p27_test.sqlite3"
+    team_store = TeamStore(db_path=db_file)
+    team_service = TeamService(store=team_store)
+
+    # 1. Non-default season (2027/28): trade and revert
+    squad_2027 = _make_legal_squad(offset=10)
+    team_2027 = team_service.create_team(
+        team_id="team_2027",
+        name="Season 2027 Team",
+        season="2027/28",
+        round_number=1,
+        bank_tenths=200,
+        squad=squad_2027,
+    )
+    assert team_2027.season == "2027/28"
+
+    # Trade in 2027/28
+    p_out_id = squad_2027[0].player_id
+    market_r1 = {
+        50: PlayerProjectionContract(
+            player_id=50, player_name="G50", position=Position.GUARD,
+            team_id=1, team_code="OLY", price_tenths=80, turn_number=1, is_home=True, expected_fp=15.0,
+        )
+    }
+    trade_res = team_service.execute_transfers(
+        team_id="team_2027",
+        transfers_out_ids=[p_out_id],
+        transfers_in_ids=[50],
+        round_number=1,
+        season="2027/28",
+        market_projections=market_r1,
+    )
+    assert trade_res is not None
+    traded_team = team_service.get_team("team_2027")
+    assert 50 in {u.player_id for u in traded_team.squad}
+    assert traded_team.transfers_remaining == 3
+
+    # Revert in 2027/28
+    reverted_team = team_service.revert_to_round_start("team_2027", season="2027/28", round_number=1)
+    assert p_out_id in {u.player_id for u in reverted_team.squad}
+    assert 50 not in {u.player_id for u in reverted_team.squad}
+    assert reverted_team.transfers_remaining == 4  # Restored from checkpoint
+
+    # 2. Unlimited trade windows (STATE-7)
+    # Outside an unlimited window (Round 1), requesting unlimited=True raises ValueError / 400
+    with pytest.raises(ValueError, match="not an unlimited trade round"):
+        team_service.execute_transfers(
+            team_id="team_2027",
+            transfers_out_ids=[p_out_id],
+            transfers_in_ids=[50],
+            round_number=1,
+            season="2027/28",
+            unlimited=True,
+            market_projections=market_r1,
+        )
+
+    # In Web API, outside window with unlimited=True returns 400
+    app = create_app(db_path=str(db_file))
+    client = TestClient(app)
+    res_bad_unlim = client.post(
+        "/api/teams/team_2027/transfers",
+        json={
+            "transfers_out_ids": [p_out_id],
+            "transfers_in_ids": [50],
+            "round_number": 1,
+            "season": "2027/28",
+            "unlimited": True,
+        },
+    )
+    assert res_bad_unlim.status_code == 400
+
+    # In an unlimited window (Round 7 in EuroLeague):
+    # Setup team at round 7
+    squad_r7 = _make_legal_squad(offset=100)
+    team_service.create_team(
+        team_id="team_unlim",
+        name="Unlimited Window Team",
+        round_number=7,
+        bank_tenths=500,
+        squad=squad_r7,
+    )
+    market_r7 = {
+        200 + i: PlayerProjectionContract(
+            player_id=200 + i, player_name=f"Player_{200+i}",
+            position=squad_r7[i].position,
+            team_id=1, team_code="OLY", price_tenths=80, turn_number=1, is_home=True, expected_fp=15.0,
+        )
+        for i in range(5)
+    }
+    # Execute 5 trades (more than normal 4 trades!) in round 7
+    res_r7 = team_service.execute_transfers(
+        team_id="team_unlim",
+        transfers_out_ids=[squad_r7[i].player_id for i in range(5)],
+        transfers_in_ids=[200 + i for i in range(5)],
+        round_number=7,
+        market_projections=market_r7,
+    )
+    assert res_r7 is not None
+    # In an unlimited round, transfers_remaining is NOT decremented (remains 4)
+    after_unlim = team_service.get_team("team_unlim")
+    assert after_unlim.transfers_remaining == 4
+
+    # 3. Intra-round apply (WEB-3): applying subs in R1 changes R1 only; live R8 squad is byte-identical
+    squad_live_r8 = _make_legal_squad(offset=300)
+    team_service.create_team(
+        team_id="team_r8",
+        name="R8 Team",
+        round_number=8,
+        bank_tenths=100,
+        squad=squad_live_r8,
+    )
+    # Store round 1 squad as well
+    squad_r1_init = _make_legal_squad(offset=300)
+    team_store.save_squad("team_r8", 1, squad_r1_init)
+
+    # Capture byte representation of R8 squad
+    r8_squad_before = team_store.get_squad("team_r8", 8)
+    r8_bytes_before = json.dumps([u.to_dict() for u in r8_squad_before], sort_keys=True).encode("utf-8")
+
+    # Call /api/workstation/intra-round/apply with round_number=1
+    res_apply = client.post(
+        "/api/workstation/intra-round/apply",
+        json={"team_id": "team_r8", "round_number": 1, "season": "2026/27"},
+    )
+    assert res_apply.status_code == 200
+
+    # R8 squad in database is 100% byte-identical
+    r8_squad_after = team_store.get_squad("team_r8", 8)
+    r8_bytes_after = json.dumps([u.to_dict() for u in r8_squad_after], sort_keys=True).encode("utf-8")
+    assert r8_bytes_before == r8_bytes_after
 

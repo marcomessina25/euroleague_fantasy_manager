@@ -97,6 +97,10 @@ class CompetitionRuleset:
         """Verify that no club exceeds the maximum allowed court player quota."""
         return all(count <= self.max_court_players_per_club for count in court_club_counts.values())
 
+    def is_unlimited_trade_round(self, round_number: int) -> bool:
+        """Return True if the specified round allows unlimited transfers under this ruleset."""
+        return round_number in self.unlimited_trade_rounds
+
     def calculate_player_score(self, raw_fp: float, role: str) -> float:
         """Apply official role multipliers (e.g. captain 2.0x, bench 0.5x) to raw fantasy score."""
         multiplier = self.scoring_multipliers.get(role.lower(), 1.0)
@@ -297,4 +301,4 @@ def resolve_ruleset(
 
 def is_unlimited_trade_round(round_number: int, ruleset: CompetitionRuleset) -> bool:
     """Return True if the specified round allows unlimited transfers under the given ruleset."""
-    return round_number in ruleset.unlimited_trade_rounds
+    return ruleset.is_unlimited_trade_round(round_number)

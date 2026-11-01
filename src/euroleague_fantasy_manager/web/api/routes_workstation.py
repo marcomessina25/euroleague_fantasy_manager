@@ -470,6 +470,7 @@ def simulate_intra_round_endpoint(
 
 
 @router.post("/apply/intra-round")
+@router.post("/intra-round/apply")
 def apply_intra_round_endpoint(
     req: SimulateIntraRoundRequest,
     optimization_service: OptimizationService = Depends(get_optimization_service),
@@ -478,10 +479,12 @@ def apply_intra_round_endpoint(
 ) -> dict[str, Any]:
     """Apply the optimal intra-round substitutions directly to the team lineup."""
     try:
+        current_team = team_service.get_team(req.team_id)
+        target_round = req.round_number if req.round_number is not None else current_team.round_number
         res = optimization_service.optimize_intra_round(
             team_id=req.team_id,
             season=req.season,
-            round_number=req.round_number,
+            round_number=target_round,
         )
         updated_team = team_service.update_lineup(
             team_id=req.team_id,
@@ -490,6 +493,7 @@ def apply_intra_round_endpoint(
             sixth_man_id=res.sixth_man_id,
             bench_ids=res.bench_ids,
             coach_id=res.coach_id,
+            round_number=target_round,
         )
 
         # Log decision
@@ -510,7 +514,7 @@ def apply_intra_round_endpoint(
             decision_service.log_turn_sub(
                 team_id=req.team_id,
                 season=req.season,
-                round_number=updated_team.round_number,
+                round_number=target_round,
                 turn_number=updated_team.turn_number,
                 recommended_turn_sub=payload,
                 actual_turn_sub=payload,
