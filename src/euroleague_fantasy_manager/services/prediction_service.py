@@ -123,49 +123,50 @@ class PredictionService:
         if not self.database_path.exists():
             return contracts
 
-        try:
-            store_eval = EvaluationDatasetStore(self.database_path)
-            is_synthetic = (store_eval.get_season_source(season) == "synthetic" or store_eval.get_season_source(norm_season) == "synthetic")
-            # The historical evaluation dataset only covers EuroLeague and must not be synthetic for live requests.
-            if not is_synthetic and league_enum == League.EUROLEAGUE and norm_season in store_eval.list_seasons():
-                cutoff = store_eval.get_round_decision_cutoff(norm_season, round_number)
-                if cutoff:
-                    feature_table = build_round_feature_table(
-                        season=norm_season,
-                        round_number=round_number,
-                        database_path=self.database_path,
-                        decision_cutoff=cutoff,
+        store_eval = EvaluationDatasetStore(self.database_path)
+        is_synthetic = (store_eval.get_season_source(season) == "synthetic" or store_eval.get_season_source(norm_season) == "synthetic")
+        # The historical evaluation dataset only covers EuroLeague and must not be synthetic for live requests.
+        if not is_synthetic and league_enum == League.EUROLEAGUE and norm_season in store_eval.list_seasons():
+            cutoff = store_eval.get_round_decision_cutoff(norm_season, round_number)
+            if cutoff:
+                if canon_model in ("fp_decomposed_calibrated_v03", "xpdk_calibrated_v03"):
+                    raise ModelUnavailableError(
+                        model=canon_model,
+                        reason=f"Calibrated model '{canon_model}' requires a fitted calibrator.",
                     )
+                feature_table = build_round_feature_table(
+                    season=norm_season,
+                    round_number=round_number,
+                    database_path=self.database_path,
+                    decision_cutoff=cutoff,
+                )
 
-                    for pid, feat in feature_table.items():
-                        rec = predict_single_player_baseline(feature_row=feat, model_name=canon_model)
-                        contracts[pid] = PlayerProjectionContract(
-                            player_id=feat.player_id,
-                            player_name=feat.player_name,
-                            position=Position.from_raw(feat.position),
-                            team_id=None,
-                            team_code=feat.team_code,
-                            price_tenths=feat.quotation_at_decision_tenths,
-                            expected_fp=rec.prediction,
-                            probability_play=rec.play_probability,
-                            expected_minutes=rec.expected_minutes,
-                            fp_per_minute=getattr(rec, "expected_fp_per_min", 0.0),
-                            uncertainty=rec.sigma_prediction,
-                            prediction_spread=getattr(rec, "upper_bound", 0.0) - getattr(rec, "lower_bound", 0.0),
-                            turn_number=feat.turn_number,
-                            opponent_code=feat.opponent_team_code,
-                            is_home=feat.home,
-                            model_version=canon_model,
-                            feature_version="1.0.0",
-                            provenance={
-                                "snapshot_id": None,
-                                "source": "eval",
-                                "model": canon_model,
-                            },
-                        )
-        except Exception:
-            # Fallback or synthetic table in database
-            pass
+                for pid, feat in feature_table.items():
+                    rec = predict_single_player_baseline(feature_row=feat, model_name=canon_model)
+                    contracts[pid] = PlayerProjectionContract(
+                        player_id=feat.player_id,
+                        player_name=feat.player_name,
+                        position=Position.from_raw(feat.position),
+                        team_id=None,
+                        team_code=feat.team_code,
+                        price_tenths=feat.quotation_at_decision_tenths,
+                        expected_fp=rec.prediction,
+                        probability_play=rec.play_probability,
+                        expected_minutes=rec.expected_minutes,
+                        fp_per_minute=getattr(rec, "expected_fp_per_min", 0.0),
+                        uncertainty=rec.sigma_prediction,
+                        prediction_spread=getattr(rec, "upper_bound", 0.0) - getattr(rec, "lower_bound", 0.0),
+                        turn_number=feat.turn_number,
+                        opponent_code=feat.opponent_team_code,
+                        is_home=feat.home,
+                        model_version=canon_model,
+                        feature_version="1.0.0",
+                        provenance={
+                            "snapshot_id": None,
+                            "source": "eval",
+                            "model": canon_model,
+                        },
+                    )
 
         if not contracts:
             if canon_model == "price_prior_v1":
@@ -177,6 +178,7 @@ class PredictionService:
                 )
 
         return contracts
+
     def _build_live_contracts(
         self,
         season: str,
@@ -215,7 +217,7 @@ class PredictionService:
         players = store.load_players_for_snapshot(snap.snapshot_id)
         fixtures = store.load_fixtures_for_snapshot(snap.snapshot_id)
 
-        team_fix: dict[str, tuple[str, bool, int, bool]] = {}
+        team_fix: dict[str, list[tuple[str, bool, int, bool]]] = {}
         for f in fixtures:
             if f.get("round_number") == round_number:
                 h_code = f.get("home_team_code", "")
@@ -224,16 +226,16 @@ class PredictionService:
                 f_status = str(f.get("status") or "scheduled").lower()
                 is_played = (f_status in ("played", "finished", "final"))
                 if h_code:
-                    team_fix[h_code] = (a_code, True, t_num, is_played)
+                    team_fix.setdefault(h_code, []).append((a_code, True, t_num, is_played))
                 if a_code:
-                    team_fix[a_code] = (h_code, False, t_num, is_played)
+                    team_fix.setdefault(a_code, []).append((h_code, False, t_num, is_played))
 
         contracts: dict[int, PlayerProjectionContract] = {}
         is_exact_round = (snap.round_number == round_number)
 
         for p in players:
-            has_fixture = p.team_code in team_fix if team_fix else True
-            if not has_fixture:
+            fix_list = team_fix.get(p.team_code, [])
+            if team_fix and not fix_list:
                 contracts[p.id] = predict_player_price_prior(
                     player=p,
                     is_bye=True,
@@ -241,22 +243,64 @@ class PredictionService:
                 )
                 continue
 
-            opp, is_home, t_num, is_played_fix = team_fix.get(
-                p.team_code, ("", True, p.turn_number, False)
-            )
-            has_played = bool(getattr(p, "has_played", False) or is_played_fix) if is_exact_round else False
-            actual_fp = float(p.last_match_pts) if (has_played and is_exact_round) else None
+            if not fix_list:
+                fix_list = [("", True, p.turn_number, False)]
 
-            contracts[p.id] = predict_player_price_prior(
-                player=p,
-                is_home=is_home,
-                turn_number=t_num,
-                opponent_code=opp,
-                has_played=has_played,
-                actual_fp=actual_fp,
-                is_bye=False,
-                snapshot_id=snap.snapshot_id,
-            )
+            sub_contracts = []
+            for opp, is_home, t_num, is_played_fix in fix_list:
+                has_played = bool(getattr(p, "has_played", False) or is_played_fix) if is_exact_round else False
+                actual_fp = float(p.last_match_pts) if (has_played and is_exact_round) else None
+
+                sub_contracts.append(
+                    predict_player_price_prior(
+                        player=p,
+                        is_home=is_home,
+                        turn_number=t_num,
+                        opponent_code=opp,
+                        has_played=has_played,
+                        actual_fp=actual_fp,
+                        is_bye=False,
+                        snapshot_id=snap.snapshot_id,
+                    )
+                )
+
+            if len(sub_contracts) == 1:
+                contracts[p.id] = sub_contracts[0]
+            else:
+                total_exp_fp = round(sum(c.expected_fp for c in sub_contracts), 2)
+                total_min = round(sum(c.expected_minutes for c in sub_contracts), 1)
+                all_played = all(c.has_played for c in sub_contracts)
+                any_played = any(c.has_played for c in sub_contracts)
+                total_actual = round(sum(c.actual_fp for c in sub_contracts if c.actual_fp is not None), 2) if any_played else None
+                combined_opp = "/".join(c.opponent_code for c in sub_contracts if c.opponent_code)
+                min_turn = min(c.turn_number for c in sub_contracts)
+                comb_unc = round((sum(c.uncertainty ** 2 for c in sub_contracts)) ** 0.5, 2)
+                comb_spread = round((sum(c.prediction_spread ** 2 for c in sub_contracts)) ** 0.5, 2)
+
+                contracts[p.id] = PlayerProjectionContract(
+                    player_id=p.id,
+                    player_name=p.name,
+                    position=p.position,
+                    team_id=p.team_id,
+                    team_code=p.team_code,
+                    price_tenths=p.price_tenths,
+                    expected_fp=total_exp_fp,
+                    probability_play=sub_contracts[0].probability_play,
+                    expected_minutes=total_min,
+                    fp_per_minute=sub_contracts[0].fp_per_minute,
+                    uncertainty=comb_unc,
+                    prediction_spread=comb_spread,
+                    turn_number=min_turn,
+                    opponent_code=combined_opp,
+                    is_home=sub_contracts[0].is_home,
+                    actual_fp=total_actual,
+                    has_played=all_played,
+                    is_bye=False,
+                    pre_round_status=sub_contracts[0].pre_round_status,
+                    model_version=sub_contracts[0].model_version,
+                    feature_version=sub_contracts[0].feature_version,
+                    provenance=sub_contracts[0].provenance,
+                )
 
         return contracts
 

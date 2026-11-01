@@ -49,12 +49,18 @@ def predict_player_price_prior(
 
     cr = player.credits
     pos_enum = player.position
+    is_injured = bool(player.is_injured or str(getattr(player, "status", "")).lower() in ("out", "injured"))
     if pos_enum == Position.HEAD_COACH:
         base_hc = 11.0 if is_home else 8.5
         exp_fp = max(4.0, min(16.0, round(base_hc + (cr - 6.0) * 0.6, 2)))
         exp_min = 40.0
         fp_per_min = round(exp_fp / 40.0, 3)
         p_play = 1.0
+    elif is_injured:
+        p_play = 0.0
+        exp_min = 0.0
+        fp_per_min = 0.0
+        exp_fp = 0.0
     else:
         is_starter = (player.status.lower() in ("starter", "start") or cr >= 11.0)
         if is_starter:
@@ -66,11 +72,11 @@ def predict_player_price_prior(
         pos_base = 0.54 if "G" in pos_code else (0.56 if "F" in pos_code else 0.60)
         fp_per_min = max(0.32, min(0.85, pos_base + (cr - 10.5) * 0.028))
         loc_mult = 1.05 if is_home else 0.95
-        p_play = player.probability_of_playing if not player.is_injured else 0.0
+        p_play = player.probability_of_playing
         raw_exp = exp_min * fp_per_min * loc_mult
         exp_fp = round(p_play * raw_exp, 2)
 
-        if player.avg_fantasy_pts is not None and player.avg_fantasy_pts > 0 and not has_played:
+        if player.avg_fantasy_pts is not None and player.avg_fantasy_pts > 0:
             exp_fp = round(0.6 * player.avg_fantasy_pts + 0.4 * exp_fp, 2)
 
     unc_val = round(max(3.0, exp_fp * 0.25), 2)

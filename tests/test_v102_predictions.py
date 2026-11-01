@@ -467,3 +467,164 @@ def test_p3_6_synthetic_data_guards(tmp_path: Path):
     assert p.player_name == "Live Player 888"
     assert p.model_version == "price_prior_v1"
     assert p.provenance["source"] == "live"
+
+
+def test_p3_7_calibrated_model_without_calibrator_raises(tmp_path: Path):
+    from euroleague_fantasy_manager.evaluation.dataset import EvaluationDatasetStore, build_historical_dataset
+
+    db_file = tmp_path / "test_cal.db"
+    build_historical_dataset(database_path=db_file, seasons=["2025"], rounds_per_season=4)
+    eval_store = EvaluationDatasetStore(db_file)
+    with eval_store._connect() as conn:
+        conn.execute("INSERT OR REPLACE INTO eval_dataset_meta (season, source, created_at) VALUES ('E2025', 'historical_feeds', '2025-01-01T00:00:00Z')")
+
+    ps = PredictionService(database_path=db_file)
+    with pytest.raises(ModelUnavailableError) as exc:
+        ps.get_projections(season="2025", round_number=4, model_name="fp_decomposed_calibrated_v03")
+    assert "calibrated" in str(exc.value).lower()
+
+    with pytest.raises(ModelUnavailableError) as exc2:
+        ps.get_projections(season="2025", round_number=4, model_name="xpdk_calibrated_v03")
+    assert "calibrated" in str(exc2.value).lower()
+
+
+def test_p3_7_mid_round_expected_fp_invariant_and_injured_prob_zero():
+    from euroleague_fantasy_manager.models import Player, Position
+    from euroleague_fantasy_manager.prediction.price_prior import predict_player_price_prior
+
+    p1 = Player(
+        id=101,
+        name="Healthy Star",
+        position=Position.GUARD,
+        team_id=1,
+        team_code="RMB",
+        team_name="Real Madrid",
+        price_tenths=150,
+        status="starter",
+        probability_of_playing=1.0,
+        avg_fantasy_pts=16.0,
+        is_injured=False,
+    )
+
+    # 1. Expected FP invariant to has_played mid-round
+    unplayed = predict_player_price_prior(player=p1, has_played=False, is_home=True)
+    played = predict_player_price_prior(player=p1, has_played=True, actual_fp=22.5, is_home=True)
+
+    assert unplayed.expected_fp == played.expected_fp
+    assert unplayed.expected_fp > 0.0
+    assert unplayed.actual_fp is None
+    assert played.actual_fp == 22.5
+
+    # 2. probability_play is 0.0 when is_injured forces expected_fp to 0.0
+    p_inj = Player(
+        id=102,
+        name="Injured Star",
+        position=Position.GUARD,
+        team_id=1,
+        team_code="RMB",
+        team_name="Real Madrid",
+        price_tenths=150,
+        status="out",
+        probability_of_playing=0.8,  # even if raw prob is non-zero
+        avg_fantasy_pts=18.0,
+        is_injured=True,
+    )
+    contract_inj = predict_player_price_prior(player=p_inj)
+    assert contract_inj.probability_play == 0.0
+    assert contract_inj.expected_fp == 0.0
+
+
+def test_p3_7_double_game_week_aggregation(tmp_path: Path):
+    db_file = tmp_path / "dgw.db"
+    store = SnapshotStore(db_file)
+
+    # Snapshot with DGW: RMB plays twice in Round 2 (Turn 1 vs OLY, Turn 2 vs BAR)
+    payload = {
+        "league_id": 10,
+        "competition_code": "E",
+        "season_code": "E2026",
+        "round_number": 2,
+        "schedules": [
+            {
+                "number": 2,
+                "rounds": [
+                    {
+                        "number": 1,
+                        "matches": [
+                            {
+                                "id": 101,
+                                "home_team": {"id": 1, "abbreviation": "RMB"},
+                                "away_team": {"id": 2, "abbreviation": "OLY"},
+                                "status": "scheduled",
+                            }
+                        ],
+                    },
+                    {
+                        "number": 2,
+                        "matches": [
+                            {
+                                "id": 102,
+                                "home_team": {"id": 3, "abbreviation": "BAR"},
+                                "away_team": {"id": 1, "abbreviation": "RMB"},
+                                "status": "scheduled",
+                            }
+                        ],
+                    },
+                ],
+            }
+        ],
+        "match_lineups": [
+            {
+                "turn_number": 1,
+                "home_team": {
+                    "id": 1,
+                    "abbreviation": "RMB",
+                    "lineups": [
+                        {
+                            "id": 1,
+                            "first_name": "Facundo",
+                            "last_name": "Campazzo",
+                            "position": "Guard",
+                            "quotation": 15.0,
+                            "status": "starter",
+                            "avg_fantasy_pts": 15.0,
+                        }
+                    ],
+                },
+                "away_team": {"id": 2, "abbreviation": "OLY", "lineups": []},
+            }
+        ],
+    }
+    store.save_snapshot(payload)
+
+    ps = PredictionService(database_path=db_file)
+    projs = ps.get_projections(season="2026/27", round_number=2, league="euroleague")
+    assert len(projs) == 1
+    c = projs[0]
+
+    # Double game week aggregates expected FP across both fixtures (~30 FP total)
+    assert c.player_id == 1
+    assert "OLY" in c.opponent_code and "BAR" in c.opponent_code
+    assert c.expected_fp > 25.0
+    assert c.turn_number == 1  # earliest turn
+
+
+def test_p3_exit_criteria_no_latest_calls_for_round_specific_queries():
+    import ast
+
+    src_root = Path("src/euroleague_fantasy_manager")
+    target_files = [
+        src_root / "services" / "prediction_service.py",
+        src_root / "lineup.py",
+        src_root / "suggest_transfers.py",
+        src_root / "squad_report.py",
+    ]
+
+    for p in target_files:
+        assert p.is_file(), f"File {p} does not exist"
+        tree = ast.parse(p.read_text(encoding="utf-8"), filename=str(p))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                if node.func.attr in ("load_latest_players", "load_latest_fixtures"):
+                    # Only permissible if no round parameter is available in scope or explicitly latest
+                    pytest.fail(f"Forbidden call to {node.func.attr} found in {p.name} line {node.lineno}")
