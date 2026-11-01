@@ -37,6 +37,7 @@ from euroleague_fantasy_manager.optimization.transfers import (
     TransferOptimizationResult,
     TransferOptimizer,
 )
+from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
 from euroleague_fantasy_manager.services.prediction_service import PredictionService
 from euroleague_fantasy_manager.services.team_service import TeamService
 
@@ -273,15 +274,19 @@ class OptimizationService:
         """Find optimal trade combinations for the team."""
         team = self.team_service.get_team(team_id)
         rnd = round_number or team.round_number
-
-        # G2: Clamp max_trades against the team's actual transfers_remaining
-        # so direct API callers cannot receive suggestions exceeding budget (unless unlimited is requested).
-        if unlimited:
-            effective_max = max_trades if max_trades is not None else MAX_TRADES_PER_ROUND
-        else:
-            effective_max = min(max_trades, team.transfers_remaining, MAX_TRADES_PER_ROUND)
-
         league = _team_league(team)
+        ruleset = get_league_ruleset(league)
+        is_round_unlimited = ruleset.is_unlimited_trade_round(rnd)
+
+        # OPT-14: reject client-supplied unlimited flag that contradicts ruleset in normal rounds
+        if unlimited and not is_round_unlimited:
+            raise ValueError(f"Round {rnd} is not an unlimited transfer round.")
+        unlimited = is_round_unlimited
+
+        if unlimited:
+            effective_max = max_trades if max_trades is not None else ruleset.squad_size
+        else:
+            effective_max = min(max_trades, team.transfers_remaining, ruleset.max_trades_per_round)
         squad_contracts = self._resolve_squad_contracts(team.squad, season, rnd, league=league)
         market = (
             list(candidate_pool)
@@ -304,7 +309,8 @@ class OptimizationService:
                     ownership_map = {}
             market, _ = apply_strategy_preset_to_market(market, ownership_map, preset=strategy_preset)
 
-        eff_constraints = self._resolve_constraints(league)
+        base_constraints = self._resolve_constraints(league)
+        eff_constraints = base_constraints.for_round(rnd, ruleset=ruleset)
         transfer_opt = (
             self.transfer_optimizer
             if self._custom_constraints

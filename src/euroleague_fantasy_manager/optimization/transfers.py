@@ -179,8 +179,8 @@ class TransferOptimizer:
         all_recommendations: list[TransferRecommendation] = []
         evaluated_count = 0
 
-        # FAST PATH: Unlimited full-squad overhaul solved via MILP squad optimizer when max_trades > 5 or unconstrained
-        if unlimited and (max_trades is None or max_trades > 5):
+        # FAST PATH: Unlimited full-squad overhaul solved via MILP squad optimizer
+        if unlimited:
             from .initial_team import optimize_initial_team
 
             total_budget_tenths = sum(p.price_tenths for p in squad_contracts) + bank_tenths
@@ -188,13 +188,14 @@ class TransferOptimizer:
 
             # The candidate pool for overhaul includes both existing squad and market
             combined_pool = list({p.player_id: p for p in (squad_contracts + market_contracts)}.values())
+            existing_squad_ids = [p.player_id for p in squad_contracts]
 
             # Solve multiple diverse options across risk modes and structural variants
             unique_squads: list[list[PlayerProjectionContract]] = []
             seen_squad_keys: set[tuple[int, ...]] = set()
 
             if len(combined_pool) >= 11:
-                # 1. Primary solutions across risk modes
+                # 1. Primary solutions across risk modes with max_changes = max_trades constraint
                 for r_mode in ("expected", "balanced", "conservative", "upside"):
                     try:
                         sq = optimize_initial_team(
@@ -202,6 +203,8 @@ class TransferOptimizer:
                             budget_credits=total_budget_credits,
                             risk_mode=r_mode,
                             constraints=self.constraints,
+                            max_changes=max_trades,
+                            existing_squad_ids=existing_squad_ids,
                         )
                         s_key = tuple(sorted(p.player_id for p in sq))
                         if s_key not in seen_squad_keys:
@@ -225,6 +228,8 @@ class TransferOptimizer:
                                 risk_mode="expected",
                                 excluded_player_ids=[top_new[0].player_id],
                                 constraints=self.constraints,
+                                max_changes=max_trades,
+                                existing_squad_ids=existing_squad_ids,
                             )
                             s_key = tuple(sorted(p.player_id for p in sq_alt))
                             if s_key not in seen_squad_keys:
@@ -243,6 +248,8 @@ class TransferOptimizer:
                             risk_mode="expected",
                             locked_player_ids=[best_curr.player_id],
                             constraints=self.constraints,
+                            max_changes=max_trades,
+                            existing_squad_ids=existing_squad_ids,
                         )
                         s_key = tuple(sorted(p.player_id for p in sq_lock))
                         if s_key not in seen_squad_keys:
@@ -258,6 +265,8 @@ class TransferOptimizer:
                 out_players = tuple(p for p in squad_contracts if p.player_id not in sol_ids)
                 in_players = tuple(p for p in sol_sq if p.player_id not in squad_ids)
 
+                if not in_players:
+                    continue
                 if max_trades and len(in_players) > max_trades:
                     continue
 
@@ -281,27 +290,8 @@ class TransferOptimizer:
                 all_recommendations.append(rec)
                 evaluated_count += 1
 
-            if all_recommendations:
-                all_recommendations.sort(
-                    key=lambda r: (
-                        r.net_transfer_value,
-                        r.gross_score_gain,
-                        r.remaining_bank_tenths,
-                        -r.trade_count,
-                    ),
-                    reverse=True,
-                )
-
-                return TransferOptimizationResult(
-                    round_number=round_number,
-                    current_lineup=current_lineup,
-                    recommendations=tuple(all_recommendations[:top_n]),
-                    total_evaluated_packages=max(1, evaluated_count),
-                    is_exhaustive=True,
-                )
-
-        # 2-STAGE SCREENING PATH: For limited transfers (1..4) or bounded unlimited transfers (1..5)
-        effective_max_trades = max_trades if (unlimited and max_trades is not None and max_trades <= 5) else min(max_trades, 4)
+        # 2-STAGE SCREENING PATH: Always run 1..4 screened path as well so smaller packages are offered
+        effective_max_trades = min(max_trades if max_trades is not None else 4, 4)
 
         # Candidate limits per trade size k bound the combinatorial search
         cand_limits_by_k = {1: 15, 2: 8, 3: 5, 4: 4, 5: 3}
@@ -434,7 +424,19 @@ class TransferOptimizer:
             )
             all_recommendations.append(rec)
 
-        # 6. Rank recommendations by net transfer value desc, remaining bank desc
+        # 6. Deduplicate and rank recommendations by net transfer value desc, remaining bank desc
+        seen_rec_keys = set()
+        deduped_recs = []
+        for r in all_recommendations:
+            r_key = (
+                tuple(sorted(p.player_id for p in r.out_players)),
+                tuple(sorted(p.player_id for p in r.in_players)),
+            )
+            if r_key not in seen_rec_keys:
+                seen_rec_keys.add(r_key)
+                deduped_recs.append(r)
+        all_recommendations = deduped_recs
+
         all_recommendations.sort(
             key=lambda r: (
                 r.net_transfer_value,
@@ -449,7 +451,7 @@ class TransferOptimizer:
             round_number=round_number,
             current_lineup=current_lineup,
             recommendations=tuple(all_recommendations[:top_n]),
-            total_evaluated_packages=evaluated_count,
-            is_exhaustive=candidate_pool.is_exhaustive,
+            total_evaluated_packages=max(1, evaluated_count),
+            is_exhaustive=False if unlimited else candidate_pool.is_exhaustive,
             stage2_evaluations=stage2_evaluations,
         )

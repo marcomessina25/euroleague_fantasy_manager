@@ -155,6 +155,7 @@ def brute_force_transfers(
 
             in_pool = [p for p in market if p.player_id not in remaining_pids and p.player_id not in out_pids]
 
+            total_squad_budget = sum(p.price_tenths for p in squad_list) + bank
             for in_combo in combinations(in_pool, k):
                 if Counter(p.position for p in in_combo) != out_pos_counts:
                     continue
@@ -163,7 +164,7 @@ def brute_force_transfers(
                     continue
 
                 new_squad = remaining_squad + list(in_combo)
-                valid, _ = validate_squad_constraints(new_squad, constraints=constraints)
+                valid, _ = validate_squad_constraints(new_squad, budget_tenths=total_squad_budget, constraints=constraints)
                 if not valid:
                     continue
 

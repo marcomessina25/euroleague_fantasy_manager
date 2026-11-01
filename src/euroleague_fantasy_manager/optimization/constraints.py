@@ -436,9 +436,13 @@ class OptimizationConstraints:
             unlimited_trade_rounds=getattr(ruleset, "unlimited_trade_rounds", frozenset()),
         )
 
-    def for_round(self, round_number: int) -> "OptimizationConstraints":
+    def for_round(self, round_number: int, ruleset: Any = None) -> "OptimizationConstraints":
         """Return a copy of constraints updated for the specific round (handling unlimited windows)."""
-        is_unlimited = round_number in self.unlimited_trade_rounds
+        is_unlimited = (
+            ruleset.is_unlimited_trade_round(round_number)
+            if ruleset is not None and hasattr(ruleset, "is_unlimited_trade_round")
+            else round_number in self.unlimited_trade_rounds
+        )
         return replace(
             self,
             unlimited_transfers=is_unlimited,
@@ -450,6 +454,13 @@ class OptimizationConstraints:
 class ConstraintValidationResult:
     is_valid: bool
     errors: tuple[str, ...]
+
+    def __iter__(self):
+        yield self.is_valid
+        yield self.errors
+
+    def __bool__(self) -> bool:
+        return self.is_valid
 
     @classmethod
     def success(cls) -> "ConstraintValidationResult":

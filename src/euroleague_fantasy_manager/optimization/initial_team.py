@@ -55,6 +55,8 @@ def optimize_initial_team(
     locked_player_ids: Sequence[int] | None = None,
     excluded_player_ids: Sequence[int] | None = None,
     constraints: OptimizationConstraints | None = None,
+    max_changes: int | None = None,
+    existing_squad_ids: Sequence[int] | None = None,
 ) -> list[PlayerProjectionContract]:
     """Optimize an 11-player initial squad for Round 1 under salary cap and legality constraints.
 
@@ -83,6 +85,8 @@ def optimize_initial_team(
         locked_player_ids=locked_player_ids,
         excluded_player_ids=excluded_player_ids,
         constraints=constraints,
+        max_changes=max_changes,
+        existing_squad_ids=existing_squad_ids,
     )
     return res.squad
 
@@ -94,6 +98,8 @@ def optimize_initial_team_detailed(
     locked_player_ids: Sequence[int] | None = None,
     excluded_player_ids: Sequence[int] | None = None,
     constraints: OptimizationConstraints | None = None,
+    max_changes: int | None = None,
+    existing_squad_ids: Sequence[int] | None = None,
 ) -> InitialTeamOptimizationResult:
     """Detailed version of optimize_initial_team returning metadata and objective value."""
     if constraints is None:
@@ -245,6 +251,14 @@ def optimize_initial_team_detailed(
                 A_rows.append(row)
                 b_l.append(1.0)
                 b_u.append(1.0)
+
+        # Constraint 6: Max changes relative to existing squad (Σ_{i: c.player_id not in existing_squad_ids} x_i <= max_changes)
+        if max_changes is not None and existing_squad_ids is not None:
+            existing_set = set(existing_squad_ids)
+            row = np.array([1.0 if c.player_id not in existing_set else 0.0 for c in market], dtype=float)
+            A_rows.append(row)
+            b_l.append(0.0)
+            b_u.append(float(max_changes))
 
         A_mat = np.array(A_rows)
         constraints_obj = LinearConstraint(A_mat, b_l, b_u)

@@ -1547,7 +1547,7 @@ async function triggerSuggestTransfers() {
         season: state.season,
         round_number: state.roundNumber,
         max_trades: tradeStudioState.unlimited
-          ? MAX_TRADES_PER_ROUND
+          ? 11
           : Math.min(MAX_TRADES_PER_ROUND, tradeStudioState.transfersRemaining || 1),
         unlimited: tradeStudioState.unlimited,
         strategy_preset: strategyPreset,
