@@ -37,6 +37,20 @@ def _price_to_tenths(quotation: Any) -> int:
         return 0
 
 
+@dataclass(frozen=True, slots=True)
+class SnapshotGameRules:
+    snapshot_id: int
+    game_mode_id: int
+    num_players_per_team: int | None
+    num_starter_players: int | None
+    num_bench_players: int | None
+    num_coach_players: int | None
+    max_num_same_team_players: int | None
+    captain_multiplier: float | None
+    cost_per_trade: int | None
+    raw_json: str
+
+
 class SnapshotStore:
     """Persist point-in-time EuroLeague/EuroCup Fantasy snapshots into SQLite."""
 
@@ -93,6 +107,72 @@ class SnapshotStore:
         if "season_code_source" not in column_names:
             conn.execute("ALTER TABLE snapshots ADD COLUMN season_code_source TEXT NOT NULL DEFAULT 'config'")
         logger.info("Migration complete: schema v3 index and columns added.")
+
+    def _migrate_to_v4_add_snapshot_game_rules(self, conn: sqlite3.Connection) -> None:
+        """Create snapshot_game_rules table and backfill from raw archive files."""
+        logger.info("Migrating schema to v4: creating snapshot_game_rules table...")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS snapshot_game_rules (
+                snapshot_id INTEGER PRIMARY KEY REFERENCES snapshots(id) ON DELETE CASCADE,
+                game_mode_id INTEGER NOT NULL,
+                num_players_per_team INTEGER, num_starter_players INTEGER, num_bench_players INTEGER,
+                num_coach_players INTEGER, max_num_same_team_players INTEGER,
+                captain_multiplier REAL, cost_per_trade INTEGER, raw_json TEXT NOT NULL
+            );
+            """
+        )
+        # Backfill from raw_archive_path if present
+        rows = conn.execute(
+            """
+            SELECT s.id, s.league_id, s.raw_archive_path
+            FROM snapshots s
+            WHERE s.id NOT IN (SELECT snapshot_id FROM snapshot_game_rules)
+            """
+        ).fetchall()
+        for row in rows:
+            snap_id = row[0]
+            lid = row[1]
+            raw_path_str = row[2]
+            if not raw_path_str:
+                continue
+            p = Path(raw_path_str)
+            if not p.is_file():
+                continue
+            try:
+                raw_payload = json.loads(p.read_text(encoding="utf-8"))
+                game_modes = raw_payload.get("config", {}).get("game_modes_configs", [])
+                for gm in game_modes:
+                    gm_id = gm.get("game_mode_id") or gm.get("id")
+                    if gm_id == 1:
+                        max_same = gm.get("max_num_same_team_players")
+                        if max_same is None and lid in (10, 11):
+                            max_same = 6
+                        conn.execute(
+                            """
+                            INSERT OR REPLACE INTO snapshot_game_rules (
+                                snapshot_id, game_mode_id, num_players_per_team, num_starter_players,
+                                num_bench_players, num_coach_players, max_num_same_team_players,
+                                captain_multiplier, cost_per_trade, raw_json
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                snap_id,
+                                int(gm_id),
+                                gm.get("num_players_per_team"),
+                                gm.get("num_starter_players"),
+                                gm.get("num_bench_players"),
+                                gm.get("num_coach_players"),
+                                max_same,
+                                float(gm["captain_multiplier"]) if gm.get("captain_multiplier") is not None else 2.0,
+                                gm.get("cost_per_trade", 0),
+                                json.dumps(gm, ensure_ascii=False),
+                            ),
+                        )
+                        break
+            except Exception as e:
+                logger.warning("Could not backfill snapshot_game_rules for snapshot %s: %s", snap_id, e)
+        logger.info("Migration complete: schema v4 snapshot_game_rules created and backfilled.")
 
     def _initialize_schema(self) -> None:
         with self._connect() as conn:
@@ -197,6 +277,10 @@ class SnapshotStore:
             if current_version < 3:
                 self._migrate_to_v3_add_snapshots_league_index(conn)
                 self._set_schema_version(conn, 3, "Added idx_snapshots_league_id on snapshots(league_id, id)")
+
+            if current_version < 4:
+                self._migrate_to_v4_add_snapshot_game_rules(conn)
+                self._set_schema_version(conn, 4, "Added snapshot_game_rules table and backfilled from raw archives")
 
     def save_snapshot(
         self,
@@ -360,6 +444,37 @@ class SnapshotStore:
                 )
             snapshot_id = int(cursor.lastrowid)
 
+            # P1.1: Persist official game-mode config (game_mode_id == 1)
+            game_modes = config.get("game_modes_configs", [])
+            for gm in game_modes:
+                gm_id = gm.get("game_mode_id") or gm.get("id")
+                if gm_id == 1:
+                    max_same = gm.get("max_num_same_team_players")
+                    if max_same is None and league_id in (10, 11):
+                        max_same = 6
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO snapshot_game_rules (
+                            snapshot_id, game_mode_id, num_players_per_team, num_starter_players,
+                            num_bench_players, num_coach_players, max_num_same_team_players,
+                            captain_multiplier, cost_per_trade, raw_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            snapshot_id,
+                            int(gm_id),
+                            gm.get("num_players_per_team"),
+                            gm.get("num_starter_players"),
+                            gm.get("num_bench_players"),
+                            gm.get("num_coach_players"),
+                            max_same,
+                            float(gm["captain_multiplier"]) if gm.get("captain_multiplier") is not None else 2.0,
+                            gm.get("cost_per_trade", 0),
+                            json.dumps(gm, ensure_ascii=False),
+                        ),
+                    )
+                    break
+
             for tid, (tname, tcode) in sorted(team_map.items()):
                 conn.execute(
                     "INSERT INTO teams (snapshot_id, id, name, short_name) VALUES (?, ?, ?, ?)",
@@ -429,6 +544,55 @@ class SnapshotStore:
             club_count=club_count,
             season_code_source=season_code_source,
         )
+
+    def load_game_rules(
+        self,
+        snapshot_id: int | None = None,
+        league_id: int | None = None,
+    ) -> SnapshotGameRules | None:
+        """Load snapshot game rules for a specific snapshot or the latest snapshot for a league."""
+        with self._connect() as conn:
+            if snapshot_id is not None:
+                row = conn.execute(
+                    """
+                    SELECT snapshot_id, game_mode_id, num_players_per_team, num_starter_players,
+                           num_bench_players, num_coach_players, max_num_same_team_players,
+                           captain_multiplier, cost_per_trade, raw_json
+                    FROM snapshot_game_rules
+                    WHERE snapshot_id = ?
+                    """,
+                    (snapshot_id,),
+                ).fetchone()
+            else:
+                query = """
+                    SELECT r.snapshot_id, r.game_mode_id, r.num_players_per_team, r.num_starter_players,
+                           r.num_bench_players, r.num_coach_players, r.max_num_same_team_players,
+                           r.captain_multiplier, r.cost_per_trade, r.raw_json
+                    FROM snapshot_game_rules r
+                    JOIN snapshots s ON s.id = r.snapshot_id
+                """
+                params: list[Any] = []
+                if league_id is not None:
+                    query += " WHERE s.league_id = ?"
+                    params.append(league_id)
+                query += " ORDER BY s.id DESC LIMIT 1"
+                row = conn.execute(query, params).fetchone()
+
+            if not row:
+                return None
+
+            return SnapshotGameRules(
+                snapshot_id=int(row[0]),
+                game_mode_id=int(row[1]),
+                num_players_per_team=row[2],
+                num_starter_players=row[3],
+                num_bench_players=row[4],
+                num_coach_players=row[5],
+                max_num_same_team_players=row[6],
+                captain_multiplier=row[7],
+                cost_per_trade=row[8],
+                raw_json=row[9],
+            )
 
     def get_latest_summary(self, league_id: int | None = None) -> SnapshotSummary | None:
         """Return metadata summary of the most recently stored snapshot (optionally scoped to league_id).
