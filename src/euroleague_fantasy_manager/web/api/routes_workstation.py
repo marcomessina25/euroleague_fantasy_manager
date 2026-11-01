@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from euroleague_fantasy_manager.competition.ruleset import League
-from euroleague_fantasy_manager.models import Position
+from euroleague_fantasy_manager.models import ModelUnavailableError, Position
 from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit
 from euroleague_fantasy_manager.optimization.ownership_strategy import (
     classify_ownership_archetype,
@@ -132,6 +132,7 @@ def get_dashboard(
     team_id: str,
     season: str = "2026/27",
     round_number: int | None = None,
+    model_name: str = "price_prior_v1",
     team_service: TeamService = Depends(get_team_service),
     prediction_service: PredictionService = Depends(get_prediction_service),
     optimization_service: OptimizationService = Depends(get_optimization_service),
@@ -157,7 +158,20 @@ def get_dashboard(
     squad_for_round = team_service.store.get_squad(team_id, rnd) if is_viewing_past_round else team.squad
 
     # Squad units with projections
-    proj_dict = prediction_service.get_projections_dict(season, rnd, league=team.league or "euroleague")
+    try:
+        proj_dict = prediction_service.get_projections_dict(season, rnd, model_name=model_name, league=team.league or "euroleague")
+    except ModelUnavailableError as e:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": str(e),
+                "model": e.model,
+                "reason": e.reason,
+                "suggested_fallback": "price_prior_v1",
+            },
+        )
+    except Exception:
+        proj_dict = {}
     squad_details = []
     for unit in squad_for_round:
         c = proj_dict.get(unit.player_id)
@@ -360,10 +374,12 @@ def get_dashboard(
         "unplayed_count": unplayed_count,
         "any_played": any_played,
         "provenance": {
-            "prediction_model": "production_ridge_v03",
+            "prediction_model": next((c.model_version for c in proj_dict.values() if getattr(c, "model_version", None)), model_name),
+            "feature_version": next((c.feature_version for c in proj_dict.values() if getattr(c, "feature_version", None)), "1.0.0"),
             "optimizer_version": "0.5.0",
             "risk_mode": team.settings.risk_mode,
             "option_value_mode": team.settings.option_value_mode,
+            **getattr(next(iter(proj_dict.values()), None), "provenance", {}),
         },
     }
 
@@ -384,6 +400,16 @@ def optimize_lineup_endpoint(
         return res.to_dict()
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except ModelUnavailableError as e:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": str(e),
+                "model": e.model,
+                "reason": e.reason,
+                "suggested_fallback": "price_prior_v1",
+            },
+        )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

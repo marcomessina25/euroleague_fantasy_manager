@@ -120,3 +120,12 @@ class NoSnapshotForRoundError(RuntimeError):
         self.league = league
         super().__init__(f"No snapshot found for round {round_number} (season {season}, league {league}).")
 
+
+
+class ModelUnavailableError(Exception):
+    """Raised when a requested predictive model cannot be run because required features are unavailable."""
+
+    def __init__(self, model: str, reason: str) -> None:
+        self.model = model
+        self.reason = reason
+        super().__init__(f"Model '{model}' unavailable: {reason}")

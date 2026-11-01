@@ -29,6 +29,9 @@ from .learned_models import (
     set_default_learned_pipeline,
     train_learned_pipeline_from_history,
 )
+from .price_prior import (
+    predict_player_price_prior,
+)
 from .minutes import (
     predict_expected_minutes_if_play,
 )
@@ -105,6 +108,7 @@ __all__ = [
     "predict_expected_fp_per_min_if_play",
     "predict_expected_minutes_if_play",
     "predict_play_probability",
+    "predict_player_price_prior",
     "predict_player_fantasy_points",
     "predict_round_decomposed",
     "redistribute_team_vacancies",

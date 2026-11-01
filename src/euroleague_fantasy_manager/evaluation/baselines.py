@@ -26,6 +26,7 @@ SUPPORTED_BASELINE_MODELS = (
     "fp_decomposed_calibrated_v03",
     "fp_context_v08",
     "learned_v09",
+    "price_prior_v1",
 )
 
 
@@ -62,6 +63,10 @@ def canonical_model_name(name: str) -> str:
         "learned_v09": "learned_v09",
         "fp_learned": "learned_v09",
         "fp_learned_v09": "learned_v09",
+        "price_prior": "price_prior_v1",
+        "price_prior_v1": "price_prior_v1",
+        "price_prior_v01": "price_prior_v1",
+        "heuristic": "price_prior_v1",
     }
     if norm not in aliases:
         raise ValueError(f"Unsupported evaluation baseline model: {name!r}. Supported: {SUPPORTED_BASELINE_MODELS}")
@@ -117,6 +122,69 @@ def predict_single_player_baseline(
     canon = canonical_model_name(model_name)
     pos_enum = Position.from_raw(feature_row.position)
     credits = round(feature_row.quotation_at_decision_tenths / 10.0, 1)
+
+    # 0. Handle price_prior_v1
+    if canon == "price_prior_v1":
+        is_home = feature_row.home
+        if pos_enum == Position.HEAD_COACH:
+            base_hc = 11.0 if is_home else 8.5
+            exp_fp = max(4.0, min(16.0, round(base_hc + (credits - 6.0) * 0.6, 2)))
+            exp_min = 40.0
+            fp_per_min = round(exp_fp / 40.0, 3)
+            p_play = 1.0
+        else:
+            is_starter = (feature_row.pre_round_status.lower() in ("starter", "start") or credits >= 11.0)
+            if is_starter:
+                exp_min = min(30.0, max(18.0, 22.0 + (credits - 10.0) * 0.8))
+            else:
+                exp_min = min(22.0, max(6.0, 12.0 + (credits - 7.0) * 0.7))
+
+            pos_code = pos_enum.short_code if hasattr(pos_enum, "short_code") else str(pos_enum)
+            pos_base = 0.54 if "G" in pos_code else (0.56 if "F" in pos_code else 0.60)
+            fp_per_min = max(0.32, min(0.85, pos_base + (credits - 10.5) * 0.028))
+            loc_mult = 1.05 if is_home else 0.95
+            p_play = 1.0 if feature_row.pre_round_status.lower() not in ("out", "injured") else 0.0
+            raw_exp = exp_min * fp_per_min * loc_mult
+            exp_fp = round(p_play * raw_exp, 2)
+
+            if getattr(feature_row, "avg_pdk_expanding", 0.0) > 0:
+                exp_fp = round(0.6 * feature_row.avg_pdk_expanding + 0.4 * exp_fp, 2)
+
+        unc_val = round(max(3.0, exp_fp * 0.25), 2)
+        spread_val = round(max(6.0, exp_fp * 0.50), 2)
+
+        return PredictionRecord(
+            model_name=canon,
+            model_version="1.0.2",
+            dataset_version=dataset_version,
+            decision_cutoff=feature_row.decision_cutoff,
+            season=feature_row.season,
+            round=feature_row.round_number,
+            player_id=feature_row.player_id,
+            player_name=feature_row.player_name,
+            position=feature_row.position,
+            team_id=feature_row.team_id,
+            team_code=feature_row.team_code,
+            turn_number=feature_row.turn_number,
+            cold_start_source=feature_row.cold_start_source,
+            pre_round_status=feature_row.pre_round_status,
+            quotation_at_decision_tenths=feature_row.quotation_at_decision_tenths,
+            conditional_prediction=exp_fp,
+            prediction=exp_fp,
+            sigma_prediction=unc_val,
+            actual_fantasy_points=round(float(actual_fantasy_points), 2),
+            actual_status=actual_status,
+            price_provenance=price_provenance,
+            play_probability=p_play,
+            expected_minutes=round(exp_min, 1),
+            expected_fp_per_min=round(fp_per_min, 3),
+            lower_bound=round(max(0.0, exp_fp - unc_val), 2),
+            upper_bound=round(exp_fp + unc_val, 2),
+            prediction_spread=spread_val,
+            expected_fp_per_credit=round(exp_fp / max(credits, 1.0), 3),
+            points_above_replacement=0.0,
+            risk_adjusted_value=exp_fp,
+        )
 
     # 1. Handle V0.3, V0.8 & V0.9 Decomposed models
     if canon in ("fp_decomposed_v03", "fp_decomposed_calibrated_v03", "fp_context_v08", "learned_v09"):

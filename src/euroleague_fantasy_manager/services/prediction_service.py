@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from euroleague_fantasy_manager.competition.ruleset import League, get_league_ruleset
-from euroleague_fantasy_manager.models import Position
+from euroleague_fantasy_manager.models import ModelUnavailableError, NoSnapshotForRoundError, Position
+from euroleague_fantasy_manager.prediction.price_prior import predict_player_price_prior
 from euroleague_fantasy_manager.evaluation.baselines import (
     canonical_model_name,
     predict_single_player_baseline,
@@ -31,7 +32,7 @@ class PredictionService:
         self,
         season: str,
         round_number: int,
-        model_name: str = "fp_decomposed_v03",
+        model_name: str = "price_prior_v1",
         force_refresh: bool = False,
         league: str | League | None = None,
     ) -> dict[int, PlayerProjectionContract]:
@@ -49,7 +50,7 @@ class PredictionService:
         self,
         season: str,
         round_number: int,
-        model_name: str = "fp_decomposed_v03",
+        model_name: str = "price_prior_v1",
         league: str | League | None = None,
     ) -> list[PlayerProjectionContract]:
         """Retrieve all projection contracts as a list."""
@@ -153,13 +154,26 @@ class PredictionService:
                             turn_number=feat.turn_number,
                             opponent_code=feat.opponent_team_code,
                             is_home=feat.home,
+                            model_version=canon_model,
+                            feature_version="1.0.0",
+                            provenance={
+                                "snapshot_id": None,
+                                "source": "eval",
+                                "model": canon_model,
+                            },
                         )
         except Exception:
             # Fallback or synthetic table in database
             pass
 
         if not contracts:
-            contracts = self._build_live_contracts(season=season, round_number=round_number, league=league)
+            if canon_model == "price_prior_v1":
+                contracts = self._build_live_contracts(season=season, round_number=round_number, league=league)
+            else:
+                raise ModelUnavailableError(
+                    model=canon_model,
+                    reason=f"Point-in-time live features for model '{canon_model}' require historical feed ingestion (Phase P3.5).",
+                )
 
         return contracts
     def _build_live_contracts(
@@ -169,7 +183,6 @@ class PredictionService:
         league: str | None = None,
     ) -> dict[int, PlayerProjectionContract]:
         from euroleague_fantasy_manager.competition.ruleset import League
-        from euroleague_fantasy_manager.models import NoSnapshotForRoundError, Position
         from euroleague_fantasy_manager.storage import SnapshotStore
 
         league_enum = League.from_str(league) if league else League.EUROLEAGUE
@@ -207,26 +220,10 @@ class PredictionService:
         for p in players:
             has_fixture = p.team_code in team_fix if team_fix else True
             if not has_fixture:
-                contracts[p.id] = PlayerProjectionContract(
-                    player_id=p.id,
-                    player_name=p.name,
-                    position=p.position,
-                    team_id=p.team_id,
-                    team_code=p.team_code,
-                    price_tenths=p.price_tenths,
-                    expected_fp=0.0,
-                    probability_play=0.0,
-                    expected_minutes=0.0,
-                    fp_per_minute=0.0,
-                    uncertainty=0.0,
-                    prediction_spread=0.0,
-                    turn_number=p.turn_number,
-                    opponent_code="BYE",
-                    is_home=True,
-                    actual_fp=None,
-                    has_played=False,
+                contracts[p.id] = predict_player_price_prior(
+                    player=p,
                     is_bye=True,
-                    pre_round_status="bye",
+                    snapshot_id=snap.snapshot_id,
                 )
                 continue
 
@@ -236,54 +233,15 @@ class PredictionService:
             has_played = bool(getattr(p, "has_played", False) or is_played_fix) if is_exact_round else False
             actual_fp = float(p.last_match_pts) if (has_played and is_exact_round) else None
 
-            cr = p.credits
-            pos_enum = p.position
-            if pos_enum == Position.HEAD_COACH:
-                base_hc = 11.0 if is_home else 8.5
-                exp_fp = max(4.0, min(16.0, round(base_hc + (cr - 6.0) * 0.6, 2)))
-                exp_min = 40.0
-                fp_per_min = round(exp_fp / 40.0, 3)
-            else:
-                is_starter = (p.status.lower() in ("starter", "start") or cr >= 11.0)
-                if is_starter:
-                    exp_min = min(30.0, max(18.0, 22.0 + (cr - 10.0) * 0.8))
-                else:
-                    exp_min = min(22.0, max(6.0, 12.0 + (cr - 7.0) * 0.7))
-
-                pos_code = pos_enum.short_code if hasattr(pos_enum, "short_code") else str(pos_enum)
-                pos_base = 0.54 if "G" in pos_code else (0.56 if "F" in pos_code else 0.60)
-                fp_per_min = max(0.32, min(0.85, pos_base + (cr - 10.5) * 0.028))
-                loc_mult = 1.05 if is_home else 0.95
-                p_play = p.probability_of_playing if not p.is_injured else 0.0
-                raw_exp = exp_min * fp_per_min * loc_mult
-                exp_fp = round(p_play * raw_exp, 2)
-
-                if p.avg_fantasy_pts > 0 and not has_played:
-                    exp_fp = round(0.6 * p.avg_fantasy_pts + 0.4 * exp_fp, 2)
-
-            unc_val = round(max(3.0, exp_fp * 0.25), 2)
-            spread_val = round(max(6.0, exp_fp * 0.50), 2)
-
-            contracts[p.id] = PlayerProjectionContract(
-                player_id=p.id,
-                player_name=p.name,
-                position=p.position,
-                team_id=p.team_id,
-                team_code=p.team_code,
-                price_tenths=p.price_tenths,
-                expected_fp=exp_fp,
-                probability_play=p.probability_of_playing,
-                expected_minutes=round(exp_min, 1),
-                fp_per_minute=round(fp_per_min, 3),
-                uncertainty=unc_val,
-                prediction_spread=spread_val,
+            contracts[p.id] = predict_player_price_prior(
+                player=p,
+                is_home=is_home,
                 turn_number=t_num,
                 opponent_code=opp,
-                is_home=is_home,
-                actual_fp=actual_fp,
                 has_played=has_played,
+                actual_fp=actual_fp,
                 is_bye=False,
-                pre_round_status=str(getattr(p, "status", "available")),
+                snapshot_id=snap.snapshot_id,
             )
 
         return contracts
