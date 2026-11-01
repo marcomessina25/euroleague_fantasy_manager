@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
@@ -1095,4 +1096,15 @@ def update_data_endpoint(
         "sync_failures": sync_failures,
     }
 
+
+@router.get("/rules")
+def get_workstation_rules(
+    league: str = "euroleague",
+    db_path: Path = Depends(get_db_path),
+) -> dict[str, Any]:
+    """Retrieve active resolved ruleset dictionary for the requested league."""
+    from euroleague_fantasy_manager.competition.ruleset import resolve_ruleset
+
+    ruleset = resolve_ruleset(league, db_path=db_path)
+    return ruleset.to_dict()
 

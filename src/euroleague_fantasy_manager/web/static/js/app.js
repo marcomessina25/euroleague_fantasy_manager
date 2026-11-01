@@ -14,6 +14,18 @@ function escapeHtml(str) {
     .replace(/'/g, "&#039;");
 }
 
+async function loadRules(league) {
+  try {
+    const l = league || activeTeamLeague();
+    const res = await fetch(`/api/workstation/rules?league=${encodeURIComponent(l)}`);
+    if (res.ok) {
+      state.rules = await res.json();
+    }
+  } catch (e) {
+    console.error("Failed to load rules:", e);
+  }
+}
+
 let state = {
   activeTeamId: "team_1",
   teams: [],
@@ -28,6 +40,7 @@ let state = {
   activeTab: "dashboard",
   transfersOut: [],
   transfersIn: [],
+  rules: null,
 };
 
 // Initialize
@@ -35,6 +48,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   captureIntelligenceDefaults();
   initNav();
   await loadTeams();
+  await loadRules(activeTeamLeague());
   await loadDashboard();
 });
 
@@ -163,7 +177,8 @@ async function deleteTeam(teamId) {
     if (res.ok) {
       state.activeTeamId = null;
       await loadTeams();
-      await loadDashboard();
+      await loadRules(activeTeamLeague());
+  await loadDashboard();
       resetIntelligenceView();
       if (state.activeTab === "intelligence") loadIntelligenceView();
     } else {
@@ -180,6 +195,7 @@ async function switchTeam(teamId) {
   state.activeTeamId = teamId;
   await fetch(`/api/teams/${teamId}/active`, { method: "POST" });
   await loadTeams();
+  await loadRules(activeTeamLeague());
   await loadDashboard();
   updateCompetitionToggleUI();
   if (changed) resetIntelligenceView();
@@ -273,7 +289,8 @@ async function submitRenameTeam() {
     if (res.ok) {
       closeRenameModal();
       await loadTeams();
-      await loadDashboard();
+      await loadRules(activeTeamLeague());
+  await loadDashboard();
     } else {
       const err = await res.json();
       alert("Failed to rename team: " + (err.detail || "Server error"));
@@ -629,7 +646,8 @@ async function setCaptain(playerId) {
       }),
     });
     if (res.ok) {
-      await loadDashboard();
+      await loadRules(activeTeamLeague());
+  await loadDashboard();
     } else {
       const err = await res.json();
       alert("Failed to update captain: " + (err.detail || "Server error"));
@@ -742,7 +760,8 @@ async function executeDirectSwap(sourceId, targetId) {
 
     if (res.ok) {
       cancelSubstitution();
-      await loadDashboard();
+      await loadRules(activeTeamLeague());
+  await loadDashboard();
     } else {
       const err = await res.json();
       alert("Substitution failed: " + (err.detail || "Server validation error"));
@@ -1009,7 +1028,8 @@ async function triggerOptimizeLineup() {
         ...lineupRoundPayload(),
       }),
     });
-    await loadDashboard();
+    await loadRules(activeTeamLeague());
+  await loadDashboard();
     const undoBtn = document.getElementById("btn-undo-optimizer");
     if (undoBtn && previousLineupSnapshot) {
       undoBtn.style.display = "inline-block";
@@ -1029,7 +1049,8 @@ async function undoLineupOptimization() {
       previousLineupSnapshot = null;
       const undoBtn = document.getElementById("btn-undo-optimizer");
       if (undoBtn) undoBtn.style.display = "none";
-      await loadDashboard();
+      await loadRules(activeTeamLeague());
+  await loadDashboard();
     } else {
       const err = await res.json();
       alert("Failed to undo lineup optimization: " + (err.detail || "Server error"));
@@ -1245,7 +1266,8 @@ async function applyIntraRoundSubstitutions() {
       alert("Optimal substitutions applied successfully and logged in decision history!");
       const container = document.getElementById("intra-sub-results");
       if (container) container.style.display = "none";
-      await loadDashboard();
+      await loadRules(activeTeamLeague());
+  await loadDashboard();
     } else {
       const err = await res.json();
       alert("Failed to apply substitutions: " + (err.detail || "Server error"));
@@ -1277,7 +1299,8 @@ async function confirmRevertRoundStart() {
     if (res.ok) {
       alert(`Team successfully reverted to Round ${state.roundNumber} baseline!`);
       await loadTeams();
-      await loadDashboard();
+      await loadRules(activeTeamLeague());
+  await loadDashboard();
       if (state.activeTab === "trade-studio") {
         await loadTradeStudio();
       }
@@ -1298,6 +1321,7 @@ let tradeStudioState = {
   currentSquad: [],
   transfersOut: [],
   transfersIn: [],
+  rules: null,
   unlimited: false,
 };
 
@@ -1625,7 +1649,8 @@ async function submitExecuteTransfers() {
       tradeStudioState.transfersIn = [];
       const banner = document.getElementById("trade-rec-banner");
       if (banner) banner.style.display = "none";
-      await loadDashboard();
+      await loadRules(activeTeamLeague());
+  await loadDashboard();
       await loadTradeStudio();
     } else {
       const err = await res.json();
@@ -1909,6 +1934,7 @@ function teamBuilderBankCredits() {
 
 async function loadTeamBuilderPool() {
   const league = teamBuilderLeague();
+  await loadRules(league);
   const round = teamBuilderRound();
   const poolIndicator = document.getElementById("tb-pool-count");
 
@@ -2246,8 +2272,9 @@ function updateTeamBuilderUI() {
   if (posCounts.C !== 2) errors.push(`Needs 2 Centers (current: ${posCounts.C})`);
   if (posCounts.HC !== 1) errors.push(`Needs 1 Head Coach (current: ${posCounts.HC})`);
 
+  const maxPerClub = (state.rules && state.rules.max_court_players_per_club) || 6;
   for (const [club, count] of Object.entries(clubCounts)) {
-    if (count > 6) errors.push(`Max 6 court players per club (${club}: ${count})`);
+    if (count > maxPerClub) errors.push(`Max ${maxPerClub} court players per club (${club}: ${count})`);
   }
 
   const msgEl = document.getElementById("tb-validation-msg");
@@ -2329,7 +2356,8 @@ async function submitCreateTeam() {
       state.activeTeamId = createdTeam.team_id;
       closeTeamBuilderModal();
       await loadTeams();
-      await loadDashboard();
+      await loadRules(activeTeamLeague());
+  await loadDashboard();
       resetIntelligenceView();
       if (state.activeTab === "intelligence") loadIntelligenceView();
     } else {
@@ -2376,7 +2404,8 @@ async function triggerUpdateData(league) {
         msg += '\n\nCould not roll forward team(s):\n' + failures.map(([id, e]) => `- ${id}: ${e}`).join('\n');
       }
       alert(msg);
-      await loadDashboard();
+      await loadRules(activeTeamLeague());
+  await loadDashboard();
       if (state.activeTab === 'trade-studio') {
         await loadPlayerPool();
       }

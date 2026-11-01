@@ -344,3 +344,49 @@ def test_p1_3_legality_matrix_transfers_optimizer():
     for rec in res.recommendations:
         t1_count = sum(1 for p in rec.new_lineup.starter_ids + rec.new_lineup.bench_ids if p in (101, 102, 105))
         assert t1_count <= 2
+
+
+def test_p1_4_workstation_rules_endpoint(tmp_path: Path):
+    """P1.4 / WEB-10: GET /api/workstation/rules returns official resolved ruleset."""
+    from fastapi.testclient import TestClient
+    from euroleague_fantasy_manager.web.app import create_app
+
+    db_file = tmp_path / "workstation_rules.sqlite3"
+    store = SnapshotStore(db_file)
+    fixture_path = Path(__file__).resolve().parent / "fixtures" / "official_config_el.json"
+    payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+    store.save_snapshot(payload)
+
+    app = create_app(db_path=db_file)
+    client = TestClient(app)
+
+    res = client.get("/api/workstation/rules?league=euroleague")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["league"] == "euroleague"
+    assert data["max_court_players_per_club"] == 6
+    assert data["source"] == "official_config"
+    assert "scoring_multipliers" in data
+
+
+def test_p1_4_app_js_has_no_literal_club_cap():
+    """P1.4: Static check that app.js contains no literal club-cap number."""
+    import re
+
+    app_js_path = Path(__file__).resolve().parent.parent / "src" / "euroleague_fantasy_manager" / "web" / "static" / "js" / "app.js"
+    assert app_js_path.is_file(), f"File {app_js_path} does not exist"
+
+    text = app_js_path.read_text(encoding="utf-8")
+
+    # Search for patterns like literal club cap checks (e.g. Max 6 court players, or count > 6 for club)
+    bad_patterns = [
+        r"Max\s+[0-9]+\s+court\s+players",
+        r"[0-9]+\s+court\s+players\s+per\s+club",
+        r"if\s*\(\s*count\s*>\s*6\s*\)",
+        r"count\s*>\s*6\s*\)",
+    ]
+
+    for pat in bad_patterns:
+        match = re.search(pat, text, re.IGNORECASE)
+        assert match is None, f"Found literal club-cap pattern '{pat}' in app.js: {match.group(0) if match else ''}"
+
