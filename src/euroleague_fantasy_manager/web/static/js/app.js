@@ -804,10 +804,6 @@ async function executeDirectSwap(sourceId, targetId) {
   }
 }
 
-function closeSubModal() {
-  const modal = document.getElementById("sub-modal");
-  if (modal) modal.style.display = "none";
-}
 
 // Player Statistics Details Modal
 let currentModalPlayerId = null;

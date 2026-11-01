@@ -275,3 +275,115 @@ def test_p5_4_input_boundary_validation_query(tmp_path: Path, query_param: str, 
 
     res = client.get(f"/api/workstation/players?{query_param}={value}")
     assert res.status_code == 422
+
+
+def test_p5_5_league_correct_ownership(tmp_path: Path):
+    """WEB-5: Seeding a newer EuroCup snapshot does not alter EuroLeague ownership_pct."""
+    from euroleague_fantasy_manager.storage import SnapshotStore
+
+    db_file = tmp_path / "league_own.sqlite3"
+    store = SnapshotStore(db_file)
+
+    # 1. Euroleague snapshot (league_id=10) with Player 100 having popularity 45.0
+    payload_el = {
+        "league_id": 10,
+        "competition_code": "E",
+        "season_code": "E2026",
+        "round_number": 1,
+        "config": {
+            "current_matchday": {"id": 1, "number": 1, "num_rounds": 2},
+            "teams": [{"id": 1, "name": "Real Madrid", "abbreviation": "RMB"}],
+        },
+        "match_lineups": [
+            {
+                "turn_number": 1,
+                "status": "scheduled",
+                "home_team": {
+                    "id": 1,
+                    "name": "Real Madrid",
+                    "abbreviation": "RMB",
+                    "lineups": [
+                        {
+                            "id": 100,
+                            "first_name": "Facundo",
+                            "last_name": "Campazzo",
+                            "position": "Guard",
+                            "quotation": 15.0,
+                            "popularity": 45.0,
+                            "probability_of_playing": 1.0,
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+    store.save_snapshot(payload_el, created_at="2026-10-01T10:00:00Z")
+
+    # 2. Newer EuroCup snapshot (league_id=11) with Player 100 having popularity 5.0
+    payload_ec = {
+        "league_id": 11,
+        "competition_code": "U",
+        "season_code": "U2026",
+        "round_number": 1,
+        "config": {
+            "current_matchday": {"id": 1, "number": 1, "num_rounds": 2},
+            "teams": [{"id": 2, "name": "Valencia", "abbreviation": "VBC"}],
+        },
+        "match_lineups": [
+            {
+                "turn_number": 1,
+                "status": "scheduled",
+                "home_team": {
+                    "id": 2,
+                    "name": "Valencia",
+                    "abbreviation": "VBC",
+                    "lineups": [
+                        {
+                            "id": 100,
+                            "first_name": "Facundo",
+                            "last_name": "Campazzo",
+                            "position": "Guard",
+                            "quotation": 15.0,
+                            "popularity": 5.0,
+                            "probability_of_playing": 1.0,
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+    store.save_snapshot(payload_ec, created_at="2026-10-02T10:00:00Z")
+
+    app = create_app(db_path=db_file)
+    client = TestClient(app)
+
+    # EuroLeague query must reflect EuroLeague popularity 45.0, not EuroCup 5.0
+    res_players = client.get("/api/workstation/players?league=euroleague&round_number=1")
+    assert res_players.status_code == 200
+    p_data = res_players.json()
+    assert len(p_data) == 1
+    assert p_data[0]["ownership_pct"] == 45.0
+
+    res_details = client.get("/api/workstation/players/100?league=euroleague&round_number=1")
+    assert res_details.status_code == 200
+    assert res_details.json()["popularity"] == 45.0
+
+    res_intel = client.get("/api/workstation/player-intel/100?league=euroleague&round_number=1")
+    assert res_intel.status_code == 200
+    assert res_intel.json()["ownership"]["percentage"] == 45.0
+
+    # EuroCup query must reflect EuroCup popularity 5.0
+    res_ec = client.get("/api/workstation/players?league=eurocup&round_number=1")
+    assert res_ec.status_code == 200
+    ec_data = res_ec.json()
+    assert len(ec_data) == 1
+    assert ec_data[0]["ownership_pct"] == 5.0
+
+
+def test_p5_5_dead_sub_modal_removed():
+    """WEB-10: Dead sub-modal HTML and JS code are removed."""
+    app_js = Path("src/euroleague_fantasy_manager/web/static/js/app.js").read_text(encoding="utf-8")
+    index_html = Path("src/euroleague_fantasy_manager/web/templates/index.html").read_text(encoding="utf-8")
+
+    assert "closeSubModal" not in app_js
+    assert 'id="sub-modal"' not in index_html

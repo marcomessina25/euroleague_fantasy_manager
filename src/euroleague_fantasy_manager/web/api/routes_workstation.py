@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field, confloat, conint
 
-from euroleague_fantasy_manager.competition.ruleset import League
+from euroleague_fantasy_manager.competition.ruleset import League, get_league_ruleset
 from euroleague_fantasy_manager.models import ModelUnavailableError, Position
 from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit
 from euroleague_fantasy_manager.optimization.ownership_strategy import (
@@ -770,7 +770,7 @@ def list_players_endpoint(
     try:
         from euroleague_fantasy_manager.storage import SnapshotStore
         s_store = SnapshotStore(prediction_service.database_path)
-        p_list = s_store.load_latest_players(league_id=league.league_id if hasattr(league, "league_id") else None)
+        p_list = s_store.load_latest_players(league_id=get_league_ruleset(league).league_id)
         ownership_map = {p.id: p.popularity for p in p_list}
     except Exception:
         ownership_map = {}
@@ -854,11 +854,16 @@ def get_player_details_endpoint(
     db_path = prediction_service.database_path
 
     # Projection contract & valuation
-    contract = prediction_service.get_player_projection(season, round_number, player_id, league=league.value)
+    try:
+        contract = prediction_service.get_player_projection(season, round_number, player_id, league=league.value)
+    except ModelUnavailableError:
+        contract = prediction_service.get_player_projection(
+            season, round_number, player_id, model_name="price_prior_v1", league=league.value
+        )
     valuations = prediction_service.get_player_valuations(season, round_number, league=league.value)
     val = valuations.get(player_id, {})
 
-    target_league_id = 11 if league == League.EUROCUP else 10
+    target_league_id = get_league_ruleset(league).league_id
 
     # Detailed snapshot database row scoped to target league
     player_row: dict[str, Any] = {}
@@ -915,7 +920,7 @@ def get_player_details_endpoint(
         "has_played": getattr(contract, "has_played", False) if contract else bool(player_row.get("has_played", False)),
         "actual_fp": round(getattr(contract, "actual_fp", 0.0), 2) if (contract and getattr(contract, "actual_fp", None) is not None) else (round(player_row.get("last_match_pts", 0.0), 2) if player_row.get("has_played") else None),
         "total_plus_tenths": player_row.get("total_plus_tenths", 0),
-        "total_plus_credits": round((player_row.get("total_plus_tenths", 0)) / 10.0, 1),
+        "total_plus_credits": round((player_row.get("total_plus_tenths") or 0) / 10.0, 1),
         "popularity": player_row.get("popularity", 0.0),
         "is_injured": bool(player_row.get("is_injured", False)),
         "is_on_fire": bool(player_row.get("is_on_fire", False)),
@@ -1003,7 +1008,7 @@ def player_intel_endpoint(
     try:
         from euroleague_fantasy_manager.storage import SnapshotStore
         s_store = SnapshotStore(prediction_service.database_path)
-        p_list = s_store.load_latest_players(league_id=league.league_id if hasattr(league, "league_id") else None)
+        p_list = s_store.load_latest_players(league_id=get_league_ruleset(league).league_id)
         ownership_map = {p.id: p.popularity for p in p_list}
     except Exception:
         ownership_map = {}

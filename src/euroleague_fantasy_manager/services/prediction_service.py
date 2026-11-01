@@ -202,7 +202,7 @@ class PredictionService:
             norm_season = normalize_season_code(season)
             digits = "".join(c for c in season if c.isdigit())
             bare_year = digits[:4] if len(digits) >= 4 else digits
-            for cand in (norm_season, bare_year, f"E{bare_year}"):
+            for cand in (norm_season, bare_year, f"{ruleset.competition_code}{bare_year}", f"E{bare_year}", f"U{bare_year}"):
                 if cand and cand != season:
                     snap = store.get_snapshot_for_round(
                         league_id=league_id,
