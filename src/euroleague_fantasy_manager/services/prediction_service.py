@@ -125,8 +125,9 @@ class PredictionService:
 
         try:
             store_eval = EvaluationDatasetStore(self.database_path)
-            # The historical evaluation dataset only covers EuroLeague.
-            if league_enum == League.EUROLEAGUE and norm_season in store_eval.list_seasons():
+            is_synthetic = (store_eval.get_season_source(season) == "synthetic" or store_eval.get_season_source(norm_season) == "synthetic")
+            # The historical evaluation dataset only covers EuroLeague and must not be synthetic for live requests.
+            if not is_synthetic and league_enum == League.EUROLEAGUE and norm_season in store_eval.list_seasons():
                 cutoff = store_eval.get_round_decision_cutoff(norm_season, round_number)
                 if cutoff:
                     feature_table = build_round_feature_table(

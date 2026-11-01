@@ -59,6 +59,16 @@ from .transfers import parse_trade_specs, validate_trades
 RAW_ARCHIVE_DIRECTORY = PROJECT_ROOT / "data" / "raw"
 
 
+def _is_production_db(db_path: Path) -> bool:
+    if db_path.resolve() == paths.database_path().resolve():
+        return True
+    try:
+        from .storage import SnapshotStore
+        return SnapshotStore(db_path).get_latest_summary() is not None
+    except Exception:
+        return False
+
+
 def _resolve_league(league_arg: str | League | None) -> tuple[int, str, str]:
     if league_arg is None:
         league = League.EUROLEAGUE
@@ -449,6 +459,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="EWMA decay parameter alpha in (0, 1] (default: 0.25).",
     )
     predict_parser.add_argument(
+        "--eval-db",
+        type=Path,
+        default=None,
+        help="Database path for evaluation tables (default: data/eval.sqlite3).",
+    )
+    predict_parser.add_argument(
+        "--allow-synthetic",
+        action="store_true",
+        default=False,
+        help="Allow generating synthetic evaluation data into the production database.",
+    )
+    predict_parser.add_argument(
         "--json",
         action="store_true",
         help="Output JSON predictions instead of formatted table.",
@@ -502,6 +524,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.25,
         help="EWMA decay parameter alpha in (0, 1] (default: 0.25).",
+    )
+    evaluate_parser.add_argument(
+        "--eval-db",
+        type=Path,
+        default=None,
+        help="Database path for evaluation tables (default: data/eval.sqlite3).",
+    )
+    evaluate_parser.add_argument(
+        "--allow-synthetic",
+        action="store_true",
+        default=False,
+        help="Allow generating synthetic evaluation data into the production database.",
     )
     evaluate_parser.add_argument(
         "--json",
@@ -558,6 +592,18 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--risk-mode", type=str, default="expected", choices=["expected", "conservative", "aggressive"], help="Risk mode (default: expected).")
         p.add_argument("--risk-lambda", type=float, default=0.15, help="Risk lambda (default: 0.15).")
         p.add_argument("--alpha", type=float, default=0.25, help="EWMA alpha for features (default: 0.25).")
+        p.add_argument(
+            "--eval-db",
+            type=Path,
+            default=None,
+            help="Database path for evaluation tables (default: data/eval.sqlite3).",
+        )
+        p.add_argument(
+            "--allow-synthetic",
+            action="store_true",
+            default=False,
+            help="Allow generating synthetic evaluation data into the production database.",
+        )
         p.add_argument("--json", action="store_true", help="Output JSON summary.")
         return p
 
@@ -977,14 +1023,33 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "predict":
         norm_season = normalize_season_code(args.season)
-        store_eval = EvaluationDatasetStore(args.db)
+        eval_db = getattr(args, "eval_db", None) or args.db
+        if _is_production_db(eval_db) and not getattr(args, "allow_synthetic", False):
+            try:
+                import sqlite3
+                with sqlite3.connect(eval_db) as conn:
+                    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='eval_rounds'").fetchone():
+                        print(
+                            "Refusing to auto-generate synthetic data into production database. Use --eval-db or pass --allow-synthetic.",
+                            file=sys.stderr,
+                        )
+                        return 2
+            except Exception:
+                pass
+        store_eval = EvaluationDatasetStore(eval_db)
         if norm_season not in store_eval.list_seasons():
-            build_historical_dataset(database_path=args.db, seasons=[norm_season])
+            if _is_production_db(eval_db) and not getattr(args, "allow_synthetic", False):
+                print(
+                    "Refusing to auto-generate synthetic data into production database. Use --eval-db or pass --allow-synthetic.",
+                    file=sys.stderr,
+                )
+                return 2
+            build_historical_dataset(database_path=eval_db, seasons=[norm_season])
         cutoff = store_eval.get_round_decision_cutoff(norm_season, args.round)
         feature_table = build_round_feature_table(
             season=norm_season,
             round_number=args.round,
-            database_path=args.db,
+            database_path=eval_db,
             decision_cutoff=cutoff,
             ewma_alpha=args.alpha,
         )
@@ -1027,12 +1092,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             model_list = [m.strip() for m in str(args.models).split(",") if m.strip()]
         target_seasons = args.seasons if args.seasons else args.season
+        eval_db = getattr(args, "eval_db", None) or args.db
+        store_eval = EvaluationDatasetStore(eval_db)
+        t_seasons = [normalize_season_code(s) for s in (args.seasons if args.seasons else [args.season])]
+        missing_seasons = [s for s in t_seasons if s not in store_eval.list_seasons()]
+        if missing_seasons:
+            if _is_production_db(eval_db) and not getattr(args, "allow_synthetic", False):
+                print(
+                    "Refusing to auto-generate synthetic data into production database. Use --eval-db or pass --allow-synthetic.",
+                    file=sys.stderr,
+                )
+                return 2
+            build_historical_dataset(database_path=eval_db, seasons=missing_seasons)
         eval_report = run_walk_forward_evaluation(
             season=target_seasons,
             rounds=args.rounds,
             models=model_list,
             ewma_alpha=args.alpha,
-            database_path=args.db,
+            database_path=eval_db,
             calibration_method=args.calibration,
         )
         if args.json:
@@ -1148,9 +1225,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         if args.opt_command == "backtest":
-            store_eval = EvaluationDatasetStore(args.db)
+            eval_db = getattr(args, "eval_db", None) or args.db
+            store_eval = EvaluationDatasetStore(eval_db)
             if norm_season not in store_eval.list_seasons():
-                build_historical_dataset(database_path=args.db, seasons=[norm_season])
+                if _is_production_db(eval_db) and not getattr(args, "allow_synthetic", False):
+                    print(
+                        "Refusing to auto-generate synthetic data into production database. Use --eval-db or pass --allow-synthetic.",
+                        file=sys.stderr,
+                    )
+                    return 2
+                build_historical_dataset(database_path=eval_db, seasons=[norm_season])
             avail_rounds = store_eval.list_season_rounds(norm_season)
             rounds_to_eval = parse_rounds_spec(args.rounds, avail_rounds)
             rounds_data: dict[int, tuple[list[PlayerProjectionContract], dict[int, float]]] = {}
@@ -1159,7 +1243,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     season=norm_season,
                     round_number=r_num,
                     model_name=canon_model,
-                    database_path=args.db,
+                    database_path=eval_db,
                     ewma_alpha=args.alpha,
                 )
                 # Resolve squad for round r_num

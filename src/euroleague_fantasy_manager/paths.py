@@ -17,6 +17,11 @@ def elf_home() -> Path:
     return Path.cwd().resolve()
 
 
+def eval_database_path() -> Path:
+    """Default evaluation database path."""
+    return elf_home() / "data" / "eval.sqlite3"
+
+
 def database_path() -> Path:
     """Default database path."""
     return elf_home() / "data" / "euroleague.sqlite3"

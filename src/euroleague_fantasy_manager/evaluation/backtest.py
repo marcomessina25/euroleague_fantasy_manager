@@ -51,9 +51,18 @@ def parse_rounds_spec(rounds_spec: str | None, available_rounds: Sequence[int]) 
     return [r for r in avail_sorted if r == single]
 
 
-def _ensure_dataset_present(store: EvaluationDatasetStore, target_season: str) -> None:
+def _ensure_dataset_present(
+    store: EvaluationDatasetStore,
+    target_season: str,
+    allow_synthetic: bool = False,
+) -> None:
     seasons_present = store.list_seasons()
     if target_season not in seasons_present:
+        from .. import paths
+        if store.database_path.resolve() == paths.database_path().resolve() and not allow_synthetic:
+            raise ValueError(
+                "Refusing to auto-generate synthetic data into production database. Use --eval-db or pass --allow-synthetic."
+            )
         prefix = target_season[0] if (target_season and target_season[0] in ("E", "U")) else "E"
         default_seasons = sorted(set([f"{prefix}2022", f"{prefix}2023", f"{prefix}2024", f"{prefix}2025", target_season]))
         build_historical_dataset(database_path=store.database_path, seasons=default_seasons)

@@ -81,7 +81,13 @@ class EvaluationDatasetStore:
         with self._connect() as conn:
             conn.executescript(
                 """
-                CREATE TABLE IF NOT EXISTS eval_players (
+                                CREATE TABLE IF NOT EXISTS eval_dataset_meta (
+                    season TEXT PRIMARY KEY,
+                    source TEXT NOT NULL CHECK(source IN ('synthetic', 'historical_feeds')),
+                    created_at TEXT NOT NULL
+                );
+
+CREATE TABLE IF NOT EXISTS eval_players (
                     player_id INTEGER PRIMARY KEY,
                     name TEXT NOT NULL,
                     position TEXT NOT NULL,
@@ -478,6 +484,19 @@ class EvaluationDatasetStore:
             if row is not None:
                 return str(row["decision_cutoff"])
         raise KeyError(f"No round cutoff found for season={norm_season}, round={round_number}")
+
+    def get_season_source(self, season: str) -> str | None:
+        """Return data source for a season ('synthetic' or 'historical_feeds'), or None."""
+        norm_season = normalize_season_code(season)
+        try:
+            with self._connect() as conn:
+                row = conn.execute(
+                    "SELECT source FROM eval_dataset_meta WHERE season = ?",
+                    (norm_season,),
+                ).fetchone()
+                return str(row["source"]) if row else None
+        except Exception:
+            return None
 
     def list_seasons(self, league: str | None = None) -> list[str]:
         with self._connect() as conn:
@@ -1108,6 +1127,12 @@ def build_historical_dataset(
                         f"Point-in-time snapshot before {season_code} Round {rnum}",
                     ),
                 )
+
+                for s in norm_seasons:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO eval_dataset_meta (season, source, created_at) VALUES (?, 'synthetic', ?)",
+                        (s, datetime.now(timezone.utc).isoformat()),
+                    )
 
     return HistoricalBuildSummary(
         dataset_version=dataset_version,

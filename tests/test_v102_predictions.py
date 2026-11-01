@@ -406,3 +406,64 @@ def test_p3_4_app_scoped_prediction_service_and_cache(tmp_path: Path):
     dash_3 = client_a.get("/api/workstation/dashboard?team_id=team_alpha&round_number=1")
     assert dash_3.status_code == 200
     assert call_counter.call_count == 2
+
+
+def test_p3_6_synthetic_data_guards(tmp_path: Path):
+    from euroleague_fantasy_manager.cli import main
+    from euroleague_fantasy_manager.evaluation.dataset import EvaluationDatasetStore
+    import sqlite3
+
+    db_file = tmp_path / "prod_sim.db"
+    store = SnapshotStore(db_file)
+
+    # 1. Seed production snapshot in db_file
+    payload = {
+        "league_id": 10,
+        "competition_code": "E",
+        "season_code": "E2026",
+        "round_number": 1,
+        "players": [
+            {
+                "id": 888,
+                "name": "Live Player 888",
+                "position": "Guard",
+                "price_tenths": 150,
+                "status": "starter",
+                "probability_of_playing": 1.0,
+            }
+        ],
+    }
+    store.save_snapshot(payload)
+
+    # Record tables before predict
+    with sqlite3.connect(db_file) as conn:
+        tables_before = set(r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall())
+
+    # 2. elf predict --season 2026 on production-like DB without --allow-synthetic returns exit code 2
+    exit_code = main(["--db", str(db_file), "predict", "--season", "2026", "--round", "1"])
+    assert exit_code == 2
+
+    # Database is completely unchanged (no eval_* tables created)
+    with sqlite3.connect(db_file) as conn:
+        tables_after = set(r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall())
+    assert tables_before == tables_after
+    assert "eval_players" not in tables_after
+    assert "eval_player_games" not in tables_after
+
+    # 3. With --allow-synthetic, command succeeds and populates synthetic eval tables tagged 'synthetic'
+    exit_code_ok = main(["--db", str(db_file), "predict", "--season", "2026", "--round", "1", "--allow-synthetic"])
+    assert exit_code_ok == 0
+
+    eval_store = EvaluationDatasetStore(db_file)
+    assert eval_store.get_season_source("2026") == "synthetic"
+    assert eval_store.get_season_source("E2026") == "synthetic"
+
+    # 4. PredictionService: Live projections for E2026 still come from snapshots, NOT synthetic tables
+    ps = PredictionService(database_path=db_file)
+    projs = ps.get_projections(season="2026", round_number=1, league="euroleague")
+    assert len(projs) == 1
+    p = projs[0]
+    assert p.player_id == 888
+    assert p.player_name == "Live Player 888"
+    assert p.model_version == "price_prior_v1"
+    assert p.provenance["source"] == "live"
