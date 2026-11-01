@@ -164,3 +164,136 @@ def test_p4_1_normal_round_unlimited_flag_returns_400(tmp_path: Path):
     )
     assert response.status_code == 400
     assert "not an unlimited transfer round" in response.json()["detail"].lower()
+
+
+
+def test_p4_2_unaffordable_candidates_do_not_crowd_out_affordable_trade():
+    """OPT-3: 20 unaffordable + 1 affordable candidate returns the +27.5 trade."""
+    ruleset = get_league_ruleset(League.EUROLEAGUE)
+    constraints = OptimizationConstraints.from_ruleset(ruleset)
+    opt = TransferOptimizer(constraints=constraints)
+
+    squad = make_standard_squad()
+    # Replace guard 104 with player costing 100 tenths (10.0 Cr), 10.0 expected FP
+    squad[3] = make_test_player(104, Position.GUARD, expected_fp=10.0, price_tenths=100, team_id=4)
+
+    # Market:
+    # 20 unaffordable guards with price 150 tenths, expected 40.0 FP
+    # 1 affordable guard with price 100 tenths, expected 37.5 FP (+27.5 FP gain!)
+    market = [
+        make_test_player(500 + i, Position.GUARD, expected_fp=40.0, price_tenths=150, team_id=6)
+        for i in range(20)
+    ]
+    market.append(
+        make_test_player(599, Position.GUARD, expected_fp=37.5, price_tenths=100, team_id=7)
+    )
+
+    # Bank is 0, so budget when selling player 104 is exactly 100 tenths
+    res = opt.optimize_transfers(
+        current_squad=squad,
+        market=market,
+        bank_tenths=0,
+        round_number=2,
+        max_trades=1,
+        unlimited=False,
+        top_n=5,
+    )
+
+    assert len(res.recommendations) >= 1
+    top_rec = res.recommendations[0]
+    assert 599 in [p.player_id for p in top_rec.in_players]
+    assert top_rec.net_transfer_value >= 27.5
+
+
+def test_p4_2_club_full_candidates_do_not_crowd_out_legal_alternatives():
+    """OPT-3: Club-full candidates do not crowd out legal alternatives from other clubs."""
+    ruleset = get_league_ruleset(League.EUROLEAGUE)
+    constraints = OptimizationConstraints.from_ruleset(ruleset)
+    opt = TransferOptimizer(constraints=constraints)
+
+    squad = make_standard_squad()
+    # Set 6 squad players to team_id=1 (so team 1 is at maximum club capacity of 6)
+    for idx in range(6):
+        squad[idx] = make_test_player(
+            squad[idx].player_id,
+            squad[idx].position,
+            expected_fp=squad[idx].expected_fp,
+            price_tenths=squad[idx].price_tenths,
+            team_id=1,
+        )
+    # Target player to sell is from team 2
+    squad[6] = make_test_player(203, Position.FORWARD, expected_fp=10.0, price_tenths=100, team_id=2)
+
+    # Market:
+    # 20 forwards from team 1 (illegal because team 1 is already full) with high expected FP (35.0)
+    # 1 forward from team 3 (legal) with expected FP 25.0
+    market = [
+        make_test_player(600 + i, Position.FORWARD, expected_fp=35.0, price_tenths=100, team_id=1)
+        for i in range(20)
+    ]
+    market.append(
+        make_test_player(699, Position.FORWARD, expected_fp=25.0, price_tenths=100, team_id=3)
+    )
+
+    res = opt.optimize_transfers(
+        current_squad=squad,
+        market=market,
+        bank_tenths=50,
+        round_number=2,
+        max_trades=1,
+        unlimited=False,
+        top_n=5,
+    )
+
+    assert len(res.recommendations) >= 1
+    top_rec = res.recommendations[0]
+    # Recommends the legal player 699 from team 3, not the illegal team 1 candidates
+    assert 699 in [p.player_id for p in top_rec.in_players]
+    assert top_rec.net_transfer_value >= 15.0
+
+
+def test_p4_2_oracle_agrees_on_random_small_markets():
+    """OPT-3: Verify optimizer agreement against brute-force oracle across randomized small markets."""
+    import random
+    rng = random.Random(42)
+
+    ruleset = get_league_ruleset(League.EUROLEAGUE)
+    constraints = OptimizationConstraints.from_ruleset(ruleset)
+    opt = TransferOptimizer(constraints=constraints)
+    squad = make_standard_squad()
+
+    for trial in range(3):
+        # Generate 2 candidates per position with randomized prices and expectations
+        market = []
+        for i, pos in enumerate((Position.GUARD, Position.FORWARD, Position.CENTER, Position.HEAD_COACH)):
+            for j in range(2):
+                pid = 1000 + i * 10 + j
+                exp = round(rng.uniform(12.0, 30.0), 1)
+                cost = rng.choice([70, 85, 100, 115, 130])
+                tid = rng.randint(5, 9)
+                market.append(make_test_player(pid, pos, expected_fp=exp, price_tenths=cost, team_id=tid))
+
+        oracle_res = brute_force_transfers(
+            squad=squad,
+            market=market,
+            bank=50,
+            k_max=2,
+            ruleset=constraints,
+            penalty=0.0,
+        )
+
+        opt_res = opt.optimize_transfers(
+            current_squad=squad,
+            market=market,
+            bank_tenths=50,
+            round_number=2,
+            max_trades=2,
+            unlimited=False,
+            top_n=5,
+        )
+
+        if oracle_res is None:
+            assert len(opt_res.recommendations) == 0 or opt_res.recommendations[0].net_transfer_value <= 0.0
+        else:
+            assert len(opt_res.recommendations) > 0
+            assert round(opt_res.recommendations[0].net_transfer_value, 2) == round(oracle_res.net_transfer_value, 2)

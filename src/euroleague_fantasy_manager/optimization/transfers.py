@@ -50,6 +50,8 @@ class TransferOptimizationResult:
     total_evaluated_packages: int
     is_exhaustive: bool
     stage2_evaluations: int = 0
+    widened: bool = False
+    pruning_notes: tuple[str, ...] = ()
 
 
 class TransferOptimizer:
@@ -173,7 +175,7 @@ class TransferOptimizer:
         candidate_pool = self.candidate_generator.generate_candidates(
             market=market_contracts,
             current_squad=squad_contracts,
-            exhaustive=exhaustive_candidates,
+            exhaustive=True,
         )
 
         all_recommendations: list[TransferRecommendation] = []
@@ -300,66 +302,93 @@ class TransferOptimizer:
 
         max_per_club = self.constraints.max_players_per_club
         squad_club_counts = Counter(c for c in (_club_key(p) for p in squad_contracts) if c is not None)
+        min_price_in_pool = min((p.price_tenths for p in market_contracts), default=0)
+        squad_pids = {p.player_id for p in squad_contracts}
+
+        widened_flag = False
+        pruning_notes_list: list[str] = []
 
         # Stage 1: Fast screening of legal trade combinations
         screened_packages: list[tuple[float, tuple[PlayerProjectionContract, ...], tuple[PlayerProjectionContract, ...], int, int]] = []
 
         for k in range(1, effective_max_trades + 1):
-            cand_limit = cand_limits_by_k.get(k, 3) if not exhaustive_candidates else 50
-            k_packages: list[tuple[float, tuple[PlayerProjectionContract, ...], tuple[PlayerProjectionContract, ...], int, int]] = []
+            base_cand_limit = cand_limits_by_k.get(k, 3) if not exhaustive_candidates else 50
 
-            for out_combo in combinations(squad_contracts, k):
-                out_positions = Counter(p.position for p in out_combo)
-                sales_val = sum(p.price_tenths for p in out_combo)
-                max_budget = bank_tenths + sales_val
-                remaining_club_counts = squad_club_counts.copy()
-                remaining_club_counts.subtract(c for c in (_club_key(p) for p in out_combo) if c is not None)
+            def _evaluate_level_k(limit: int) -> list[tuple[float, tuple[PlayerProjectionContract, ...], tuple[PlayerProjectionContract, ...], int, int]]:
+                nonlocal evaluated_count
+                packages: list[tuple[float, tuple[PlayerProjectionContract, ...], tuple[PlayerProjectionContract, ...], int, int]] = []
+                for out_combo in combinations(squad_contracts, k):
+                    out_positions = Counter(p.position for p in out_combo)
+                    sales_val = sum(p.price_tenths for p in out_combo)
+                    max_budget = bank_tenths + sales_val
+                    remaining_club_counts = squad_club_counts.copy()
+                    remaining_club_counts.subtract(c for c in (_club_key(p) for p in out_combo) if c is not None)
 
-                pos_candidate_lists: list[Sequence[PlayerProjectionContract]] = []
-                valid_positions = True
-                for pos, count in out_positions.items():
-                    cands = candidate_pool.for_position(pos)
-                    if not exhaustive_candidates:
-                        cands = cands[:cand_limit]
-                    if len(cands) < count:
-                        valid_positions = False
-                        break
-                    pos_combos = list(combinations(cands, count))
-                    pos_candidate_lists.append(pos_combos)
+                    pos_candidate_lists: list[Sequence[PlayerProjectionContract]] = []
+                    valid_positions = True
+                    cutoff_budget = max_budget - (k - 1) * min_price_in_pool
 
-                if not valid_positions:
-                    continue
+                    for pos, count in out_positions.items():
+                        cands = candidate_pool.for_position(pos)
+                        # OPT-3: Filter candidates BEFORE truncation:
+                        # 1. Not already in the squad
+                        # 2. Affordable: price <= max_budget - (k-1)*min_price_in_pool
+                        # 3. Within club headroom: remaining_club_counts[club] < max_per_club
+                        filtered = [
+                            c for c in cands
+                            if c.player_id not in squad_pids
+                            and c.price_tenths <= cutoff_budget
+                            and (_club_key(c) is None or remaining_club_counts[_club_key(c)] < max_per_club)
+                        ]
+                        if not exhaustive_candidates:
+                            filtered = filtered[:limit]
+                        if len(filtered) < count:
+                            valid_positions = False
+                            break
+                        pos_candidate_lists.append(list(combinations(filtered, count)))
 
-                out_exp_sum = sum(p.expected_fp for p in out_combo)
-
-                for in_tuple_of_tuples in product(*pos_candidate_lists):
-                    in_players: list[PlayerProjectionContract] = []
-                    for sub_tuple in in_tuple_of_tuples:
-                        in_players.extend(sub_tuple)
-
-                    purchases_val = sum(p.price_tenths for p in in_players)
-                    if purchases_val > max_budget:
+                    if not valid_positions:
                         continue
 
-                    # Mathematical upper bound pruning
-                    max_in_pts = 2.0 * sum(p.expected_fp for p in in_players)
-                    min_out_pts = 0.5 * out_exp_sum
-                    if max_in_pts < min_out_pts:
-                        continue
+                    out_exp_sum = sum(p.expected_fp for p in out_combo)
 
-                    # Club quota (court players only); positions are preserved by construction
-                    in_club_counts = Counter(c for c in (_club_key(p) for p in in_players) if c is not None)
-                    if any(
-                        remaining_club_counts[club] + n > max_per_club
-                        for club, n in in_club_counts.items()
-                    ):
-                        continue
+                    for in_tuple_of_tuples in product(*pos_candidate_lists):
+                        in_players: list[PlayerProjectionContract] = []
+                        for sub_tuple in in_tuple_of_tuples:
+                            in_players.extend(sub_tuple)
 
-                    evaluated_count += 1
-                    new_bank = max_budget - purchases_val
-                    in_exp_sum = sum(p.expected_fp for p in in_players)
-                    proxy_gain = in_exp_sum - out_exp_sum
-                    k_packages.append((proxy_gain, tuple(out_combo), tuple(in_players), new_bank, k))
+                        purchases_val = sum(p.price_tenths for p in in_players)
+                        if purchases_val > max_budget:
+                            continue
+
+                        # Mathematical upper bound pruning
+                        max_in_pts = 2.0 * sum(p.expected_fp for p in in_players)
+                        min_out_pts = 0.5 * out_exp_sum
+                        if max_in_pts < min_out_pts:
+                            continue
+
+                        # Club quota (court players only); positions are preserved by construction
+                        in_club_counts = Counter(c for c in (_club_key(p) for p in in_players) if c is not None)
+                        if any(
+                            remaining_club_counts[club] + n > max_per_club
+                            for club, n in in_club_counts.items()
+                        ):
+                            continue
+
+                        evaluated_count += 1
+                        new_bank = max_budget - purchases_val
+                        in_exp_sum = sum(p.expected_fp for p in in_players)
+                        proxy_gain = in_exp_sum - out_exp_sum
+                        packages.append((proxy_gain, tuple(out_combo), tuple(in_players), new_bank, k))
+                return packages
+
+            k_packages = _evaluate_level_k(base_cand_limit)
+            if not k_packages and not exhaustive_candidates:
+                doubled_limit = base_cand_limit * 2
+                k_packages = _evaluate_level_k(doubled_limit)
+                if k_packages:
+                    widened_flag = True
+                    pruning_notes_list.append(f"Level k={k} produced 0 packages; widened candidate limit to {doubled_limit}")
 
             # Keep top candidates per trade size k
             k_packages.sort(key=lambda x: x[0], reverse=True)
@@ -454,4 +483,6 @@ class TransferOptimizer:
             total_evaluated_packages=max(1, evaluated_count),
             is_exhaustive=False if unlimited else candidate_pool.is_exhaustive,
             stage2_evaluations=stage2_evaluations,
+            widened=widened_flag,
+            pruning_notes=tuple(pruning_notes_list),
         )
