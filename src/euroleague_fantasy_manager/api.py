@@ -2,7 +2,10 @@
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+from pathlib import Path
+import time
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from .rules import EUROLEAGUE_LEAGUE_ID
@@ -19,17 +22,50 @@ DEFAULT_HEADERS = {
 }
 
 
+def _get_json(
+    url: str,
+    *,
+    retries: int = 3,
+    backoff: float = 0.5,
+    timeout: int = 15,
+) -> Any:
+    """Fetch JSON from a full URL with retries on URLError, 429 and 5xx."""
+    last_exc: Exception | None = None
+    for attempt in range(max(1, retries)):
+        try:
+            request = Request(url, headers=DEFAULT_HEADERS)
+            with urlopen(request, timeout=timeout) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except HTTPError as e:
+            last_exc = e
+            if e.code == 429 or 500 <= e.code < 600:
+                if attempt < retries - 1:
+                    time.sleep(backoff * (2**attempt))
+                    continue
+            raise
+        except URLError as e:
+            last_exc = e
+            if attempt < retries - 1:
+                time.sleep(backoff * (2**attempt))
+                continue
+            raise
+        except Exception as e:
+            last_exc = e
+            raise
+    if last_exc:
+        raise last_exc
+    raise RuntimeError(f"Failed to fetch {url}")
+
+
 def get_json(url: str, timeout_seconds: int = 25) -> Any:
     """Fetch JSON from a full URL using standard library urllib."""
-    request = Request(url, headers=DEFAULT_HEADERS)
-    with urlopen(request, timeout=timeout_seconds) as response:
-        return json.loads(response.read().decode("utf-8"))
+    return _get_json(url, timeout=timeout_seconds)
 
 
 def fetch_fantasy_endpoint(endpoint: str, timeout_seconds: int = 25) -> Any:
     """Fetch a JSON payload from fantaking-api.dunkest.com/api/v1."""
     url = f"{FANTASY_API_BASE_URL}/{endpoint.lstrip('/')}"
-    return get_json(url, timeout_seconds=timeout_seconds)
+    return _get_json(url, timeout=timeout_seconds)
 
 
 def fetch_league_config(league_id: int = EUROLEAGUE_LEAGUE_ID) -> dict[str, Any]:
@@ -50,10 +86,34 @@ def fetch_match_lineups(match_id: int) -> dict[str, Any]:
     return payload.get("data", payload)
 
 
-def fetch_player_profile(player_id: int, league_id: int = EUROLEAGUE_LEAGUE_ID) -> dict[str, Any]:
-    """Fetch individual player or coach fantasy profile (quotation, popularity, total_plus, avg_fantasy_pts)."""
-    payload = fetch_fantasy_endpoint(f"players/{player_id}/profile?league={league_id}")
-    return payload.get("data", payload)
+def fetch_player_profile(
+    player_id: int,
+    league_id: int = EUROLEAGUE_LEAGUE_ID,
+    round_number: int | None = None,
+    cache_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Fetch individual player or coach fantasy profile with on-disk caching keyed by (player_id, round)."""
+    if cache_dir is not None and round_number is not None:
+        c_path = cache_dir / f"profile_{player_id}_r{round_number}.json"
+        if c_path.exists():
+            try:
+                return json.loads(c_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
+    url = f"{FANTASY_API_BASE_URL}/players/{player_id}/profile?league={league_id}"
+    payload = _get_json(url)
+    data = payload.get("data", payload)
+
+    if cache_dir is not None and round_number is not None and isinstance(data, dict):
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            c_path = cache_dir / f"profile_{player_id}_r{round_number}.json"
+            c_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    return data
 
 
 import re
@@ -110,6 +170,7 @@ def fetch_current_data(
     competition_code: str = "E",
     season_code: str | None = None,
     upcoming_rounds: int = 6,
+    cache_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Fetch a complete point-in-time snapshot of config, multi-round schedules, match lineups, and official clubs."""
     config = fetch_league_config(league_id=league_id)
@@ -164,6 +225,47 @@ def fetch_current_data(
             lineups_by_match[mid] = match_data
 
     ordered_match_lineups = [lineups_by_match[mid] for _, mid in match_ids if mid in lineups_by_match]
+
+    unique_player_ids: set[int] = set()
+    for mdata in ordered_match_lineups:
+        for side in ("home_team", "away_team"):
+            for p in mdata.get(side, {}).get("lineups", []):
+                pid = p.get("id")
+                if pid:
+                    unique_player_ids.add(int(pid))
+
+    profiles_by_id: dict[int, dict[str, Any]] = {}
+    missing_fields_set: set[str] = set()
+    if unique_player_ids:
+        with ThreadPoolExecutor(max_workers=min(8, len(unique_player_ids))) as profile_pool:
+            future_to_pid = {
+                profile_pool.submit(fetch_player_profile, pid, league_id, current_round_num, cache_dir): pid
+                for pid in unique_player_ids
+            }
+            for fut in as_completed(future_to_pid):
+                pid = future_to_pid[fut]
+                try:
+                    prof = fut.result()
+                    if isinstance(prof, dict):
+                        profiles_by_id[pid] = prof
+                    else:
+                        missing_fields_set.add("avg_fantasy_pts")
+                except Exception:
+                    missing_fields_set.add("avg_fantasy_pts")
+
+    for mdata in ordered_match_lineups:
+        for side in ("home_team", "away_team"):
+            for p in mdata.get(side, {}).get("lineups", []):
+                pid = int(p.get("id", 0))
+                prof = profiles_by_id.get(pid)
+                if prof:
+                    if p.get("avg_fantasy_pts") is None:
+                        p["avg_fantasy_pts"] = prof.get("avg_fantasy_pts")
+                    if p.get("popularity") is None:
+                        p["popularity"] = prof.get("popularity")
+                    if p.get("total_plus") is None:
+                        p["total_plus"] = prof.get("total_plus")
+
     official_clubs = fetch_official_clubs(competition_code=competition_code, season_code=resolved_season_code)
 
     return {
@@ -176,5 +278,7 @@ def fetch_current_data(
         "schedules": ordered_schedules,
         "match_lineups": ordered_match_lineups,
         "official_clubs": official_clubs,
+        "player_profiles": profiles_by_id,
+        "missing_fields": sorted(missing_fields_set),
     }
 

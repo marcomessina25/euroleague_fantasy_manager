@@ -29,6 +29,7 @@ class SnapshotSummary:
     fixture_count: int
     club_count: int = 0
     season_code_source: str = "config"
+    missing_fields: tuple[str, ...] = ()
 
 
 def _price_to_tenths(quotation: Any) -> int:
@@ -106,6 +107,11 @@ class SnapshotStore:
         if "season_code_source" not in column_names:
             conn.execute("ALTER TABLE snapshots ADD COLUMN season_code_source TEXT NOT NULL DEFAULT 'config'")
         logger.info("Migration complete: schema v3 index and columns added.")
+
+    def _migrate_to_v5_add_missing_fields_column(self, conn: sqlite3.Connection) -> None:
+        cols = [c[1] for c in conn.execute("PRAGMA table_info(snapshots)").fetchall()]
+        if "missing_fields" not in cols:
+            conn.execute("ALTER TABLE snapshots ADD COLUMN missing_fields TEXT DEFAULT '[]'")
 
     def _migrate_to_v4_add_snapshot_game_rules(self, conn: sqlite3.Connection) -> None:
         """Create snapshot_game_rules table and backfill from raw archive files."""
@@ -208,7 +214,8 @@ class SnapshotStore:
                         num_turns INTEGER NOT NULL DEFAULT 2,
                         raw_archive_path TEXT,
                         club_count INTEGER NOT NULL DEFAULT 0,
-                        season_code_source TEXT NOT NULL DEFAULT 'config'
+                        season_code_source TEXT NOT NULL DEFAULT 'config',
+                        missing_fields TEXT DEFAULT '[]'
                     );
 
                     CREATE INDEX IF NOT EXISTS idx_snapshots_league_id ON snapshots(league_id, id);
@@ -255,9 +262,9 @@ class SnapshotStore:
                         probability_of_playing REAL NOT NULL DEFAULT 1.0,
                         turn_number INTEGER NOT NULL DEFAULT 1,
                         last_match_pts REAL NOT NULL DEFAULT 0.0,
-                        avg_fantasy_pts REAL NOT NULL DEFAULT 0.0,
-                        total_plus_tenths INTEGER NOT NULL DEFAULT 0,
-                        popularity REAL NOT NULL DEFAULT 0.0,
+                        avg_fantasy_pts REAL,
+                        total_plus_tenths INTEGER,
+                        popularity REAL,
                         is_injured INTEGER NOT NULL DEFAULT 0,
                         is_on_fire INTEGER NOT NULL DEFAULT 0,
                         has_played INTEGER NOT NULL DEFAULT 0,
@@ -280,6 +287,10 @@ class SnapshotStore:
             if current_version < 4:
                 self._migrate_to_v4_add_snapshot_game_rules(conn)
                 self._set_schema_version(conn, 4, "Added snapshot_game_rules table and backfilled from raw archives")
+
+            if current_version < 5:
+                self._migrate_to_v5_add_missing_fields_column(conn)
+                self._set_schema_version(conn, 5, "Added missing_fields column to snapshots")
 
     def save_snapshot(
         self,
@@ -372,10 +383,12 @@ class SnapshotStore:
                     prob = float(p.get("probability_of_playing") if p.get("probability_of_playing") is not None else 1.0)
                     pts = float(p.get("pts") or 0.0)
                     raw_avg = p.get("avg_fantasy_pts")
-                    avg_pts = float(raw_avg) if raw_avg is not None else 0.0
+                    avg_pts = float(raw_avg) if (raw_avg is not None and str(raw_avg).strip() != "") else None
                     last_pts = pts if is_game_played else 0.0
-                    plus_tenths = _price_to_tenths(p.get("total_plus", 0))
-                    popularity = float(p.get("popularity") or 0.0)
+                    raw_plus = p.get("total_plus")
+                    plus_tenths = _price_to_tenths(raw_plus) if (raw_plus is not None and str(raw_plus).strip() != "") else None
+                    raw_pop = p.get("popularity")
+                    popularity = float(raw_pop) if (raw_pop is not None and str(raw_pop).strip() != "") else None
                     is_injured = 1 if (status.lower() in ("out", "injured") or p.get("is_injured")) else 0
                     is_on_fire = 1 if p.get("is_on_fire") else 0
                     has_played_val = 1 if is_game_played else 0
@@ -414,6 +427,12 @@ class SnapshotStore:
                 else:
                     pos_int = int(pos_val)
                     pos_code = str(p.get("position_code", "G"))
+                raw_avg2 = p.get("avg_fantasy_pts")
+                avg_pts2 = float(raw_avg2) if (raw_avg2 is not None and str(raw_avg2).strip() != "") else None
+                raw_plus2 = p.get("total_plus_tenths", p.get("total_plus"))
+                plus_tenths2 = int(raw_plus2) if (raw_plus2 is not None and str(raw_plus2).strip() != "") else None
+                raw_pop2 = p.get("popularity")
+                pop2 = float(raw_pop2) if (raw_pop2 is not None and str(raw_pop2).strip() != "") else None
                 players_by_id[pid] = {
                     "id": pid,
                     "first_name": str(p.get("first_name", "")),
@@ -429,9 +448,9 @@ class SnapshotStore:
                     "probability_of_playing": float(p.get("probability_of_playing", 1.0)),
                     "turn_number": int(p.get("turn_number", 1)),
                     "last_match_pts": float(p.get("last_match_pts", 0.0)),
-                    "avg_fantasy_pts": float(p.get("avg_fantasy_pts", 0.0)),
-                    "total_plus_tenths": int(p.get("total_plus_tenths", 0)),
-                    "popularity": float(p.get("popularity", 0.0)),
+                    "avg_fantasy_pts": avg_pts2,
+                    "total_plus_tenths": plus_tenths2,
+                    "popularity": pop2,
                     "is_injured": int(p.get("is_injured", 0)),
                     "is_on_fire": int(p.get("is_on_fire", 0)),
                     "has_played": int(p.get("has_played", 0)),
@@ -441,9 +460,50 @@ class SnapshotStore:
         official_clubs = payload.get("official_clubs", [])
         club_count = len(official_clubs) if official_clubs else len(team_map)
 
+        missing_fields = list(payload.get("missing_fields", []))
+
         with self._connect() as conn:
+            # Fallback to historical_boxscores if avg_pts is None
+            for pid, pdata in players_by_id.items():
+                if pdata["avg_fantasy_pts"] is None:
+                    try:
+                        row = conn.execute(
+                            "SELECT AVG(fantasy_points) FROM historical_boxscores WHERE player_id = ?",
+                            (pid,),
+                        ).fetchone()
+                        if row and row[0] is not None:
+                            pdata["avg_fantasy_pts"] = round(float(row[0]), 2)
+                    except Exception:
+                        pass
+                if pdata["avg_fantasy_pts"] is None and "avg_fantasy_pts" not in missing_fields:
+                    missing_fields.append("avg_fantasy_pts")
+
+            missing_fields_json = json.dumps(sorted(set(missing_fields)))
             snap_cols = [c[1] for c in conn.execute("PRAGMA table_info(snapshots)").fetchall()]
-            if "club_count" in snap_cols and "season_code_source" in snap_cols:
+            if "missing_fields" in snap_cols:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO snapshots (
+                        created_at, league_id, competition_code, season_code,
+                        matchday_id, round_number, num_turns, raw_archive_path,
+                        club_count, season_code_source, missing_fields
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        timestamp,
+                        league_id,
+                        comp_code,
+                        season_code,
+                        matchday_id,
+                        round_number,
+                        num_turns,
+                        raw_archive_str,
+                        club_count,
+                        season_code_source,
+                        missing_fields_json,
+                    ),
+                )
+            elif "club_count" in snap_cols and "season_code_source" in snap_cols:
                 cursor = conn.execute(
                     """
                     INSERT INTO snapshots (
@@ -576,6 +636,7 @@ class SnapshotStore:
             fixture_count=len(fixtures_rows),
             club_count=club_count,
             season_code_source=season_code_source,
+            missing_fields=tuple(sorted(set(missing_fields))),
         )
 
     def load_game_rules(
@@ -656,6 +717,8 @@ class SnapshotStore:
             row_keys = row.keys() if hasattr(row, "keys") else []
             club_count = int(row["club_count"]) if "club_count" in row_keys else team_count
             season_code_source = str(row["season_code_source"]) if "season_code_source" in row_keys else "config"
+            mf_raw = row["missing_fields"] if "missing_fields" in row_keys else None
+            missing_fields = tuple(json.loads(mf_raw)) if mf_raw else ()
             return SnapshotSummary(
                 snapshot_id=sid,
                 created_at=str(row["created_at"]),
@@ -669,6 +732,7 @@ class SnapshotStore:
                 fixture_count=fixture_count,
                 club_count=club_count,
                 season_code_source=season_code_source,
+                missing_fields=missing_fields,
             )
 
     @staticmethod
@@ -705,10 +769,10 @@ class SnapshotStore:
                     status=str(r["status"]),
                     probability_of_playing=float(r["probability_of_playing"]),
                     turn_number=int(r["turn_number"]),
-                    avg_fantasy_pts=float(r["avg_fantasy_pts"]),
-                    last_match_pts=float(r["last_match_pts"]),
-                    total_plus_tenths=int(r["total_plus_tenths"]),
-                    popularity=float(r["popularity"]),
+                    avg_fantasy_pts=float(r["avg_fantasy_pts"]) if r["avg_fantasy_pts"] is not None else None,
+                    last_match_pts=float(r["last_match_pts"]) if r["last_match_pts"] is not None else 0.0,
+                    total_plus_tenths=int(r["total_plus_tenths"]) if r["total_plus_tenths"] is not None else None,
+                    popularity=float(r["popularity"]) if r["popularity"] is not None else None,
                     is_injured=bool(r["is_injured"]),
                     is_on_fire=bool(r["is_on_fire"]),
                     has_played=bool(r["has_played"]) if "has_played" in r.keys() else False,
@@ -834,6 +898,8 @@ class SnapshotStore:
             row_keys = row.keys() if hasattr(row, "keys") else []
             club_count = int(row["club_count"]) if "club_count" in row_keys else team_count
             season_code_source = str(row["season_code_source"]) if "season_code_source" in row_keys else "config"
+            mf_raw = row["missing_fields"] if "missing_fields" in row_keys else None
+            missing_fields = tuple(json.loads(mf_raw)) if mf_raw else ()
             return SnapshotSummary(
                 snapshot_id=sid,
                 created_at=str(row["created_at"]),
@@ -847,6 +913,7 @@ class SnapshotStore:
                 fixture_count=fixture_count,
                 club_count=club_count,
                 season_code_source=season_code_source,
+                missing_fields=missing_fields,
             )
 
     def get_snapshot_for_round(
@@ -889,6 +956,8 @@ class SnapshotStore:
             row_keys = row.keys() if hasattr(row, "keys") else []
             club_count = int(row["club_count"]) if "club_count" in row_keys else team_count
             season_code_source = str(row["season_code_source"]) if "season_code_source" in row_keys else "config"
+            mf_raw = row["missing_fields"] if "missing_fields" in row_keys else None
+            missing_fields = tuple(json.loads(mf_raw)) if mf_raw else ()
             return SnapshotSummary(
                 snapshot_id=sid,
                 created_at=str(row["created_at"]),
@@ -902,6 +971,7 @@ class SnapshotStore:
                 fixture_count=fixture_count,
                 club_count=club_count,
                 season_code_source=season_code_source,
+                missing_fields=missing_fields,
             )
 
     def list_snapshots(
@@ -954,10 +1024,10 @@ class SnapshotStore:
                     status=str(r["status"]),
                     probability_of_playing=float(r["probability_of_playing"]),
                     turn_number=int(r["turn_number"]),
-                    avg_fantasy_pts=float(r["avg_fantasy_pts"]),
-                    last_match_pts=float(r["last_match_pts"]),
-                    total_plus_tenths=int(r["total_plus_tenths"]),
-                    popularity=float(r["popularity"]),
+                    avg_fantasy_pts=float(r["avg_fantasy_pts"]) if r["avg_fantasy_pts"] is not None else None,
+                    last_match_pts=float(r["last_match_pts"]) if r["last_match_pts"] is not None else 0.0,
+                    total_plus_tenths=int(r["total_plus_tenths"]) if r["total_plus_tenths"] is not None else None,
+                    popularity=float(r["popularity"]) if r["popularity"] is not None else None,
                     is_injured=bool(r["is_injured"]),
                     is_on_fire=bool(r["is_on_fire"]),
                     has_played=bool(r["has_played"]) if "has_played" in r.keys() else False,

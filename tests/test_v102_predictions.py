@@ -175,3 +175,122 @@ def test_p3_2_model_routing_without_silent_substitution(tmp_path: Path):
     prov = res_200.json()["provenance"]
     assert prov["prediction_model"] == "price_prior_v1"
     assert prov["source"] == "live"
+
+
+import io
+import json
+from unittest.mock import MagicMock, patch
+from euroleague_fantasy_manager.api import fetch_current_data
+
+
+def test_p3_3_ingest_model_fields_and_preserve_null(tmp_path: Path):
+    db_file = tmp_path / "test_p3_3.db"
+    store = SnapshotStore(db_file)
+    cache_dir = tmp_path / "cache"
+
+    config_payload = {
+        "current_schedule_id": 1,
+        "current_matchday": {"id": 1, "number": 1, "num_rounds": 1},
+        "matchdays": [{"id": 1, "number": 1}],
+        "season_code": "E2026",
+    }
+    schedule_payload = {
+        "number": 1,
+        "rounds": [
+            {
+                "number": 1,
+                "matches": [
+                    {
+                        "id": 10,
+                        "started_at": "2026-10-01T20:00:00Z",
+                        "status": "scheduled",
+                        "home_team": {"id": 1, "abbreviation": "RMB"},
+                        "away_team": {"id": 2, "abbreviation": "OLY"},
+                    }
+                ],
+            }
+        ],
+    }
+    lineups_payload = {
+        "home_team": {
+            "id": 1,
+            "abbreviation": "RMB",
+            "lineups": [
+                {
+                    "id": 101,
+                    "first_name": "Facundo",
+                    "last_name": "Campazzo",
+                    "position": "Guard",
+                    "quotation": 15.0,
+                    "status": "starter",
+                }
+            ],
+        },
+        "away_team": {"id": 2, "abbreviation": "OLY", "lineups": []},
+    }
+    profile_payload = {
+        "data": {
+            "avg_fantasy_pts": 18.5,
+            "popularity": 22.4,
+            "total_plus": 3.2,
+        }
+    }
+
+    def fake_urlopen(req, timeout=15):
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        if "leagues/10/config" in url:
+            data = config_payload
+        elif "schedules/1/matchdays/1" in url:
+            data = schedule_payload
+        elif "matches/10/lineups" in url:
+            data = lineups_payload
+        elif "players/101/profile" in url:
+            data = profile_payload
+        elif "clubs" in url:
+            data = []
+        else:
+            data = {}
+        resp = MagicMock()
+        resp.read.return_value = json.dumps(data).encode("utf-8")
+        resp.__enter__.return_value = resp
+        return resp
+
+    # 1. Success path: non-null averages ingested and preserved in snapshot
+    with patch("euroleague_fantasy_manager.api.urlopen", side_effect=fake_urlopen):
+        payload_ok = fetch_current_data(league_id=10, competition_code="E", cache_dir=cache_dir)
+        summary_ok = store.save_snapshot(payload_ok)
+
+    players_ok = store.load_latest_players(league_id=10)
+    assert len(players_ok) == 1
+    p_ok = players_ok[0]
+    assert p_ok.avg_fantasy_pts == 18.5
+    assert p_ok.popularity == 22.4
+    assert p_ok.total_plus_tenths == 32
+    assert "avg_fantasy_pts" not in summary_ok.missing_fields
+
+    # 2. Failing profile call: leaves NULL in DB and records missing_fields on snapshot
+    db_file_fail = tmp_path / "test_p3_3_fail.db"
+    store_fail = SnapshotStore(db_file_fail)
+
+    def fake_urlopen_failing_profile(req, timeout=15):
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        if "players/101/profile" in url:
+            from urllib.error import HTTPError
+            raise HTTPError(url, 500, "Internal Server Error", {}, io.BytesIO(b"{}"))
+        return fake_urlopen(req, timeout)
+
+    cache_dir_fail = tmp_path / "cache_fail"
+    with patch("euroleague_fantasy_manager.api.urlopen", side_effect=fake_urlopen_failing_profile):
+        payload_fail = fetch_current_data(league_id=10, competition_code="E", cache_dir=cache_dir_fail)
+        summary_fail = store_fail.save_snapshot(payload_fail)
+
+    players_fail = store_fail.load_latest_players(league_id=10)
+    assert len(players_fail) == 1
+    p_fail = players_fail[0]
+    assert p_fail.avg_fantasy_pts is None
+    assert p_fail.popularity is None
+    assert p_fail.total_plus_tenths is None
+    assert "avg_fantasy_pts" in summary_fail.missing_fields
+
+    sum_query = store_fail.get_latest_summary(league_id=10)
+    assert "avg_fantasy_pts" in sum_query.missing_fields

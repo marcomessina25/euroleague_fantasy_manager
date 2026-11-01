@@ -153,7 +153,7 @@ def project_player_for_round(
 
     price_prior = player.credits * (1.02 if status_norm == "starter" else 0.78)
 
-    if player.avg_fantasy_pts > 0.0:
+    if player.avg_fantasy_pts is not None and player.avg_fantasy_pts > 0.0:
         base_pir = 0.55 * player.avg_fantasy_pts + 0.45 * price_prior
     elif player.last_match_pts > 0.0:
         base_pir = 0.35 * player.last_match_pts + 0.65 * price_prior

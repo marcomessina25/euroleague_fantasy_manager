@@ -97,10 +97,10 @@ class Player:
     status: str = "starter"
     probability_of_playing: float = 1.0
     turn_number: int = 1
-    avg_fantasy_pts: float = 0.0
+    avg_fantasy_pts: float | None = None
     last_match_pts: float = 0.0
-    total_plus_tenths: int = 0
-    popularity: float = 0.0
+    total_plus_tenths: int | None = None
+    popularity: float | None = None
     is_injured: bool = False
     is_on_fire: bool = False
     has_played: bool = False
