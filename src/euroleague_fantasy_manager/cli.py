@@ -19,6 +19,7 @@ from .evaluation import (
 )
 from .evaluation.baselines import canonical_model_name, predict_single_player_baseline
 from .fixtures import analyze_squad_fixtures, analyze_team_fixtures
+from . import paths
 from .import_squad import (
     DATABASE_PATH,
     DEFAULT_PLAYERS_PATH,
@@ -137,7 +138,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--db",
         type=Path,
-        default=DATABASE_PATH,
+        default=None,
         help="Path to local SQLite snapshot database (default: data/euroleague.sqlite3).",
     )
     parser.add_argument(
@@ -774,6 +775,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if getattr(args, 'db', None) is None:
+        args.db = paths.database_path()
     store = SnapshotStore(args.db)
 
     league_commands = {
@@ -812,7 +815,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             competition_code=ruleset.competition_code,
             season_code=getattr(args, "season_code", None),
         )
-        summary = store.save_snapshot(payload, raw_directory=RAW_ARCHIVE_DIRECTORY)
+        summary = store.save_snapshot(payload, raw_directory=paths.raw_archive_dir(args.db))
         from .multi_team.store import TeamStore
         from .services.team_service import TeamService
         synced, sync_failures = TeamService(TeamStore(store.database_path)).sync_all_teams_to_live_round(resolved_league)
@@ -2014,3 +2017,19 @@ def _format_multi_round_console(
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def __getattr__(name: str) -> Any:
+    if name == "RAW_ARCHIVE_DIRECTORY":
+        import warnings
+        warnings.warn("RAW_ARCHIVE_DIRECTORY is deprecated, use paths.raw_archive_dir()", DeprecationWarning, stacklevel=2)
+        return paths.raw_archive_dir()
+    if name == "PROJECT_ROOT":
+        import warnings
+        warnings.warn("PROJECT_ROOT is deprecated, use paths.elf_home()", DeprecationWarning, stacklevel=2)
+        return paths.elf_home()
+    if name == "DATABASE_PATH":
+        import warnings
+        warnings.warn("DATABASE_PATH is deprecated, use paths.database_path()", DeprecationWarning, stacklevel=2)
+        return paths.database_path()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

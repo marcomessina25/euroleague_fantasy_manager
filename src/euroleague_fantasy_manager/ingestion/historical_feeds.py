@@ -9,6 +9,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from ..evaluation.targets import reconstruct_coach_fantasy_points, reconstruct_player_fantasy_points
+from ..paths import database_path as default_database_path
 from ..rules import EUROLEAGUE_LEAGUE_ID
 
 
@@ -311,8 +312,8 @@ class HistoricalFeedsClient:
 class HistoricalStatsStore:
     """SQLite persistence store for historical game outcomes and box scores."""
 
-    def __init__(self, database_path: str | Path = "data/euroleague.sqlite3") -> None:
-        self.database_path = Path(database_path)
+    def __init__(self, database_path: str | Path | None = None) -> None:
+        self.database_path = Path(database_path) if database_path is not None else default_database_path()
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
 

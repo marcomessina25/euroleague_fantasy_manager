@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
-from ..fixtures import DATABASE_PATH, PROJECT_ROOT
+from .. import paths
 from ..prediction.calibration import fit_out_of_sample_calibrator
 from ..prediction.registry import get_model_registry
 from .baselines import PredictionRecord, canonical_model_name, predict_round_baselines
@@ -26,7 +26,7 @@ from .metrics import (
     evaluate_round_lineup_decisions,
 )
 
-DEFAULT_EVAL_REPORTS_DIR = PROJECT_ROOT / "reports" / "evaluation"
+_DEFAULT_REPORTS_DIR = object()
 
 
 def parse_rounds_spec(rounds_spec: str | None, available_rounds: Sequence[int]) -> list[int]:
@@ -62,11 +62,12 @@ def _ensure_dataset_present(store: EvaluationDatasetStore, target_season: str) -
 def inspect_historical_round(
     season: str | int = "2025",
     round_number: int = 8,
-    database_path: Path = DATABASE_PATH,
+    database_path: Path | None = None,
     ewma_alpha: float = 0.25,
 ) -> dict[str, Any]:
     """Inspect point-in-time inputs, baseline predictions, and actual outcomes for a historical round."""
-    store = EvaluationDatasetStore(database_path)
+    resolved_db = Path(database_path) if database_path is not None else paths.database_path()
+    store = EvaluationDatasetStore(resolved_db)
     norm_season = normalize_season_code(season)
     _ensure_dataset_present(store, norm_season)
 
@@ -74,7 +75,7 @@ def inspect_historical_round(
     features_by_pid = build_round_feature_table(
         season=norm_season,
         round_number=round_number,
-        database_path=database_path,
+        database_path=resolved_db,
         decision_cutoff=cutoff,
         ewma_alpha=ewma_alpha,
     )
@@ -377,13 +378,14 @@ def run_walk_forward_evaluation(
     rounds: str | None = "1:34",
     models: Sequence[str] = ("season_mean", "last5", "ewma", "xpdk_v02"),
     ewma_alpha: float = 0.25,
-    database_path: Path = DATABASE_PATH,
-    reports_dir: Path | None = DEFAULT_EVAL_REPORTS_DIR,
+    database_path: Path | None = None,
+    reports_dir: Path | None | object = _DEFAULT_REPORTS_DIR,
     dataset_version: str = DATASET_VERSION,
     calibration_method: str = "linear",
 ) -> dict[str, Any]:
     """Run chronological round-by-round walk-forward evaluation across `season`(s) and `rounds`."""
-    store = EvaluationDatasetStore(database_path)
+    resolved_db = Path(database_path) if database_path is not None else paths.database_path()
+    store = EvaluationDatasetStore(resolved_db)
 
     if isinstance(season, (list, tuple)):
         target_seasons = [normalize_season_code(s) for s in season]
@@ -648,10 +650,15 @@ def run_walk_forward_evaluation(
     price_coverage = store.get_price_coverage_by_season()
     all_preds_flat = [pr for m in canon_models for pr in records_by_model[m]]
     artifact_paths: dict[str, str] = {}
-    if reports_dir is not None:
+    resolved_reports_dir: Path | None = (
+        paths.eval_reports_dir()
+        if reports_dir is _DEFAULT_REPORTS_DIR
+        else (Path(reports_dir) if reports_dir is not None else None)
+    )
+    if resolved_reports_dir is not None:
         rep_season = target_seasons[0] if len(target_seasons) == 1 else "multi"
         artifact_paths = _write_evaluation_artifacts(
-            reports_dir=Path(reports_dir),
+            reports_dir=resolved_reports_dir,
             season=rep_season,
             model_summaries=model_summaries,
             decision_summaries=decision_summaries,
@@ -676,3 +683,19 @@ def run_walk_forward_evaluation(
         "artifacts": artifact_paths,
         "console_table": console_table,
     }
+
+
+def __getattr__(name: str) -> Any:
+    if name == "DEFAULT_EVAL_REPORTS_DIR":
+        import warnings
+        warnings.warn("DEFAULT_EVAL_REPORTS_DIR is deprecated, use paths.eval_reports_dir()", DeprecationWarning, stacklevel=2)
+        return paths.eval_reports_dir()
+    if name == "PROJECT_ROOT":
+        import warnings
+        warnings.warn("PROJECT_ROOT is deprecated, use paths.elf_home()", DeprecationWarning, stacklevel=2)
+        return paths.elf_home()
+    if name == "DATABASE_PATH":
+        import warnings
+        warnings.warn("DATABASE_PATH is deprecated, use paths.database_path()", DeprecationWarning, stacklevel=2)
+        return paths.database_path()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
