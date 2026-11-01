@@ -111,3 +111,12 @@ class Player:
     @property
     def credits(self) -> float:
         return round(self.price_tenths / 10.0, 1)
+class NoSnapshotForRoundError(RuntimeError):
+    """Raised when no snapshot exists for a requested round."""
+
+    def __init__(self, round_number: int, season: str, league: str | None = None) -> None:
+        self.round_number = round_number
+        self.season = season
+        self.league = league
+        super().__init__(f"No snapshot found for round {round_number} (season {season}, league {league}).")
+

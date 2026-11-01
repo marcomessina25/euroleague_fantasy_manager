@@ -35,7 +35,16 @@ def generate_squad_report(
     state = load_current_squad(squad_path)
     store = SnapshotStore(database_path)
     eff_league_id = league_id if league_id is not None else getattr(state, "league_id", None)
-    all_players = store.load_latest_players(league_id=eff_league_id)
+    active_round = round_number if round_number is not None else (state.round_number or get_current_round(store, league_id=eff_league_id))
+    snap = store.get_snapshot_for_round(
+        league_id=eff_league_id,
+        season_code=getattr(state, "season", None),
+        round_number=active_round,
+    ) if active_round is not None else None
+    if snap is not None:
+        all_players = store.load_players_for_snapshot(snap.snapshot_id)
+    else:
+        all_players = store.load_latest_players(league_id=eff_league_id)
     if not all_players:
         raise RuntimeError("No players found in snapshot database. Run `elf update` first.")
 
@@ -143,7 +152,7 @@ def generate_squad_report(
     validation = validate_squad(squad_models, ruleset=ruleset, budget_tenths=None)
     total_capital_gain_tenths = total_selling_tenths - total_purchase_tenths
     total_team_value_tenths = state.bank_tenths + total_selling_tenths
-    active_round = round_number if round_number is not None else (state.round_number or get_current_round(store))
+    # active_round resolved above
     next_windows = [w for w in sorted(ruleset.unlimited_trade_rounds) if w >= active_round]
 
     report: dict[str, Any] = {

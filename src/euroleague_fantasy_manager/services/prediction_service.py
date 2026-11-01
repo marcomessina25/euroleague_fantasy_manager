@@ -159,115 +159,132 @@ class PredictionService:
             pass
 
         if not contracts:
-            try:
-                from euroleague_fantasy_manager.storage import SnapshotStore
+            contracts = self._build_live_contracts(season=season, round_number=round_number, league=league)
 
-                ruleset = get_league_ruleset(league_enum)
-                league_id = ruleset.league_id
+        return contracts
+    def _build_live_contracts(
+        self,
+        season: str,
+        round_number: int,
+        league: str | None = None,
+    ) -> dict[int, PlayerProjectionContract]:
+        from euroleague_fantasy_manager.competition.ruleset import League
+        from euroleague_fantasy_manager.models import NoSnapshotForRoundError, Position
+        from euroleague_fantasy_manager.storage import SnapshotStore
 
-                store = SnapshotStore(self.database_path)
-                players = store.load_latest_players(league_id=league_id)
-                fixtures = store.load_latest_fixtures(league_id=league_id)
+        league_enum = League.from_str(league) if league else League.EUROLEAGUE
+        ruleset = get_league_ruleset(league_enum)
+        league_id = ruleset.league_id
 
-                team_fix: dict[str, tuple[str, bool, int, bool]] = {}
-                for f in fixtures:
-                    if f.get("round_number") == round_number:
-                        h_code = f.get("home_team_code", "")
-                        a_code = f.get("away_team_code", "")
-                        t_num = f.get("turn_number", 1)
-                        f_status = str(f.get("status") or "scheduled").lower()
-                        is_played = (f_status in ("played", "finished", "final"))
-                        if h_code:
-                            team_fix[h_code] = (a_code, True, t_num, is_played)
-                        if a_code:
-                            team_fix[a_code] = (h_code, False, t_num, is_played)
+        store = SnapshotStore(self.database_path)
+        snap = store.get_snapshot_for_round(
+            league_id=league_id,
+            season_code=season,
+            round_number=round_number,
+        )
+        if snap is None:
+            raise NoSnapshotForRoundError(round_number=round_number, season=season, league=league)
 
-                for p in players:
-                    has_fixture = p.team_code in team_fix if team_fix else True
-                    if not has_fixture:
-                        contracts[p.id] = PlayerProjectionContract(
-                            player_id=p.id,
-                            player_name=p.name,
-                            position=p.position,
-                            team_id=p.team_id,
-                            team_code=p.team_code,
-                            price_tenths=p.price_tenths,
-                            expected_fp=0.0,
-                            probability_play=0.0,
-                            expected_minutes=0.0,
-                            fp_per_minute=0.0,
-                            uncertainty=0.0,
-                            prediction_spread=0.0,
-                            turn_number=p.turn_number,
-                            opponent_code="BYE",
-                            is_home=True,
-                            actual_fp=None,
-                            has_played=False,
-                            is_bye=True,
-                            pre_round_status="bye",
-                        )
-                        continue
+        players = store.load_players_for_snapshot(snap.snapshot_id)
+        fixtures = store.load_fixtures_for_snapshot(snap.snapshot_id)
 
-                    opp, is_home, t_num, is_played_fix = team_fix.get(
-                        p.team_code, ("", True, p.turn_number, getattr(p, "has_played", False))
-                    )
-                    has_played = bool(getattr(p, "has_played", False) or is_played_fix)
-                    actual_fp = float(p.last_match_pts) if has_played else None
+        team_fix: dict[str, tuple[str, bool, int, bool]] = {}
+        for f in fixtures:
+            if f.get("round_number") == round_number:
+                h_code = f.get("home_team_code", "")
+                a_code = f.get("away_team_code", "")
+                t_num = f.get("turn_number", 1)
+                f_status = str(f.get("status") or "scheduled").lower()
+                is_played = (f_status in ("played", "finished", "final"))
+                if h_code:
+                    team_fix[h_code] = (a_code, True, t_num, is_played)
+                if a_code:
+                    team_fix[a_code] = (h_code, False, t_num, is_played)
 
-                    # Quantitative expectation based on V0.3 decomposed principles:
-                    # E[FP] = P(play) * E[min] * E[FP/min] * loc_mult (never equal to cost in credits)
-                    cr = p.credits
-                    pos_enum = p.position
-                    if pos_enum == Position.HEAD_COACH:
-                        base_hc = 11.0 if is_home else 8.5
-                        exp_fp = max(4.0, min(16.0, round(base_hc + (cr - 6.0) * 0.6, 2)))
-                        exp_min = 40.0
-                        fp_per_min = round(exp_fp / 40.0, 3)
-                    else:
-                        is_starter = (p.status.lower() in ("starter", "start") or cr >= 11.0)
-                        if is_starter:
-                            exp_min = min(30.0, max(18.0, 22.0 + (cr - 10.0) * 0.8))
-                        else:
-                            exp_min = min(22.0, max(6.0, 12.0 + (cr - 7.0) * 0.7))
+        contracts: dict[int, PlayerProjectionContract] = {}
+        is_exact_round = (snap.round_number == round_number)
 
-                        pos_code = pos_enum.short_code if hasattr(pos_enum, "short_code") else str(pos_enum)
-                        pos_base = 0.54 if "G" in pos_code else (0.56 if "F" in pos_code else 0.60)
-                        fp_per_min = max(0.32, min(0.85, pos_base + (cr - 10.5) * 0.028))
-                        loc_mult = 1.05 if is_home else 0.95
-                        p_play = p.probability_of_playing if not p.is_injured else 0.0
-                        raw_exp = exp_min * fp_per_min * loc_mult
-                        exp_fp = round(p_play * raw_exp, 2)
+        for p in players:
+            has_fixture = p.team_code in team_fix if team_fix else True
+            if not has_fixture:
+                contracts[p.id] = PlayerProjectionContract(
+                    player_id=p.id,
+                    player_name=p.name,
+                    position=p.position,
+                    team_id=p.team_id,
+                    team_code=p.team_code,
+                    price_tenths=p.price_tenths,
+                    expected_fp=0.0,
+                    probability_play=0.0,
+                    expected_minutes=0.0,
+                    fp_per_minute=0.0,
+                    uncertainty=0.0,
+                    prediction_spread=0.0,
+                    turn_number=p.turn_number,
+                    opponent_code="BYE",
+                    is_home=True,
+                    actual_fp=None,
+                    has_played=False,
+                    is_bye=True,
+                    pre_round_status="bye",
+                )
+                continue
 
-                        # If multi-game season average is available from completed rounds
-                        if p.avg_fantasy_pts > 0 and not has_played:
-                            exp_fp = round(0.6 * p.avg_fantasy_pts + 0.4 * exp_fp, 2)
+            opp, is_home, t_num, is_played_fix = team_fix.get(
+                p.team_code, ("", True, p.turn_number, False)
+            )
+            has_played = bool(getattr(p, "has_played", False) or is_played_fix) if is_exact_round else False
+            actual_fp = float(p.last_match_pts) if (has_played and is_exact_round) else None
 
-                    unc_val = round(max(3.0, exp_fp * 0.25), 2)
-                    spread_val = round(max(6.0, exp_fp * 0.50), 2)
+            cr = p.credits
+            pos_enum = p.position
+            if pos_enum == Position.HEAD_COACH:
+                base_hc = 11.0 if is_home else 8.5
+                exp_fp = max(4.0, min(16.0, round(base_hc + (cr - 6.0) * 0.6, 2)))
+                exp_min = 40.0
+                fp_per_min = round(exp_fp / 40.0, 3)
+            else:
+                is_starter = (p.status.lower() in ("starter", "start") or cr >= 11.0)
+                if is_starter:
+                    exp_min = min(30.0, max(18.0, 22.0 + (cr - 10.0) * 0.8))
+                else:
+                    exp_min = min(22.0, max(6.0, 12.0 + (cr - 7.0) * 0.7))
 
-                    contracts[p.id] = PlayerProjectionContract(
-                        player_id=p.id,
-                        player_name=p.name,
-                        position=p.position,
-                        team_id=p.team_id,
-                        team_code=p.team_code,
-                        price_tenths=p.price_tenths,
-                        expected_fp=exp_fp,
-                        probability_play=p.probability_of_playing,
-                        expected_minutes=round(exp_min, 1),
-                        fp_per_minute=round(fp_per_min, 3),
-                        uncertainty=unc_val,
-                        prediction_spread=spread_val,
-                        turn_number=t_num,
-                        opponent_code=opp,
-                        is_home=is_home,
-                        actual_fp=actual_fp,
-                        has_played=has_played,
-                        is_bye=False,
-                        pre_round_status=str(getattr(p, "status", "available")),
-                    )
-            except Exception:
-                pass
+                pos_code = pos_enum.short_code if hasattr(pos_enum, "short_code") else str(pos_enum)
+                pos_base = 0.54 if "G" in pos_code else (0.56 if "F" in pos_code else 0.60)
+                fp_per_min = max(0.32, min(0.85, pos_base + (cr - 10.5) * 0.028))
+                loc_mult = 1.05 if is_home else 0.95
+                p_play = p.probability_of_playing if not p.is_injured else 0.0
+                raw_exp = exp_min * fp_per_min * loc_mult
+                exp_fp = round(p_play * raw_exp, 2)
+
+                if p.avg_fantasy_pts > 0 and not has_played:
+                    exp_fp = round(0.6 * p.avg_fantasy_pts + 0.4 * exp_fp, 2)
+
+            unc_val = round(max(3.0, exp_fp * 0.25), 2)
+            spread_val = round(max(6.0, exp_fp * 0.50), 2)
+
+            contracts[p.id] = PlayerProjectionContract(
+                player_id=p.id,
+                player_name=p.name,
+                position=p.position,
+                team_id=p.team_id,
+                team_code=p.team_code,
+                price_tenths=p.price_tenths,
+                expected_fp=exp_fp,
+                probability_play=p.probability_of_playing,
+                expected_minutes=round(exp_min, 1),
+                fp_per_minute=round(fp_per_min, 3),
+                uncertainty=unc_val,
+                prediction_spread=spread_val,
+                turn_number=t_num,
+                opponent_code=opp,
+                is_home=is_home,
+                actual_fp=actual_fp,
+                has_played=has_played,
+                is_bye=False,
+                pre_round_status=str(getattr(p, "status", "available")),
+            )
 
         return contracts
 

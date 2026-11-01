@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from euroleague_fantasy_manager.competition.ruleset import League
+from euroleague_fantasy_manager.models import NoSnapshotForRoundError, UnknownPlayerError
 from euroleague_fantasy_manager.multi_team.store import ConcurrentModificationError
 from euroleague_fantasy_manager.multi_team.models import AuditIntent, ReplayConflictError, TeamRosterUnit
 from euroleague_fantasy_manager.optimization.constraints import (
@@ -228,7 +229,7 @@ def create_team(
         return team.to_dict()
     except HTTPException:
         raise
-    except ValueError as e:
+    except (ValueError, UnknownPlayerError, NoSnapshotForRoundError) as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Required transfer decision audit log failed: {e}")
@@ -368,7 +369,10 @@ def execute_transfers(
         target_round = req.round_number if req.round_number is not None else team.round_number
 
         # Resolve projection contracts for market
-        proj_dict = prediction_service.get_projections_dict(req.season, target_round, league=team.league or "euroleague")
+        try:
+            proj_dict = prediction_service.get_projections_dict(req.season, target_round, league=team.league or "euroleague")
+        except (NoSnapshotForRoundError, Exception):
+            proj_dict = {}
 
         service.execute_transfers(
             team_id=team_id,

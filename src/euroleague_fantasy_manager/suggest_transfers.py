@@ -93,7 +93,15 @@ def suggest_trades(
     max_legal_trades = len(state.player_ids) if unlimited_active else min(ruleset.max_trades_per_round, state.free_trades)
     k = max(1, min(int(num_trades), max_legal_trades))
 
-    all_players = store.load_latest_players(league_id=eff_league_id)
+    snap = store.get_snapshot_for_round(
+        league_id=eff_league_id,
+        season_code=getattr(state, "season", None),
+        round_number=target_round,
+    ) if target_round is not None else None
+    if snap is not None:
+        all_players = store.load_players_for_snapshot(snap.snapshot_id)
+    else:
+        all_players = store.load_latest_players(league_id=eff_league_id)
     players_by_id = {p.id: p for p in all_players}
     projections = project_all_players(database_path=database_path, round_number=target_round, league_id=eff_league_id)
 

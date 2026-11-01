@@ -114,7 +114,10 @@ class OptimizationService:
         """Compute optimal legal intra-round bench-to-court substitutions."""
         team = self.team_service.get_team(team_id)
         rnd = round_number or team.round_number
-        proj_dict = self.prediction_service.get_projections_dict(season, rnd, league=_team_league(team))
+        try:
+            proj_dict = self.prediction_service.get_projections_dict(season, rnd, league=_team_league(team))
+        except Exception:
+            proj_dict = {}
 
         units: list[IntraRoundPlayerUnit] = []
         for u in team.squad:
@@ -482,7 +485,10 @@ class OptimizationService:
         league: str | None = None,
     ) -> list[PlayerProjectionContract]:
         """Convert TeamRosterUnits into valid PlayerProjectionContracts."""
-        projections_dict = self.prediction_service.get_projections_dict(season, round_number, league=league)
+        try:
+            projections_dict = self.prediction_service.get_projections_dict(season, round_number, league=league)
+        except Exception:
+            projections_dict = {}
         contracts: list[PlayerProjectionContract] = []
         has_market_data = bool(projections_dict)
 

@@ -198,10 +198,16 @@ def project_all_players(
     if round_number is None:
         round_number = get_current_round(store, league_id=league_id)
 
-    players = store.load_latest_players(league_id=league_id)
-    teams_map = store.load_latest_teams(league_id=league_id)
+    snap = store.get_snapshot_for_round(league_id=league_id, round_number=round_number)
+    if snap is not None:
+        players = store.load_players_for_snapshot(snap.snapshot_id)
+        teams_map = store.load_teams_for_snapshot(snap.snapshot_id)
+        fixtures = store.load_fixtures_for_snapshot(snap.snapshot_id, round_numbers=[round_number])
+    else:
+        players = store.load_latest_players(league_id=league_id)
+        teams_map = store.load_latest_teams(league_id=league_id)
+        fixtures = store.load_latest_fixtures(round_numbers=[round_number], league_id=league_id)
     strengths = compute_team_strengths(players, teams_map)
-    fixtures = store.load_latest_fixtures(round_numbers=[round_number], league_id=league_id)
 
     team_fixture_map: dict[int, dict[str, object]] = {}
     for fix in fixtures:

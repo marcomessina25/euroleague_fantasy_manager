@@ -849,6 +849,61 @@ class SnapshotStore:
                 season_code_source=season_code_source,
             )
 
+    def get_snapshot_for_round(
+        self,
+        league_id: int,
+        season_code: str | None,
+        round_number: int,
+        decision_cutoff: str | None = None,
+    ) -> SnapshotSummary | None:
+        """Fetch the point-in-time historical snapshot for a round (round_number <= R).
+
+        Returns the newest snapshot with round_number <= R for league_id and season_code.
+        Where decision_cutoff is provided, also requires created_at <= decision_cutoff.
+        Returns None if no matching snapshot exists (never falls back to latest).
+        """
+        query = "SELECT * FROM snapshots WHERE league_id = ? AND round_number <= ?"
+        params: list[Any] = [int(league_id), int(round_number)]
+        if season_code is not None:
+            query += " AND season_code = ?"
+            params.append(season_code)
+        if decision_cutoff is not None:
+            query += " AND created_at <= ?"
+            params.append(decision_cutoff)
+        query += " ORDER BY round_number DESC, created_at DESC, id DESC LIMIT 1"
+
+        with self._connect() as conn:
+            row = conn.execute(query, tuple(params)).fetchone()
+            if not row:
+                return None
+            sid = int(row["id"])
+            team_count = int(conn.execute("SELECT COUNT(*) FROM teams WHERE snapshot_id = ?", (sid,)).fetchone()[0])
+            fixture_count = int(conn.execute("SELECT COUNT(*) FROM fixtures WHERE snapshot_id = ?", (sid,)).fetchone()[0])
+            coach_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM players WHERE snapshot_id = ? AND position = ?",
+                    (sid, int(Position.HEAD_COACH)),
+                ).fetchone()[0]
+            )
+            total_units = int(conn.execute("SELECT COUNT(*) FROM players WHERE snapshot_id = ?", (sid,)).fetchone()[0])
+            row_keys = row.keys() if hasattr(row, "keys") else []
+            club_count = int(row["club_count"]) if "club_count" in row_keys else team_count
+            season_code_source = str(row["season_code_source"]) if "season_code_source" in row_keys else "config"
+            return SnapshotSummary(
+                snapshot_id=sid,
+                created_at=str(row["created_at"]),
+                league_id=int(row["league_id"]),
+                season_code=str(row["season_code"]),
+                round_number=int(row["round_number"]),
+                num_turns=int(row["num_turns"]),
+                team_count=team_count,
+                player_count=total_units - coach_count,
+                coach_count=coach_count,
+                fixture_count=fixture_count,
+                club_count=club_count,
+                season_code_source=season_code_source,
+            )
+
     def list_snapshots(
         self,
         league_id: int | None = None,
