@@ -729,3 +729,266 @@ def test_p2_3_transfers_migration_and_doctor_report(tmp_path: Path) -> None:
     import json
     data = json.loads(proc.stdout)
     assert data["unresolved_count"] == 1
+
+
+def test_p2_4_replay_conflict_raises_error_and_preserves_bank(tmp_path: Path) -> None:
+    """STATE-4: Replay conflicts raise ReplayConflictError (API 409), avoiding silent skips and bank drift."""
+    from euroleague_fantasy_manager.multi_team.models import ReplayConflictError
+    from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
+    from euroleague_fantasy_manager.models import Position
+
+    db_file = tmp_path / "conflict_test.sqlite3"
+    team_store = TeamStore(db_path=db_file)
+    team_service = TeamService(store=team_store)
+
+    squad = _make_legal_squad(offset=100)
+    # squad[0] has player_id=101 (Guard, OLY)
+    team = team_service.create_team(
+        team_id="team_conflict",
+        name="Conflict Team",
+        league="euroleague",
+        round_number=1,
+        bank_tenths=200,
+        squad=squad,
+    )
+
+    # Move to round 2
+    team_store.save_round_checkpoint(
+        team_id="team_conflict",
+        round_number=2,
+        season="2026/27",
+        bank_tenths=200,
+        transfers_remaining=4,
+        squad=squad,
+    )
+    team.round_number = 2
+    team_store.update_team(team)
+
+    # Round 2 trade: sell player 101, buy player 555
+    market_r2 = {
+        555: PlayerProjectionContract(
+            player_id=555, player_name="G555", position=Position.GUARD,
+            team_id=1, team_code="OLY", price_tenths=80, turn_number=1, is_home=True, expected_fp=15.0,
+        ),
+    }
+    team_service.execute_transfers(
+        team_id="team_conflict",
+        transfers_out_ids=[101],
+        transfers_in_ids=[555],
+        round_number=2,
+        season="2026/27",
+        market_projections=market_r2,
+    )
+
+    # Move to live round 3
+    team = team_service.get_team("team_conflict")
+    squad_r2 = team_store.get_squad("team_conflict", 2)
+    team_store.save_round_checkpoint(
+        team_id="team_conflict",
+        round_number=3,
+        season="2026/27",
+        bank_tenths=team.bank_tenths,
+        transfers_remaining=4,
+        squad=squad_r2,
+    )
+    team.round_number = 3
+    team.squad = squad_r2
+    team_store.update_team(team)
+
+    # Now edit round 1: sell player 101 for recruit 999!
+    # Because player 101 is already sold at round 1, round 2's recorded trade selling 101 is conflicting!
+    market_r1 = {
+        999: PlayerProjectionContract(
+            player_id=999, player_name="G999", position=Position.GUARD,
+            team_id=1, team_code="OLY", price_tenths=80, turn_number=1, is_home=True, expected_fp=15.0,
+        ),
+    }
+
+    # 1. Without discard_conflicting -> ReplayConflictError
+    with pytest.raises(ReplayConflictError) as exc_info:
+        team_service.execute_transfers(
+            team_id="team_conflict",
+            transfers_out_ids=[101],
+            transfers_in_ids=[999],
+            round_number=1,
+            season="2026/27",
+            market_projections=market_r1,
+            discard_conflicting=False,
+        )
+    assert exc_info.value.round_number == 2
+    assert "not in squad to sell" in exc_info.value.reason
+
+    # Test via Web API returns 409
+    app = create_app(db_path=str(db_file))
+    from euroleague_fantasy_manager.web.deps import get_prediction_service
+    from euroleague_fantasy_manager.services.prediction_service import PredictionService
+    mock_ps = PredictionService(database_path=db_file)
+    mock_ps.get_projections_dict = lambda s, r, **kw: market_r1
+    app.dependency_overrides[get_prediction_service] = lambda: mock_ps
+
+    client = TestClient(app)
+    res_conflict = client.post(
+        f"/api/teams/{team.team_id}/transfers",
+        json={
+            "transfers_out_ids": [101],
+            "transfers_in_ids": [999],
+            "round_number": 1,
+            "season": "2026/27",
+            "discard_conflicting": False,
+        },
+    )
+    assert res_conflict.status_code == 409
+    data = res_conflict.json()["detail"]
+    assert data["round_number"] == 2
+    assert "not in squad to sell" in data["reason"]
+
+    # 2. With discard_conflicting=True -> conflicting trade is deleted and operation succeeds
+    res_resolve = client.post(
+        f"/api/teams/{team.team_id}/transfers",
+        json={
+            "transfers_out_ids": [101],
+            "transfers_in_ids": [999],
+            "round_number": 1,
+            "season": "2026/27",
+            "discard_conflicting": True,
+        },
+    )
+    assert res_resolve.status_code == 200
+    updated_pids = {u["player_id"] for u in res_resolve.json()["squad"]}
+    assert 999 in updated_pids
+    assert 101 not in updated_pids
+    # Round 2 trade was discarded
+    assert len(team_store.get_transfers("team_conflict", "2026/27", round_number=2)) == 0
+
+
+def test_p2_4_adjust_bank_atomic_with_checkpoint_and_audit(tmp_path: Path) -> None:
+    """STATE-6: adjust_bank updates team row and live round checkpoint together and records an audit event."""
+    from euroleague_fantasy_manager.multi_team.models import AuditIntent
+
+    db_file = tmp_path / "bank_adjust_test.sqlite3"
+    team_store = TeamStore(db_path=db_file)
+    team_service = TeamService(store=team_store)
+    dec_store = DecisionStore(database_path=db_file)
+    logger = DecisionLogger(store=dec_store)
+
+    squad = _make_legal_squad(offset=100)
+    team = team_service.create_team(
+        team_id="team_adj",
+        name="Adjust Team",
+        league="euroleague",
+        round_number=2,
+        bank_tenths=150,
+        squad=squad,
+    )
+    team_store.save_round_checkpoint(
+        team_id="team_adj",
+        round_number=2,
+        season="2026/27",
+        bank_tenths=150,
+        transfers_remaining=4,
+        squad=squad,
+    )
+
+    # 1. Adjust bank by +50 tenths
+    res_team = team_service.adjust_bank(
+        team_id="team_adj",
+        delta_tenths=50,
+        reason="Bonus credits",
+        audit=AuditIntent(decision_logger=logger, notes="Bonus credits"),
+    )
+    assert res_team.bank_tenths == 200
+
+    # Verify checkpoint is updated
+    chk = team_store.get_round_checkpoint("team_adj", 2, "2026/27")
+    assert chk["bank_tenths"] == 200
+
+    # Verify audit event is logged
+    decisions = dec_store.list_decisions()
+    assert len(decisions) >= 1
+    assert "Bonus credits" in decisions[-1].notes
+
+    # 2. Test via Web API PATCH /api/teams/{id}
+    app = create_app(db_path=str(db_file))
+    client = TestClient(app)
+    res_patch = client.patch(
+        f"/api/teams/{team.team_id}",
+        json={"bank_tenths": 260},
+    )
+    assert res_patch.status_code == 200
+    assert res_patch.json()["bank_tenths"] == 260
+
+    chk2 = team_store.get_round_checkpoint("team_adj", 2, "2026/27")
+    assert chk2["bank_tenths"] == 260
+
+
+def test_p2_4_bank_invariant_over_multiround_sequence(tmp_path: Path) -> None:
+    """STATE-4 & STATE-6: Verify bank invariant and squad validity over a multi-round sequence."""
+    from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
+    from euroleague_fantasy_manager.models import Position
+
+    db_file = tmp_path / "bank_inv_test.sqlite3"
+    team_store = TeamStore(db_path=db_file)
+    team_service = TeamService(store=team_store)
+
+    squad = _make_legal_squad(offset=100)
+    team = team_service.create_team(
+        team_id="team_inv",
+        name="Invariant Team",
+        league="euroleague",
+        round_number=1,
+        bank_tenths=200,
+        squad=squad,
+    )
+
+    # Execute trades across rounds 1, 2, 3
+    # Round 1: sell 101 (80), buy 901 (60) -> net delta +20
+    m_r1 = {
+        901: PlayerProjectionContract(
+            player_id=901, player_name="G901", position=Position.GUARD,
+            team_id=1, team_code="OLY", price_tenths=60, turn_number=1, is_home=True, expected_fp=12.0,
+        )
+    }
+    team_service.execute_transfers(
+        team_id="team_inv", transfers_out_ids=[101], transfers_in_ids=[901],
+        round_number=1, season="2026/27", market_projections=m_r1,
+    )
+
+    # Roll forward to round 2
+    team = team_service.get_team("team_inv")
+    team_store.save_round_checkpoint(
+        team_id="team_inv", round_number=2, season="2026/27",
+        bank_tenths=team.bank_tenths, transfers_remaining=4, squad=team.squad,
+    )
+    team.round_number = 2
+    team_store.update_team(team)
+
+    # Round 2: sell 102 (80), buy 902 (90) -> net delta -10
+    m_r2 = {
+        902: PlayerProjectionContract(
+            player_id=902, player_name="G902", position=Position.GUARD,
+            team_id=1, team_code="OLY", price_tenths=90, turn_number=1, is_home=True, expected_fp=14.0,
+        )
+    }
+    team_service.execute_transfers(
+        team_id="team_inv", transfers_out_ids=[102], transfers_in_ids=[902],
+        round_number=2, season="2026/27", market_projections=m_r2,
+    )
+
+    # Verify Bank Invariant:
+    # chk(1).bank == 200
+    # trades(1) net = 80 - 60 = +20 -> chk(2).bank == 220
+    # trades(2) net = 80 - 90 = -10 -> live bank == 210
+    chk1 = team_store.get_round_checkpoint("team_inv", 1, "2026/27")
+    chk2 = team_store.get_round_checkpoint("team_inv", 2, "2026/27")
+    team_now = team_service.get_team("team_inv")
+
+    tx1 = team_store.get_transfers("team_inv", "2026/27", round_number=1)
+    net_tx1 = sum(t["price_out_tenths"] - t["price_in_tenths"] for t in tx1)
+    assert chk2["bank_tenths"] == chk1["bank_tenths"] + net_tx1
+
+    tx2 = team_store.get_transfers("team_inv", "2026/27", round_number=2)
+    net_tx2 = sum(t["price_out_tenths"] - t["price_in_tenths"] for t in tx2)
+    assert team_now.bank_tenths == chk2["bank_tenths"] + net_tx2
+
+    # Roster validity
+    team_service._validate_roster(team_now.squad, league="euroleague")

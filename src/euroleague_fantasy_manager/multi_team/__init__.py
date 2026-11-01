@@ -8,6 +8,7 @@ from euroleague_fantasy_manager.multi_team.migrations import (
 )
 from euroleague_fantasy_manager.multi_team.models import (
     AuditIntent,
+    ReplayConflictError,
     Team,
     TeamRosterUnit,
     TeamSettings,
@@ -24,6 +25,7 @@ __all__ = [
     "MAX_TEAMS",
     "ConcurrentModificationError",
     "MigrationReport",
+    "ReplayConflictError",
     "Team",
     "TeamRosterUnit",
     "TeamSettings",

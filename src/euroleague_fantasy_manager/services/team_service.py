@@ -225,6 +225,7 @@ class TeamService:
         roster_units: Sequence[TeamRosterUnit],
         validate: bool = True,
         advance_team_round: bool = True,
+        conn: sqlite3.Connection | None = None,
     ) -> Team:
         """Persist a team's 11-player squad for a round.
 
@@ -232,11 +233,11 @@ class TeamService:
         live round pointer, which is what backfilling a past round requires
         (V0.7 W5).
         """
-        team = self.get_team(team_id)
+        team = self.get_team(team_id, conn=conn)
         if validate and roster_units:
             self._validate_roster(roster_units, league=getattr(team, "league", "euroleague"))
 
-        self.store.save_squad(team_id, round_number, roster_units)
+        self.store.save_squad(team_id, round_number, roster_units, conn=conn)
         if roster_units and advance_team_round:
             # A backfill (advance_team_round=False) must not fabricate a "round-start"
             # checkpoint from today's live bank/transfers state; the round may legitimately
@@ -250,11 +251,12 @@ class TeamService:
                 transfers_remaining=team.transfers_remaining,
                 squad=roster_units,
                 overwrite=False,
+                conn=conn,
             )
         if advance_team_round:
             team.round_number = round_number
             team.squad = list(roster_units)
-            return self.store.update_team(team)
+            return self.store.update_team(team, conn=conn)
         return team
 
     def update_team_squad(
@@ -379,6 +381,72 @@ class TeamService:
             rounds.append(team.round_number)
         return sorted(rounds)
 
+
+    def adjust_bank(
+        self,
+        team_id: str,
+        delta_tenths: int,
+        reason: str = "Manual bank adjustment",
+        conn: sqlite3.Connection | None = None,
+        audit: AuditIntent | None = None,
+    ) -> Team:
+        """Adjust bank for a team's live round, updating both team row and live round checkpoint atomically."""
+        with self.store.transaction(conn) as c:
+            team = self.get_team(team_id, conn=c)
+            new_bank = team.bank_tenths + delta_tenths
+            if new_bank < 0:
+                raise ValueError(f"Bank cannot be negative (current: {team.bank_tenths}, delta: {delta_tenths})")
+            team.bank_tenths = new_bank
+            self.store.update_team(team, conn=c)
+            try:
+                chk = self.store.get_round_checkpoint(team_id, team.round_number, team.season, conn=c)
+                new_chk_bank = chk["bank_tenths"] + delta_tenths
+                self.store.save_round_checkpoint(
+                    team_id=team_id,
+                    round_number=team.round_number,
+                    season=team.season,
+                    bank_tenths=new_chk_bank,
+                    transfers_remaining=chk["transfers_remaining"],
+                    squad=chk["squad"],
+                    overwrite=True,
+                    conn=c,
+                )
+            except ValueError:
+                pass
+
+            audit_logger = (
+                getattr(audit, "decision_logger", None)
+                or getattr(audit, "decision_service", None)
+                or getattr(self, "decision_service", None)
+            )
+            if audit_logger is not None:
+                from euroleague_fantasy_manager.tracking.models import (
+                    DecisionProvenance,
+                    DecisionRecord,
+                    DecisionType,
+                )
+                from datetime import datetime, timezone
+                now_str = datetime.now(timezone.utc).isoformat()
+                d_type = getattr(DecisionType, "TRANSFERS", DecisionType.TRANSFERS)
+                prov = getattr(audit, "provenance", None) or DecisionProvenance()
+                dec_store = getattr(audit_logger, "store", audit_logger)
+                dec_store.log_decision(
+                    DecisionRecord(
+                        decision_id=f"bank_adj_{team_id}_{now_str}",
+                        team_id=team_id,
+                        season=team.season,
+                        round_number=team.round_number,
+                        turn_number=team.turn_number,
+                        decision_type=d_type,
+                        created_at=now_str,
+                        provenance=prov,
+                        notes=f"Adjusted bank by {delta_tenths} tenths: {reason}",
+                        league=getattr(team, "league", "euroleague"),
+                    ),
+                    conn=c,
+                )
+            return self.get_team(team_id, conn=c)
+
     def import_from_config(
         self,
         team_id: str,
@@ -452,9 +520,29 @@ class TeamService:
                 squad=units,
             )
         else:
-            team = self.set_squad(team_id, round_number, units, validate=False)
-            team.bank_tenths = bank
-            team = self.store.update_team(team)
+            with self.store.transaction() as c:
+                advance = round_number >= existing.round_number
+                team = self.set_squad(
+                    team_id,
+                    round_number,
+                    units,
+                    validate=False,
+                    advance_team_round=advance,
+                    conn=c,
+                )
+                team.bank_tenths = bank
+                self.store.save_round_checkpoint(
+                    team_id=team_id,
+                    round_number=round_number,
+                    season=season,
+                    bank_tenths=bank,
+                    transfers_remaining=existing.transfers_remaining,
+                    squad=units,
+                    overwrite=True,
+                    conn=c,
+                )
+                if advance:
+                    team = self.store.update_team(team, conn=c)
 
         return team
 
@@ -608,9 +696,17 @@ class TeamService:
             player_availabilities=player_availabilities,
         )
 
-    def replay_transfers_forward(self, team_id: str, from_round: int, season: str, conn: sqlite3.Connection | None = None) -> None:
+    def replay_transfers_forward(
+        self,
+        team_id: str,
+        from_round: int,
+        season: str,
+        discard_conflicting: bool = False,
+        conn: sqlite3.Connection | None = None,
+        audit: AuditIntent | None = None,
+    ) -> None:
         """Propagate squad and bank changes forward from a past round edit up to live round (§3.2)."""
-        team = self.get_team(team_id)
+        team = self.get_team(team_id, conn=conn)
         live_round = team.round_number
         if from_round >= live_round:
             return
@@ -636,31 +732,77 @@ class TeamService:
             r_transfers = self.store.get_transfers(team_id, season, round_number=r, conn=conn)
             cur_squad = list(incoming_squad)
             cur_bank = incoming_bank
+            applied_trades_count = 0
             for t in r_transfers:
                 out_id = t["player_out_id"]
                 in_id = t["player_in_id"]
                 out_unit = next((u for u in cur_squad if u.player_id == out_id), None)
-                if out_unit:
-                    in_pos = t.get("player_in_position") or out_unit.position
-                    in_tc = t.get("player_in_team_code") or out_unit.team_code
-                    new_unit = TeamRosterUnit(
-                        player_id=in_id,
-                        position=in_pos,
-                        name=t.get("player_in_name") or f"Player {in_id}",
-                        team_code=in_tc,
-                        purchase_price_tenths=t.get("price_in_tenths", 0),
-                        current_price_tenths=t.get("price_in_tenths", 0),
-                        is_starter=out_unit.is_starter,
-                        is_captain=out_unit.is_captain,
-                        is_sixth_man=out_unit.is_sixth_man,
-                        is_bench=out_unit.is_bench,
-                        is_coach=(in_pos == "HC" or out_unit.is_coach),
-                        turn_number=out_unit.turn_number,
-                    )
-                    cur_squad = [u if u.player_id != out_id else new_unit for u in cur_squad]
-                    cur_bank += t["price_out_tenths"] - t["price_in_tenths"]
+                if not out_unit:
+                    if not discard_conflicting:
+                        from euroleague_fantasy_manager.multi_team.models import ReplayConflictError
+                        raise ReplayConflictError(
+                            round_number=r,
+                            transfer_id=t.get("id"),
+                            reason=f"Player {out_id} ({t.get('player_out_name', '')}) is not in squad to sell.",
+                            conflicting_transfers=[t],
+                        )
+                    else:
+                        if t.get("id"):
+                            self.store.delete_transfers_by_ids([t["id"]], conn=conn)
+                        audit_logger = (
+                            getattr(audit, "decision_logger", None)
+                            or getattr(audit, "decision_service", None)
+                            or getattr(self, "decision_service", None)
+                        )
+                        if audit_logger is not None:
+                            from euroleague_fantasy_manager.tracking.models import (
+                                DecisionProvenance,
+                                DecisionRecord,
+                                DecisionType,
+                            )
+                            from datetime import datetime, timezone
+                            now_str = datetime.now(timezone.utc).isoformat()
+                            d_type = getattr(DecisionType, "TRANSFERS", DecisionType.TRANSFERS)
+                            prov = getattr(audit, "provenance", None) or DecisionProvenance()
+                            dec_store = getattr(audit_logger, "store", audit_logger)
+                            dec_store.log_decision(
+                                DecisionRecord(
+                                    decision_id=f"discard_trade_{t.get('id')}_{now_str}",
+                                    team_id=team_id,
+                                    season=season,
+                                    round_number=r,
+                                    turn_number=1,
+                                    decision_type=d_type,
+                                    created_at=now_str,
+                                    provenance=prov,
+                                    notes=f"Discarded conflicting trade {t.get('id')} in round {r}: player {out_id} not in squad",
+                                    league=getattr(team, "league", "euroleague"),
+                                ),
+                                conn=conn,
+                            )
+                        continue
 
-            cur_rem_trades = max(0, MAX_TRADES_PER_ROUND - len(r_transfers))
+                in_pos = t.get("player_in_position") or out_unit.position
+                in_tc = t.get("player_in_team_code") or out_unit.team_code
+                new_unit = TeamRosterUnit(
+                    player_id=in_id,
+                    position=in_pos,
+                    name=t.get("player_in_name") or f"Player {in_id}",
+                    team_code=in_tc,
+                    purchase_price_tenths=t.get("price_in_tenths", 0),
+                    current_price_tenths=t.get("price_in_tenths", 0),
+                    is_starter=out_unit.is_starter,
+                    is_captain=out_unit.is_captain,
+                    is_sixth_man=out_unit.is_sixth_man,
+                    is_bench=out_unit.is_bench,
+                    is_coach=(in_pos == "HC" or out_unit.is_coach),
+                    turn_number=out_unit.turn_number,
+                )
+                cur_squad = [u if u.player_id != out_id else new_unit for u in cur_squad]
+                cur_bank += t["price_out_tenths"] - t["price_in_tenths"]
+                applied_trades_count += 1
+
+            cur_rem_trades = max(0, MAX_TRADES_PER_ROUND - applied_trades_count)
             self.store.save_squad(team_id, r, cur_squad, conn=conn)
 
             if r == live_round:
@@ -677,6 +819,7 @@ class TeamService:
         round_number: int | None = None,
         season: str = "2026/27",
         unlimited: bool = False,
+        discard_conflicting: bool = False,
         market_projections: Mapping[int, Any] | None = None,
         lineup_optimizer: Any | None = None,
         audit: AuditIntent | None = None,
@@ -834,7 +977,7 @@ class TeamService:
                 team.squad = assigned_units
                 self.store.update_team(team, conn=c)
             else:
-                self.replay_transfers_forward(team_id, from_round=target_round, season=season, conn=c)
+                self.replay_transfers_forward(team_id, from_round=target_round, season=season, discard_conflicting=discard_conflicting, conn=c, audit=audit)
 
             # Atomic audit log write
             if audit is not None:

@@ -277,7 +277,7 @@ class DecisionStore:
                     record.season,
                     record.round_number,
                     record.turn_number,
-                    record.decision_type.value,
+                    record.decision_type.value if hasattr(record.decision_type, 'value') else str(record.decision_type),
                     record.created_at,
                     record.state_snapshot_id,
                     json.dumps(record.provenance.to_dict()),

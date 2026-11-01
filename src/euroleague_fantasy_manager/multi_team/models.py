@@ -17,6 +17,23 @@ class AuditIntent:
     decision_logger: Any = None
     provenance: Any = None
 
+class ReplayConflictError(RuntimeError):
+    """Raised when replaying trades forward encounters a conflicting trade (e.g. out-player absent)."""
+
+    def __init__(
+        self,
+        round_number: int,
+        transfer_id: int | None,
+        reason: str,
+        conflicting_transfers: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self.round_number = round_number
+        self.transfer_id = transfer_id
+        self.reason = reason
+        self.conflicting_transfers = conflicting_transfers or []
+        super().__init__(f"Replay conflict in round {round_number} (trade {transfer_id}): {reason}")
+
+
 
 @dataclass
 class TeamSettings:

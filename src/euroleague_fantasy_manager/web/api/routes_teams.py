@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from euroleague_fantasy_manager.competition.ruleset import League
 from euroleague_fantasy_manager.multi_team.store import ConcurrentModificationError
-from euroleague_fantasy_manager.multi_team.models import AuditIntent, TeamRosterUnit
+from euroleague_fantasy_manager.multi_team.models import AuditIntent, ReplayConflictError, TeamRosterUnit
 from euroleague_fantasy_manager.optimization.constraints import (
     PlayerProjectionContract,
     validate_squad_constraints,
@@ -230,14 +230,31 @@ def get_team(team_id: str, service: TeamService = Depends(get_team_service)) -> 
 
 @router.put("/{team_id}")
 @router.patch("/{team_id}")
-def update_team(team_id: str, req: UpdateTeamRequest, service: TeamService = Depends(get_team_service)) -> dict[str, Any]:
+def update_team(
+    team_id: str,
+    req: UpdateTeamRequest,
+    service: TeamService = Depends(get_team_service),
+    decision_service: DecisionService = Depends(get_decision_service),
+) -> dict[str, Any]:
     try:
+        existing = service.get_team(team_id)
+        if req.bank_tenths is not None and req.bank_tenths != existing.bank_tenths:
+            delta = req.bank_tenths - existing.bank_tenths
+            service.adjust_bank(
+                team_id=team_id,
+                delta_tenths=delta,
+                reason="Web API manual bank adjustment",
+                audit=AuditIntent(decision_service=decision_service, notes="Web API manual bank adjustment"),
+            )
+            # Fetch refreshed team
+            existing = service.get_team(team_id)
+
         team = service.update_team(
             team_id=team_id,
             name=req.name,
             round_number=req.round_number,
             turn_number=req.turn_number,
-            bank_tenths=req.bank_tenths,
+            bank_tenths=existing.bank_tenths,
             transfers_remaining=req.transfers_remaining,
             settings=req.settings,
             updated_at=req.updated_at,
@@ -307,12 +324,8 @@ class ExecuteTransfersRequest(BaseModel):
     transfers_in_ids: list[int]
     unlimited: bool = False
     season: str = "2026/27"
-    # Entering trades for a PAST round is deliberately not supported yet: it
-    # requires per-round financial state to propagate into every later round,
-    # which is the point-in-time reconstruction built in V0.7 W6. Accepting the
-    # field and rejecting it is clearer than silently applying the trades to the
-    # live round. See docs/specs/v07.md.
     round_number: int | None = None
+    discard_conflicting: bool = False
 
 
 @router.post("/{team_id}/transfers")
@@ -339,6 +352,7 @@ def execute_transfers(
             round_number=target_round,
             season=req.season,
             unlimited=req.unlimited,
+            discard_conflicting=req.discard_conflicting,
             market_projections=proj_dict,
             lineup_optimizer=optimization_service.lineup_optimizer,
             audit=AuditIntent(
@@ -350,6 +364,17 @@ def execute_transfers(
         return service.get_team(team_id).to_dict()
     except HTTPException:
         raise
+    except ReplayConflictError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": str(e),
+                "round_number": e.round_number,
+                "transfer_id": e.transfer_id,
+                "reason": e.reason,
+                "conflicting_transfers": e.conflicting_transfers,
+            },
+        )
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
@@ -404,6 +429,17 @@ def revert_round_start(
             "message": f"Successfully reverted team to Round {restored_team.round_number} start baseline.",
             "team": restored_team.to_dict(),
         }
+    except ReplayConflictError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": str(e),
+                "round_number": e.round_number,
+                "transfer_id": e.transfer_id,
+                "reason": e.reason,
+                "conflicting_transfers": e.conflicting_transfers,
+            },
+        )
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
