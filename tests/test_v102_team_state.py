@@ -15,6 +15,7 @@ from euroleague_fantasy_manager.multi_team.models import (
     TeamRosterUnit,
     TeamSettings,
 )
+from euroleague_fantasy_manager.services.team_service import TeamService
 from euroleague_fantasy_manager.multi_team.store import (
     ConcurrentModificationError,
     MAX_TEAMS,
@@ -266,3 +267,178 @@ def test_p2_1_web_api_concurrent_modification_returns_409(tmp_path: Path) -> Non
     )
     assert res_up2.status_code == 409
     assert "modified concurrently" in res_up2.json()["detail"]
+
+
+def _make_legal_squad(offset: int = 1000) -> list[TeamRosterUnit]:
+    # 4 Guards, 4 Forwards, 2 Centers, 1 Head Coach, <= 6 per club
+    positions = [
+        ("G", "OLY"), ("G", "OLY"), ("G", "PAO"), ("G", "PAO"),
+        ("F", "RMB"), ("F", "RMB"), ("F", "BAR"), ("F", "BAR"),
+        ("C", "EFS"), ("C", "EFS"),
+        ("HC", "OLY"),
+    ]
+    units = []
+    for i, (pos, club) in enumerate(positions, start=1):
+        pid = offset + i
+        units.append(
+            TeamRosterUnit(
+                player_id=pid,
+                position=pos,
+                name=f"{club} Player {pid}",
+                team_code=club,
+                purchase_price_tenths=80,
+                current_price_tenths=80,
+                is_starter=(i <= 5),
+                is_coach=(pos == "HC"),
+            )
+        )
+    return units
+
+
+def test_p2_2_buying_player_already_in_squad_fails_cleanly(tmp_path: Path) -> None:
+    """Pre-trade validation: buying a player already in the remaining squad raises ValueError with zero writes."""
+    db_file = tmp_path / "buy_existing_test.sqlite3"
+    team_store = TeamStore(db_path=db_file)
+    team_service = TeamService(store=team_store)
+
+    squad = _make_legal_squad(offset=100)
+    team = team_service.create_team(
+        team_id="team_preval",
+        name="Pre-trade Validation Team",
+        league="euroleague",
+        round_number=1,
+        bank_tenths=200,
+        squad=squad,
+    )
+    assert team.transfers_remaining == 4
+
+    # Player 101 sold, but attempting to buy player 102 (who is already in the squad as a Guard!)
+    from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
+    from euroleague_fantasy_manager.models import Position
+    mock_market = {
+        102: PlayerProjectionContract(
+            player_id=102,
+            player_name="Player 102",
+            position=Position.GUARD,
+            team_id=1,
+            team_code="OLY",
+            price_tenths=80,
+            turn_number=1,
+            is_home=True,
+            expected_fp=15.0,
+        )
+    }
+
+    with pytest.raises(ValueError, match="already in squad"):
+        team_service.execute_transfers(
+            team_id="team_preval",
+            transfers_out_ids=[101],
+            transfers_in_ids=[102],
+            round_number=1,
+            market_projections=mock_market,
+        )
+
+    # Invariants: zero transfers written, transfers_remaining unchanged, squad unchanged
+    assert len(team_store.get_transfers("team_preval", "2026/27")) == 0
+    refreshed_team = team_service.get_team("team_preval")
+    assert refreshed_team.transfers_remaining == 4
+    current_pids = [u.player_id for u in refreshed_team.squad]
+    assert 101 in current_pids
+    assert len(current_pids) == 11
+
+
+def test_p2_2_audit_failure_causes_full_rollback_and_preserves_round_pointer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Audit failure inside execute_transfers rolls back all tables and leaves live round pointer unchanged."""
+    from euroleague_fantasy_manager.multi_team.models import AuditIntent
+    from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
+    from euroleague_fantasy_manager.models import Position
+
+    db_file = tmp_path / "audit_rb_test.sqlite3"
+    team_store = TeamStore(db_path=db_file)
+    team_service = TeamService(store=team_store)
+    dec_store = DecisionStore(database_path=db_file)
+    logger = DecisionLogger(store=dec_store)
+
+    squad_r1 = _make_legal_squad(offset=100)
+    # Team is at live round 3, having played round 1 and 2
+    team_service.create_team(
+        team_id="team_r3",
+        name="Round 3 Team",
+        league="euroleague",
+        round_number=3,
+        bank_tenths=150,
+        squad=squad_r1,
+    )
+    # Checkpoint and squad for round 1
+    team_store.save_round_checkpoint(
+        team_id="team_r3",
+        round_number=1,
+        season="2026/27",
+        bank_tenths=150,
+        transfers_remaining=4,
+        squad=squad_r1,
+    )
+    team_store.save_squad("team_r3", 1, squad_r1)
+    # Checkpoint and squad for round 2
+    team_store.save_round_checkpoint(
+        team_id="team_r3",
+        round_number=2,
+        season="2026/27",
+        bank_tenths=150,
+        transfers_remaining=4,
+        squad=squad_r1,
+    )
+    team_store.save_squad("team_r3", 2, squad_r1)
+
+    tables = [
+        "managed_teams",
+        "managed_team_squads",
+        "team_round_checkpoints",
+        "team_transfers",
+        "decision_logs",
+    ]
+    baseline_snapshots = {table: _table_snapshot(db_file, table) for table in tables}
+
+    # Simulate an exploding audit logger
+    def _exploding_audit(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("Crash during audit record persistence")
+
+    monkeypatch.setattr(logger, "log_transfer_decision", _exploding_audit)
+
+    mock_market = {
+        999: PlayerProjectionContract(
+            player_id=999,
+            player_name="Recruit 999",
+            position=Position.GUARD,
+            team_id=1,
+            team_code="OLY",
+            price_tenths=80,
+            turn_number=1,
+            is_home=True,
+            expected_fp=18.0,
+        )
+    }
+
+    # Attempt past-round trade at round 1 (team is at round 3)
+    with pytest.raises(RuntimeError, match="Crash during audit record persistence"):
+        team_service.execute_transfers(
+            team_id="team_r3",
+            transfers_out_ids=[101],
+            transfers_in_ids=[999],
+            round_number=1,
+            season="2026/27",
+            market_projections=mock_market,
+            audit=AuditIntent(
+                decision_logger=logger,
+                notes="Past round trade",
+            ),
+        )
+
+    # Invariants: live round pointer is STILL 3 (unaffected by past round edit attempt)
+    refreshed_team = team_service.get_team("team_r3")
+    assert refreshed_team.round_number == 3
+    assert refreshed_team.bank_tenths == 150
+
+    # Byte/row identical snapshots across all tables
+    for table in tables:
+        assert _table_snapshot(db_file, table) == baseline_snapshots[table], f"Table {table} changed on rollback!"

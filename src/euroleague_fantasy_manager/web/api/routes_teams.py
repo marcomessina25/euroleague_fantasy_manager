@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from euroleague_fantasy_manager.competition.ruleset import League
 from euroleague_fantasy_manager.multi_team.store import ConcurrentModificationError
-from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit
+from euroleague_fantasy_manager.multi_team.models import AuditIntent, TeamRosterUnit
 from euroleague_fantasy_manager.optimization.constraints import (
     PlayerProjectionContract,
     validate_squad_constraints,
@@ -216,7 +216,7 @@ def create_team(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Required transfer decision audit log failed: {e}")
 
 
 @router.get("/{team_id}")
@@ -332,13 +332,7 @@ def execute_transfers(
         # Resolve projection contracts for market
         proj_dict = prediction_service.get_projections_dict(req.season, target_round, league=team.league or "euroleague")
 
-        # Snapshot state before transfers for audit rollback
-        prev_team = service.get_team(team_id)
-        prev_bank_tenths = prev_team.bank_tenths
-        prev_transfers_remaining = prev_team.transfers_remaining
-        prev_squad = list(service.store.get_squad(team_id, target_round))
-
-        res = service.execute_transfers(
+        service.execute_transfers(
             team_id=team_id,
             transfers_out_ids=req.transfers_out_ids,
             transfers_in_ids=req.transfers_in_ids,
@@ -347,43 +341,11 @@ def execute_transfers(
             unlimited=req.unlimited,
             market_projections=proj_dict,
             lineup_optimizer=optimization_service.lineup_optimizer,
+            audit=AuditIntent(
+                decision_service=decision_service,
+                notes=f"Executed {len(req.transfers_out_ids)} trade(s)" if not req.unlimited else "Executed Unlimited Overhaul",
+            ),
         )
-
-        # Log decision audit
-        try:
-            from euroleague_fantasy_manager.tracking.models import TransferPayload
-            payload = TransferPayload(
-                out_player_ids=tuple(res["out_ids"]),
-                in_player_ids=tuple(res["in_ids"]),
-                num_trades=len(res["in_ids"]),
-                net_transfer_value=0.0,
-                bank_tenths_before=res["base_bank_tenths"],
-                bank_tenths_after=res["new_bank_tenths"],
-            )
-            decision_service.log_transfers(
-                team_id=team_id,
-                season=req.season,
-                round_number=target_round,
-                recommended_transfers=payload,
-                actual_transfers=payload,
-                notes=f"Executed {len(res['out_ids'])} trade(s)" if not req.unlimited else "Executed Unlimited Overhaul",
-            )
-        except Exception as e:
-            # Transactional rollback: revert squad and state if decision log fails
-            if target_round == prev_team.round_number:
-                service.update_team(
-                    team_id=team_id,
-                    bank_tenths=prev_bank_tenths,
-                    transfers_remaining=prev_transfers_remaining,
-                )
-            service.set_squad(team_id, target_round, prev_squad, validate=False)
-            service.store.delete_transfers_by_ids(res["new_transfer_ids"])
-            if target_round < prev_team.round_number:
-                service.replay_transfers_forward(team_id, from_round=target_round, season=req.season)
-            raise HTTPException(
-                status_code=500,
-                detail=f"Required transfer decision audit log failed: {e}",
-            )
 
         return service.get_team(team_id).to_dict()
     except HTTPException:
@@ -393,7 +355,7 @@ def execute_transfers(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Required transfer decision audit log failed: {e}")
 
 
 class RevertRoundStartRequest(BaseModel):
@@ -447,5 +409,5 @@ def revert_round_start(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Required transfer decision audit log failed: {e}")
 

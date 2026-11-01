@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sqlite3
 from typing import Any, Sequence
 
 from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
@@ -65,6 +66,7 @@ class DecisionService:
         snapshot: StateSnapshot | None = None,
         notes: str = "",
         league: str = "euroleague",
+        conn: sqlite3.Connection | None = None,
     ) -> DecisionRecord:
         """Log a trade decision."""
         return self.logger.log_transfer_decision(
@@ -77,6 +79,7 @@ class DecisionService:
             snapshot=snapshot,
             notes=notes,
             league=league,
+            conn=conn,
         )
 
     def log_turn_sub(

@@ -8,6 +8,16 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 
 
+@dataclass(frozen=True, slots=True)
+class AuditIntent:
+    """Specification of an audit record to write atomically with team state operations."""
+
+    notes: str = ""
+    decision_service: Any = None
+    decision_logger: Any = None
+    provenance: Any = None
+
+
 @dataclass
 class TeamSettings:
     """Team-scoped managerial and optimization preferences."""
