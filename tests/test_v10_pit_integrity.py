@@ -11,20 +11,16 @@ from __future__ import annotations
 import copy
 from pathlib import Path
 import pytest
-import sqlite3
 
 from euroleague_fantasy_manager.evaluation.dataset import (
     EvaluationDatasetStore,
     build_historical_dataset,
-    normalize_season_code,
 )
 from euroleague_fantasy_manager.evaluation.features import (
-    PointInTimeFeatureRow,
     build_features,
 )
 from euroleague_fantasy_manager.evaluation.reproducibility import (
     FEATURE_SCHEMA_VERSION,
-    PredictionRunRecord,
     build_prediction_run_record,
     compute_dataset_hash,
     compute_feature_schema_hash,

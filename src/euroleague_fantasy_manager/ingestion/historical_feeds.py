@@ -1,16 +1,14 @@
 """Official IncrowdSports v2 historical games and box-score ingestion client and store."""
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 import json
 from pathlib import Path
 import sqlite3
 from typing import Any, Sequence
-from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from ..evaluation.targets import reconstruct_coach_fantasy_points, reconstruct_player_fantasy_points
 from ..paths import database_path as default_database_path
-from ..rules import EUROLEAGUE_LEAGUE_ID
 
 
 EUROLEAGUE_FEEDS_BASE_URL = "https://feeds.incrowdsports.com/provider/euroleague-feeds/v2"
@@ -641,7 +639,6 @@ class HistoricalStatsStore:
 
         n = len(boxscores)
         starter_count = sum(1 for b in boxscores if b.is_starter)
-        total_seconds = sum(b.seconds_played for b in boxscores)
         total_minutes = sum(b.minutes for b in boxscores)
         total_pts = sum(b.points for b in boxscores)
         total_reb = sum(b.rebounds for b in boxscores)

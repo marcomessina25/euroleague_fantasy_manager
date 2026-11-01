@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from euroleague_fantasy_manager.competition.ruleset import League
 from euroleague_fantasy_manager.models import Position
-from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit
-from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
 from euroleague_fantasy_manager.optimization.ownership_strategy import (
     classify_ownership_archetype,
     compute_player_ownership_profile,
@@ -32,12 +30,10 @@ PLAYER_SORT_KEYS = {
 from euroleague_fantasy_manager.services.decision_service import DecisionService
 from euroleague_fantasy_manager.services.evaluation_service import EvaluationService
 from euroleague_fantasy_manager.services.optimization_service import (
-    LineupDecisionView,
     OptimizationService,
 )
 from euroleague_fantasy_manager.services.prediction_service import PredictionService
 from euroleague_fantasy_manager.services.scenario_service import (
-    ScenarioResult,
     ScenarioService,
 )
 from euroleague_fantasy_manager.services.team_service import TeamService

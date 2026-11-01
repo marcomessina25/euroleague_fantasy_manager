@@ -8,7 +8,6 @@ from euroleague_fantasy_manager.cli import main as cli_main
 from euroleague_fantasy_manager.expected_points import (
     PlayerProjection,
     expected_coach_pdk,
-    project_all_players,
 )
 from euroleague_fantasy_manager.fixtures import (
     analyze_squad_fixtures,

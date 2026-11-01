@@ -1,6 +1,5 @@
 """SQLite persistence layer for V0.45 DecisionRecord, StateSnapshot, DecisionOutcome, and DecisionEvent."""
 
-from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sqlite3

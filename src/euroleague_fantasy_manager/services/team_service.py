@@ -5,13 +5,12 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from euroleague_fantasy_manager.competition.ruleset import League
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.optimization.constraints import (
     PlayerProjectionContract,
-    validate_squad_constraints,
 )
 from euroleague_fantasy_manager.rules import (
     MAX_TRADES_PER_ROUND,
@@ -26,7 +25,6 @@ from euroleague_fantasy_manager.multi_team.models import (
     TeamSettings,
 )
 from euroleague_fantasy_manager.multi_team.store import (
-    MAX_TEAMS,
     TeamStore,
 )
 

@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any, Sequence
 
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.rules import (
-    COURT_STARTERS_SIZE,
     MAX_TRADES_PER_ROUND,
-    SQUAD_QUOTAS,
-    SQUAD_SIZE,
 )
 from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit
 from euroleague_fantasy_manager.optimization.constraints import (
@@ -29,7 +26,6 @@ from euroleague_fantasy_manager.optimization.intra_round import (
 )
 from euroleague_fantasy_manager.optimization.lineup import (
     FixedSquadLineupOptimizer,
-    OptimalLineupDecision,
     brute_force_exhaustive_lineup,
 )
 from euroleague_fantasy_manager.optimization.multi_round import (

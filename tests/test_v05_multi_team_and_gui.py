@@ -11,10 +11,8 @@ from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.multi_team.models import (
     Team,
     TeamRosterUnit,
-    TeamSettings,
 )
 from euroleague_fantasy_manager.multi_team.store import (
-    MAX_TEAMS,
     TeamStore,
 )
 from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
@@ -27,8 +25,6 @@ from euroleague_fantasy_manager.services.team_service import TeamService
 from euroleague_fantasy_manager.tracking.models import (
     DecisionType,
     LineupPayload,
-    TransferPayload,
-    TurnSubPayload,
 )
 from euroleague_fantasy_manager.tracking.store import DecisionStore
 from euroleague_fantasy_manager.web.app import create_app
@@ -140,7 +136,7 @@ def test_multi_team_strict_isolation(tmp_path: Path):
     squad_a = _build_team_roster_units(contracts)
 
     team_a = store.create_team(Team(team_id="team_a", name="Team A", bank_tenths=100, squad=squad_a))
-    team_b = store.create_team(Team(team_id="team_b", name="Team B", bank_tenths=500, squad=[]))
+    _team_b = store.create_team(Team(team_id="team_b", name="Team B", bank_tenths=500, squad=[]))
 
     # Verify initial isolation
     fetched_a = store.get_team("team_a")
@@ -308,7 +304,7 @@ def test_scenario_service_immutability(tmp_path: Path):
 
     contracts = _build_test_squad_contracts()
     units = _build_team_roster_units(contracts)
-    team = ts.create_team(team_id="scen_team", name="Scenario Team", squad=units, bank_tenths=100)
+    _team = ts.create_team(team_id="scen_team", name="Scenario Team", squad=units, bank_tenths=100)
 
     # Run what-if scenario: rule out the top scorer (contracts[9])
     ruled_out_id = contracts[9].player_id
@@ -583,7 +579,7 @@ def test_snapshot_store_fallback_and_update_endpoint(tmp_path: Path):
     from euroleague_fantasy_manager.storage import SnapshotStore, SnapshotSummary
 
     db_file = tmp_path / "fallback_test.sqlite3"
-    store = SnapshotStore(db_file)
+    _store = SnapshotStore(db_file)
 
     # Initialize a mock snapshot with players in the SQLite database
     with sqlite3.connect(db_file) as conn:
@@ -728,7 +724,7 @@ def test_workstation_player_details_rename_transfers_and_multiround(tmp_path: Pa
     db_file = tmp_path / "trade_studio_test.sqlite3"
     ts = TeamService(db_path=db_file)
     ps = PredictionService(database_path=db_file)
-    opt = OptimizationService(ts, ps)
+    _opt = OptimizationService(ts, ps)
 
     contracts = _build_test_squad_contracts()
     cheap_contracts = [
@@ -1104,10 +1100,7 @@ def test_live_scores_vs_expected_scores_never_equal_cost(tmp_path: Path):
 
     and expected score is calculated via decomposed model rather than equating to cost."""
     import sqlite3
-    from euroleague_fantasy_manager.storage import SnapshotStore
     from euroleague_fantasy_manager.services.prediction_service import PredictionService
-    from euroleague_fantasy_manager.web.app import create_app
-    from starlette.testclient import TestClient
 
     db_file = tmp_path / "live_scores.sqlite3"
     with sqlite3.connect(db_file) as conn:
@@ -1673,7 +1666,6 @@ def test_v051_prediction_calibration_vs_v050(tmp_path: Path):
     """Compare V0.5.0 and V0.5.1 prediction accuracy on historical / hermetic dataset."""
     import sqlite3
     from euroleague_fantasy_manager.evaluation.backtest_v051_predictions import run_v051_prediction_backtest
-    from euroleague_fantasy_manager.fixtures import DATABASE_PATH
 
     # 1. Hermetic dataset verification
     hermetic_db = tmp_path / "hermetic_eval.sqlite3"
@@ -1713,9 +1705,13 @@ def test_v051_prediction_calibration_vs_v050(tmp_path: Path):
 
 @pytest.mark.realdata
 def test_realdata_v051_prediction_backtest() -> None:
-    if not DATABASE_PATH.exists():
+    from euroleague_fantasy_manager import paths
+    from euroleague_fantasy_manager.evaluation.backtest_v051_predictions import run_v051_prediction_backtest
+
+    db_path = paths.database_path()
+    if not db_path.exists():
         pytest.skip("Real data database not present")
-    real_res = run_v051_prediction_backtest(database_path=DATABASE_PATH)
+    real_res = run_v051_prediction_backtest(database_path=db_path)
     assert real_res.total_samples > 0
     assert real_res.passed_regression_gate
     assert real_res.v051_mae <= real_res.v050_mae + 0.05

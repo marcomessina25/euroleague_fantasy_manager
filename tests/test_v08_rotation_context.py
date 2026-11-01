@@ -1,9 +1,7 @@
 """Unit tests for V0.8 basketball rotation, minutes volatility, and context models (W2)."""
 
-import pytest
 
 from euroleague_fantasy_manager.evaluation.baselines import (
-    canonical_model_name,
     predict_single_player_baseline,
 )
 from euroleague_fantasy_manager.evaluation.features import PointInTimeFeatureRow

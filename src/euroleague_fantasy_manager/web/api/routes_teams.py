@@ -9,11 +9,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from euroleague_fantasy_manager.competition.ruleset import League
-from euroleague_fantasy_manager.models import Position
-from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit, TeamSettings
-from euroleague_fantasy_manager.rules import MAX_TRADES_PER_ROUND
+from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit
 from euroleague_fantasy_manager.optimization.constraints import (
-    OptimizationConstraints,
     PlayerProjectionContract,
     validate_squad_constraints,
 )

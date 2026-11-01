@@ -29,9 +29,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from itertools import combinations
-from typing import Any, Mapping, Sequence
+from typing import Any, Sequence
 
-from euroleague_fantasy_manager.models import Position
 
 
 def _normalize_pos(pos: Any) -> str:
@@ -162,7 +161,6 @@ class IntraRoundSubstitutionOptimizer:
 
         # Available court candidates for Starters, Sixth Man, and remaining Bench slots
         allocatable_court_units = [u for u in court_units if u.player_id not in locked_bench_ids]
-        allocatable_ids = {u.player_id for u in allocatable_court_units}
 
         # We need to select 5 Starters from allocatable_court_units
         best_score = baseline_fp

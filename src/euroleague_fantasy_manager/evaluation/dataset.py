@@ -7,7 +7,7 @@ box scores across seasons (E2022..E2025, U2022..U2025) without network access. G
 EuroLeague/EuroCup box-score ingestion is scheduled for V0.8.
 """
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
 import sqlite3

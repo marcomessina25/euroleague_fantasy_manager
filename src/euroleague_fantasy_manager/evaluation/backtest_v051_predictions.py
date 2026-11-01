@@ -23,7 +23,6 @@ import sqlite3
 from typing import Sequence
 
 from ..fixtures import DATABASE_PATH
-from ..models import Position
 from .metrics import spearman_correlation
 
 
@@ -88,7 +87,7 @@ class PredictionBacktestResult:
         lines.extend([
             "",
             "## Regression Gate Verification",
-            f"- **Requirement:** MAE(V0.5.1) <= MAE(V0.5.0) + 0.05",
+            "- **Requirement:** MAE(V0.5.1) <= MAE(V0.5.0) + 0.05",
             f"- **Realized:** {self.v051_mae:.3f} <= {self.v050_mae + 0.05:.3f} -> **{gate_status}**",
         ])
         return "\n".join(lines)

@@ -20,8 +20,7 @@ import subprocess
 import pytest
 from starlette.testclient import TestClient
 
-from euroleague_fantasy_manager.cli import build_parser, main
-from euroleague_fantasy_manager.competition.ruleset import League
+from euroleague_fantasy_manager.cli import main
 from euroleague_fantasy_manager.evaluation.dataset import build_historical_dataset
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit
@@ -110,7 +109,7 @@ def test_read_only_safety_guarantee(tmp_path: Path) -> None:
     # Create reference team
     store = TeamStore(db_path)
     ts = TeamService(store=store)
-    team = ts.create_team(
+    _team = ts.create_team(
         team_id="ro_team",
         name="Readonly Squad",
         league="euroleague",
@@ -305,7 +304,7 @@ def test_frontend_static_and_endpoint_smoke(tmp_path: Path) -> None:
         for idx, p in enumerate(raw_squad)
     ]
 
-    t = ts.create_team(
+    _t = ts.create_team(
         team_id="web_team",
         name="Web Test Team",
         league="euroleague",

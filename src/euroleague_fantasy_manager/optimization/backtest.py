@@ -11,9 +11,8 @@ and outcome updates belong strictly to V0.45.
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
-from ..models import Position
 from .constraints import OptimizationConstraints, PlayerProjectionContract
-from .lineup import FixedSquadLineupOptimizer, OptimalLineupDecision
+from .lineup import FixedSquadLineupOptimizer
 from .objective import RiskMode
 
 

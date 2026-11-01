@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-import pytest
 
 from euroleague_fantasy_manager.evaluation.dataset import build_historical_dataset
 from euroleague_fantasy_manager.evaluation.error_attribution import (
     BenchmarkModelEntry,
     MultiModelBenchmarkLedger,
-    ThreeWayErrorDecomposition,
     decompose_round_error,
     run_multi_model_benchmark,
 )

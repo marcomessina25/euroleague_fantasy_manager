@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from euroleague_fantasy_manager.competition.eurocup import (
     ALL_EUROCUP_TEAMS,
@@ -17,9 +16,6 @@ from euroleague_fantasy_manager.competition.eurocup import (
     list_eurocup_clubs,
 )
 from euroleague_fantasy_manager.competition.ruleset import (
-    CompetitionRuleset,
-    EuroCupRuleset,
-    EuroLeagueRuleset,
     League,
     get_league_ruleset,
 )

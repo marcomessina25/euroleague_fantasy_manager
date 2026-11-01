@@ -4,21 +4,18 @@ from __future__ import annotations
 
 from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from euroleague_fantasy_manager.intelligence.copilot import (
-    CopilotAdviceResult,
     generate_copilot_advice,
     resolve_tier,
 )
 from euroleague_fantasy_manager.intelligence.dossier import (
-    ManagerDossier,
     generate_manager_dossier,
 )
 from euroleague_fantasy_manager.intelligence.providers import list_available_providers
 from euroleague_fantasy_manager.intelligence.security import redact_secrets
 from euroleague_fantasy_manager.intelligence.strategic_analysis import (
-    StrategicAnalysisResult,
     analyze_dossier,
 )
 from euroleague_fantasy_manager.services.optimization_service import OptimizationService

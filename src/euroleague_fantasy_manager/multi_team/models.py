@@ -5,8 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-import json
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 
 @dataclass

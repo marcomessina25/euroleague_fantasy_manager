@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Sequence
 
 from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
 from euroleague_fantasy_manager.tracking.logger import DecisionLogger
 from euroleague_fantasy_manager.tracking.models import (
     DecisionProvenance,
     DecisionRecord,
-    DecisionType,
     LineupPayload,
     StateSnapshot,
     TransferPayload,

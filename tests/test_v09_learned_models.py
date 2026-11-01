@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import pytest
 import numpy as np
 
 from euroleague_fantasy_manager.evaluation.baselines import (
@@ -18,14 +17,8 @@ from euroleague_fantasy_manager.prediction.learned_models import (
     LEARNED_FEATURE_NAMES,
     LearnedAvailabilityModel,
     LearnedMinutesModel,
-    LearnedModelPipeline,
-    clear_learned_pipeline_cache,
-    extract_historical_training_data,
     extract_learned_features,
     get_default_learned_pipeline,
-    get_synthetic_test_learned_pipeline,
-    set_default_learned_pipeline,
-    train_learned_pipeline_from_history,
 )
 from euroleague_fantasy_manager.prediction.minutes import predict_expected_minutes_if_play
 from euroleague_fantasy_manager.prediction.registry import get_model_registry

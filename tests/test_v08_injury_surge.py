@@ -4,13 +4,9 @@ import pytest
 
 from euroleague_fantasy_manager.evaluation.features import PointInTimeFeatureRow
 from euroleague_fantasy_manager.prediction.fantasy_points import (
-    DecomposedProjection,
     predict_round_decomposed,
 )
 from euroleague_fantasy_manager.prediction.injury_surge import (
-    InjuryVacancy,
-    SurgeAdjustment,
-    apply_surges_to_projections,
     compute_round_injury_surges,
     identify_team_vacancies,
     redistribute_team_vacancies,

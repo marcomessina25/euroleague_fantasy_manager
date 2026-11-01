@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
 
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.optimization.constraints import (
-    OptimizationConstraints,
     PlayerProjectionContract,
 )
 from euroleague_fantasy_manager.optimization.trade_policy import (

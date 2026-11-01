@@ -18,7 +18,7 @@ Implements game theory for competitive fantasy leagues:
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Any, Mapping, Sequence
 
@@ -196,7 +196,6 @@ def adjust_contract_for_strategy(
 
     base_xp = contract.expected_fp
     arch = profile.archetype
-    own = profile.ownership_pct
 
     if preset_enum == StrategyPreset.RANK_PROTECT:
         # Defensive: Reward Core and Shield picks, penalize volatile low-owned punts

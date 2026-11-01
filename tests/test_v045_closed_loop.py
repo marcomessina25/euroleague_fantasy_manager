@@ -6,13 +6,10 @@ import pytest
 
 from euroleague_fantasy_manager.cli import main
 from euroleague_fantasy_manager.models import Position
-from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
 from euroleague_fantasy_manager.optimization.lineup import FixedSquadLineupOptimizer
 from euroleague_fantasy_manager.tracking import (
     ClosedLoopEvaluator,
-    DecisionEvent,
     DecisionLogger,
-    DecisionOutcome,
     DecisionProvenance,
     DecisionRecord,
     DecisionStore,
@@ -22,10 +19,8 @@ from euroleague_fantasy_manager.tracking import (
     OutcomeUpdater,
     StateSnapshot,
     TransferPayload,
-    TurnSubPayload,
     export_closed_loop_csv,
     format_decision_detail,
-    format_decisions_table,
 )
 
 

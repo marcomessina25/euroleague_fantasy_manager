@@ -12,15 +12,8 @@ Covers workstreams W1 through W6 and every bug item from docs/specs/v065.md:
 from __future__ import annotations
 
 import importlib.metadata
-import io
-import json
 from pathlib import Path
-import re
-import sqlite3
-import sys
 from typing import Any
-from unittest.mock import patch
-import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -32,20 +25,13 @@ from euroleague_fantasy_manager.cli import (
     resolve_command_league_with_source,
 )
 from euroleague_fantasy_manager.competition import (
-    CompetitionRuleset,
     League,
-    get_league_ruleset,
 )
 from euroleague_fantasy_manager.expected_points import (
-    PlayerProjection,
     project_all_players,
 )
 from euroleague_fantasy_manager.import_squad import import_squad_from_file
 from euroleague_fantasy_manager.intelligence.dossier import (
-    DossierLineup,
-    DossierProvenance,
-    DossierSquadUnit,
-    ManagerDossier,
     generate_manager_dossier,
 )
 from euroleague_fantasy_manager.intelligence.providers import (
@@ -60,8 +46,6 @@ from euroleague_fantasy_manager.intelligence.providers import (
 )
 from euroleague_fantasy_manager.models import Player, Position
 from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit
-from euroleague_fantasy_manager.multi_team.store import TeamStore
-from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
 from euroleague_fantasy_manager.optimization.intra_round import (
     IntraRoundPlayerUnit,
     IntraRoundSubstitutionOptimizer,
@@ -70,7 +54,6 @@ from euroleague_fantasy_manager.rules import EUROCUP_LEAGUE_ID, EUROLEAGUE_LEAGU
 from euroleague_fantasy_manager.services.optimization_service import OptimizationService
 from euroleague_fantasy_manager.services.prediction_service import PredictionService
 from euroleague_fantasy_manager.services.team_service import TeamService
-from euroleague_fantasy_manager.squad_report import generate_squad_report
 from euroleague_fantasy_manager.squad_state import CurrentSquadState
 from euroleague_fantasy_manager.storage import SnapshotStore
 from euroleague_fantasy_manager.transfers import TradeMove, validate_trades
@@ -337,7 +320,7 @@ def test_w4_edge_002_departed_player_handling(tmp_path: Path):
     store.save_snapshot(make_test_snapshot_payload(league_id=EUROLEAGUE_LEAGUE_ID))
 
     ts = TeamService(db_path=db_path)
-    team = ts.create_team(team_id="dep1", name="Departed Team", season="2026/27", round_number=1)
+    _team = ts.create_team(team_id="dep1", name="Departed Team", season="2026/27", round_number=1)
 
     # Squad includes player 999 who does NOT exist in snapshot
     roster = [
@@ -367,7 +350,7 @@ def test_w4_edge_003_replaced_head_coach(tmp_path: Path):
     store.save_snapshot(make_test_snapshot_payload(league_id=EUROLEAGUE_LEAGUE_ID, coach_id=402))
 
     ts = TeamService(db_path=db_path)
-    team = ts.create_team(team_id="c_team", name="Coach Team", season="2026/27", round_number=1)
+    _team = ts.create_team(team_id="c_team", name="Coach Team", season="2026/27", round_number=1)
     roster = [
         TeamRosterUnit(player_id=101, name="G1", position="G", is_starter=True),
         TeamRosterUnit(player_id=401, name="Old Coach", position="HC", is_coach=True),
@@ -492,7 +475,7 @@ def test_w4_edge_006_round_rollover_uses_team_round(tmp_path: Path):
     store.save_snapshot(make_test_snapshot_payload(league_id=EUROLEAGUE_LEAGUE_ID))
 
     ts = TeamService(db_path=db_path)
-    team = ts.create_team(team_id="mid_round", name="Mid Round Team", season="2026/27", round_number=1)
+    _team = ts.create_team(team_id="mid_round", name="Mid Round Team", season="2026/27", round_number=1)
     units = [
         TeamRosterUnit(player_id=101, name="G1", position="G", is_starter=True, is_captain=True),
         TeamRosterUnit(player_id=102, name="G2", position="G", is_starter=True),
@@ -590,7 +573,7 @@ def test_w6_dossier_content_hash_invariance_and_sensitivity(tmp_path: Path):
     store.save_snapshot(make_test_snapshot_payload(league_id=EUROLEAGUE_LEAGUE_ID))
 
     ts = TeamService(db_path=db_path)
-    team = ts.create_team(team_id="h_team", name="Hash Team", season="2026/27", round_number=1)
+    _team = ts.create_team(team_id="h_team", name="Hash Team", season="2026/27", round_number=1)
     units = [
         TeamRosterUnit(player_id=101, name="G1", position="G", is_starter=True, is_captain=True),
         TeamRosterUnit(player_id=102, name="G2", position="G", is_starter=True),

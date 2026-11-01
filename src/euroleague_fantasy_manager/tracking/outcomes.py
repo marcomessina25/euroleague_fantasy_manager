@@ -9,7 +9,7 @@ from ..models import Position
 from ..optimization.backtest import score_lineup_with_actuals
 from ..optimization.constraints import OptimizationConstraints, PlayerProjectionContract
 from ..optimization.lineup import FixedSquadLineupOptimizer
-from .models import DecisionOutcome, DecisionRecord, LineupPayload, OutcomeStatus, StateSnapshot
+from .models import DecisionOutcome, LineupPayload, OutcomeStatus, StateSnapshot
 from .store import DecisionStore
 
 

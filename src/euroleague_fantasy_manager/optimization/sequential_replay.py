@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import csv
 import io
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -34,7 +34,6 @@ from euroleague_fantasy_manager.optimization.objective import LineupScoreBreakdo
 from euroleague_fantasy_manager.optimization.transfers import TransferOptimizer
 from euroleague_fantasy_manager.rules import (
     MAX_TRADES_PER_ROUND,
-    SQUAD_QUOTAS,
     UNLIMITED_TRADE_ROUNDS,
 )
 
@@ -461,9 +460,7 @@ class SequentialDecisionSimulator:
         actuals: Mapping[int, float],
     ) -> tuple[OptimalLineupDecision, list[dict[str, Any]], float]:
         """Simulate T1 -> T2 turn substitutions using IntraRoundSubstitutionOptimizer."""
-        unit_map = {p.player_id: p for p in squad}
         starter_set = set(lineup.starter_ids)
-        bench_set = set(lineup.bench_ids)
 
         units: list[IntraRoundPlayerUnit] = []
         for p in squad:

@@ -1,6 +1,5 @@
 """Hermetic unit tests for SQLite SnapshotStore, squad import, and `elf` CLI commands."""
 
-import json
 from pathlib import Path
 
 from euroleague_fantasy_manager.cli import main as cli_main

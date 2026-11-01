@@ -13,9 +13,6 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from euroleague_fantasy_manager.competition.ruleset import (
-    CompetitionRuleset,
-    EuroCupRuleset,
-    EuroLeagueRuleset,
     League,
     get_league_ruleset,
 )
@@ -23,14 +20,10 @@ from euroleague_fantasy_manager.models import Player, Position
 from euroleague_fantasy_manager.multi_team.models import (
     Team,
     TeamRosterUnit,
-    TeamSettings,
     TeamStateSnapshot,
 )
 from euroleague_fantasy_manager.optimization.constraints import (
-    OptimizationConstraints,
     PlayerProjectionContract,
-    validate_lineup_constraints,
-    validate_squad_constraints,
 )
 from euroleague_fantasy_manager.optimization.lineup import FixedSquadLineupOptimizer
 from euroleague_fantasy_manager.prediction.fantasy_points import DecomposedProjection

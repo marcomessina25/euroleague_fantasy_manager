@@ -11,7 +11,7 @@ Coordinates:
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import logging
@@ -20,14 +20,12 @@ from typing import Any
 from .consistency import ConsistencyReport, verify_consistency
 from .dossier import ManagerDossier, generate_manager_dossier
 from .providers import (
-    BaseLLMProvider,
     HeuristicProvider,
-    ProviderError,
     ProviderRequest,
     get_provider,
 )
 from .security import redact_secrets
-from .strategic_analysis import StrategicAnalysisResult, analyze_dossier
+from .strategic_analysis import analyze_dossier
 
 logger = logging.getLogger(__name__)
 

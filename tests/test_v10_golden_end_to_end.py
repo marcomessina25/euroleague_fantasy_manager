@@ -27,9 +27,7 @@ Exercises the 22-step canonical lifecycle:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-import pytest
 
 from euroleague_fantasy_manager.competition.ruleset import League, get_league_ruleset
 from euroleague_fantasy_manager.evaluation.dataset import EvaluationDatasetStore, build_historical_dataset
@@ -39,11 +37,6 @@ from euroleague_fantasy_manager.intelligence.dossier import generate_manager_dos
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit, TeamStateSnapshot
 from euroleague_fantasy_manager.multi_team.store import TeamStore
-from euroleague_fantasy_manager.optimization.constraints import (
-    OptimizationConstraints,
-    PlayerProjectionContract,
-    validate_squad_constraints,
-)
 from euroleague_fantasy_manager.optimization.intra_round import (
     IntraRoundPlayerUnit,
     IntraRoundSubstitutionOptimizer,
@@ -56,7 +49,7 @@ from euroleague_fantasy_manager.services.decision_service import DecisionService
 from euroleague_fantasy_manager.services.prediction_service import PredictionService
 from euroleague_fantasy_manager.services.team_service import TeamService
 from euroleague_fantasy_manager.storage import SnapshotStore, seed_historical_snapshots
-from euroleague_fantasy_manager.tracking.models import DecisionType, LineupPayload
+from euroleague_fantasy_manager.tracking.models import LineupPayload
 from euroleague_fantasy_manager.tracking.store import DecisionStore
 
 
@@ -423,7 +416,7 @@ def test_v10_golden_end_to_end_scenario(tmp_path: Path) -> None:
     # ------------------------------------------------------------------------
     # 20. Repeat with EuroCup team
     # ------------------------------------------------------------------------
-    ec_team = team_service.create_team(
+    _ec_team = team_service.create_team(
         team_id="ec_golden_team",
         name="EuroCup Golden Team",
         league="eurocup",

@@ -10,7 +10,6 @@ import pytest
 from euroleague_fantasy_manager import __version__
 from euroleague_fantasy_manager.cli import main as cli_main
 from euroleague_fantasy_manager.evaluation import (
-    DATASET_VERSION,
     EvaluationDatasetStore,
     PointInTimeFeatureRow,
     build_historical_dataset,
@@ -19,19 +18,13 @@ from euroleague_fantasy_manager.evaluation import (
     run_walk_forward_evaluation,
 )
 from euroleague_fantasy_manager.evaluation.baselines import (
-    canonical_model_name,
     predict_round_baselines,
-    predict_single_player_baseline,
 )
 from euroleague_fantasy_manager.prediction import (
-    CalibrationModel,
     DecomposedProjection,
-    ModelMetadata,
     compute_availability_calibration_bins,
     compute_brier_score,
-    compute_empirical_residual_intervals,
     compute_log_loss,
-    estimate_prediction_uncertainty,
     fit_out_of_sample_calibrator,
     get_model_registry,
     predict_expected_coach_conditional_fp,
@@ -39,7 +32,6 @@ from euroleague_fantasy_manager.prediction import (
     predict_expected_minutes_if_play,
     predict_play_probability,
     predict_player_fantasy_points,
-    predict_round_decomposed,
 )
 from euroleague_fantasy_manager.valuation import (
     DEFAULT_REPLACEMENT_THRESHOLDS,

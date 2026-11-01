@@ -9,7 +9,6 @@ Verifies:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 import pytest
 
@@ -17,25 +16,17 @@ from euroleague_fantasy_manager.competition.eurocup import (
     ALL_EUROCUP_TEAMS,
     EUROCUP_GROUP_A_TEAMS,
     EUROCUP_GROUP_B_TEAMS,
-    EUROCUP_MAX_COURT_PLAYERS_PER_CLUB,
     apply_bye_week_adjustments,
-    compute_eurocup_group_standings,
     compute_head_coach_fantasy_points,
     get_eurocup_group,
-    list_eurocup_clubs,
 )
 from euroleague_fantasy_manager.competition.ruleset import (
-    EuroCupRuleset,
-    EuroLeagueRuleset,
-    League,
     get_league_ruleset,
 )
 from euroleague_fantasy_manager.intelligence.dossier import generate_manager_dossier
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.multi_team.models import (
-    Team,
     TeamRosterUnit,
-    TeamSettings,
 )
 from euroleague_fantasy_manager.multi_team.store import (
     MAX_TEAMS,
@@ -44,16 +35,13 @@ from euroleague_fantasy_manager.multi_team.store import (
 from euroleague_fantasy_manager.optimization.constraints import (
     OptimizationConstraints,
     PlayerProjectionContract,
-    validate_squad_constraints,
 )
 from euroleague_fantasy_manager.services.decision_service import DecisionService
 from euroleague_fantasy_manager.services.optimization_service import OptimizationService
 from euroleague_fantasy_manager.services.prediction_service import PredictionService
 from euroleague_fantasy_manager.services.team_service import TeamService
 from euroleague_fantasy_manager.tracking.models import (
-    DecisionProvenance,
     LineupPayload,
-    TransferPayload,
 )
 from euroleague_fantasy_manager.tracking.store import DecisionStore
 
@@ -215,7 +203,7 @@ def test_six_team_matrix_lifecycle_and_isolation(tmp_path: Path) -> None:
         bench_ids=(1007, 1008, 1009, 1010),
         head_coach_id=1011,
     )
-    dec_a = dec_service.log_lineup(
+    _dec_a = dec_service.log_lineup(
         team_id="team_a",
         season="2026/27",
         round_number=1,

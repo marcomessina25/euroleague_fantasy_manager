@@ -10,19 +10,15 @@ Verifies:
 from __future__ import annotations
 
 from pathlib import Path
-import pytest
 
 from euroleague_fantasy_manager.evaluation.features import PointInTimeFeatureRow
-from euroleague_fantasy_manager.fixtures import DATABASE_PATH
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
 from euroleague_fantasy_manager.prediction.learned_models import (
     LEARNED_FEATURE_NAMES,
     LearnedAvailabilityModel,
     LearnedMinutesModel,
-    LearnedModelPipeline,
     clear_learned_pipeline_cache,
-    extract_historical_training_data,
     get_default_learned_pipeline,
     get_synthetic_test_learned_pipeline,
     train_learned_pipeline_from_history,

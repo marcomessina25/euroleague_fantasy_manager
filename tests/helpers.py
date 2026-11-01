@@ -14,7 +14,6 @@ from euroleague_fantasy_manager.optimization.constraints import (
 )
 from euroleague_fantasy_manager.optimization.lineup import (
     FixedSquadLineupOptimizer,
-    OptimalLineupDecision,
 )
 from euroleague_fantasy_manager.optimization.transfers import TransferRecommendation
 from euroleague_fantasy_manager.evaluation.features import PointInTimeFeatureRow

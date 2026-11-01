@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .fixtures import DATABASE_PATH, DEFAULT_SQUAD_PATH, PROJECT_ROOT, get_current_round
-from .models import Player
+from .models import Player, Position
 from .rules import MAX_PLAYERS_PER_TEAM, SQUAD_QUOTAS, UNLIMITED_TRADE_ROUNDS, validate_squad
 from .squad_state import load_current_squad
 from .storage import SnapshotStore

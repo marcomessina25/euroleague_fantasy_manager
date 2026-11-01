@@ -12,8 +12,6 @@ from euroleague_fantasy_manager.evaluation import (
     build_features,
     build_historical_dataset,
     build_round_feature_table,
-    compute_point_and_ranking_metrics,
-    inspect_historical_round,
     normalize_availability_status,
     predict_round_baselines,
     reconstruct_coach_fantasy_points,

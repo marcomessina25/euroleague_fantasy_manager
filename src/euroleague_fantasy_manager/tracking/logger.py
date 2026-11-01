@@ -243,6 +243,7 @@ class DecisionLogger:
             decision_type=DecisionType.TRANSFERS,
             created_at=now_iso,
             provenance=prov,
+            state_snapshot_id=snapshot_id,
             recommended_transfers=rec_payload,
             actual_transfers=act_payload,
             is_override=is_override,

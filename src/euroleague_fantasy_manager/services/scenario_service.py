@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract

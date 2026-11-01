@@ -1,11 +1,9 @@
 """Closed-loop decision evaluation, retrospective regret, and longitudinal model drift monitoring."""
 
 from dataclasses import dataclass, field
-import math
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
-from .models import DecisionOutcome, DecisionRecord
 from .store import DecisionStore
 
 
@@ -178,7 +176,7 @@ class ClosedLoopEvaluator:
 
         # Rolling MAE Windows
         rolling_windows: dict[str, float] = {}
-        for w in (3, 5, 10):
+        for w in sorted(set((3, 5, 10, eff_window))):
             if n >= w:
                 recent_maes = maes[-w:]
                 rolling_windows[f"last_{w}_rounds"] = round(sum(recent_maes) / len(recent_maes), 2)

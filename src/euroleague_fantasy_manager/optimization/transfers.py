@@ -6,14 +6,13 @@ from itertools import combinations, product
 from typing import Mapping, Sequence
 
 from ..models import Player, Position
-from .candidates import CandidateGenerator, CandidatePool
+from .candidates import CandidateGenerator
 from .constraints import (
     OptimizationConstraints,
     PlayerProjectionContract,
     validate_transfers_constraints,
 )
 from .lineup import FixedSquadLineupOptimizer, OptimalLineupDecision
-from .objective import RiskMode
 
 
 def _club_key(p: PlayerProjectionContract) -> int | str | None:

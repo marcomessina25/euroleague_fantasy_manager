@@ -13,7 +13,6 @@ from enum import Enum
 from typing import Any, Sequence
 
 from ..models import Position
-from ..rules import MAX_BUDGET_TENTHS, MAX_PLAYERS_PER_TEAM, SQUAD_SIZE
 from .constraints import (
     OptimizationConstraints,
     PlayerProjectionContract,

@@ -5,22 +5,17 @@ import pytest
 from euroleague_fantasy_manager.models import Player, Position
 from euroleague_fantasy_manager.optimization import (
     CandidateGenerator,
-    ConstraintValidationResult,
     FixedSquadLineupOptimizer,
     HistoricalDecisionBacktester,
     MultiRoundOptimizer,
-    OptimizationConstraints,
     PlayerProjectionContract,
     RiskMode,
     TransferOptimizer,
     brute_force_exhaustive_lineup,
     compute_captain_option_value,
-    compute_positional_replacement_levels,
     compute_turn_substitution_option_bonus,
-    score_lineup_with_actuals,
     validate_lineup_constraints,
     validate_squad_constraints,
-    validate_transfers_constraints,
 )
 from euroleague_fantasy_manager.prediction.fantasy_points import DecomposedProjection
 
@@ -205,7 +200,7 @@ def test_lineup_optimizer_exhaustive_exactness():
 
 def test_lineup_optimizer_all_five_legal_formations():
     """Verify optimizer dynamically selects each of the 5 legal formations when positional talents shift."""
-    base_squad = make_standard_squad()
+    _base_squad = make_standard_squad()
 
     # Case 1: 1-2-2 (1 Guard, 2 Forwards, 2 Centers)
     # 2 Centers (301, 302) and 3 Forwards (201, 202, 203) are dominant; all guards <= 10

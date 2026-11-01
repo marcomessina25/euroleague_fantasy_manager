@@ -9,26 +9,17 @@ Verifies:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-import pytest
 
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.optimization.constraints import (
-    OptimizationConstraints,
     PlayerProjectionContract,
 )
 from euroleague_fantasy_manager.services.decision_service import DecisionService
 from euroleague_fantasy_manager.tracking.models import (
-    DecisionOutcome,
     DecisionProvenance,
-    DecisionRecord,
-    DecisionType,
     LineupPayload,
     OutcomeStatus,
-    StateSnapshot,
-    TransferPayload,
-    TurnSubPayload,
 )
 from euroleague_fantasy_manager.tracking.outcomes import OutcomeUpdater
 from euroleague_fantasy_manager.tracking.store import DecisionStore

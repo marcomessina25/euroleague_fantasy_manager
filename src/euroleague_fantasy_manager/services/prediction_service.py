@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from euroleague_fantasy_manager.competition.ruleset import League, get_league_ruleset
 from euroleague_fantasy_manager.models import Position
@@ -13,7 +13,6 @@ from euroleague_fantasy_manager.evaluation.baselines import (
 )
 from euroleague_fantasy_manager.evaluation.dataset import (
     EvaluationDatasetStore,
-    build_historical_dataset,
     normalize_season_code,
 )
 from euroleague_fantasy_manager.evaluation.features import build_round_feature_table

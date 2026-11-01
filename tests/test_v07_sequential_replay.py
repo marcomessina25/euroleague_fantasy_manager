@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 import pytest
 
@@ -21,13 +20,8 @@ from euroleague_fantasy_manager.evaluation.dataset import (
     EvaluationDatasetStore,
     build_historical_dataset,
 )
-from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.multi_team.models import PointInTimeTeamState, TeamRosterUnit
 from euroleague_fantasy_manager.multi_team.store import TeamStore
-from euroleague_fantasy_manager.optimization.constraints import (
-    OptimizationConstraints,
-    PlayerProjectionContract,
-)
 from euroleague_fantasy_manager.optimization.lineup import OptimalLineupDecision
 from euroleague_fantasy_manager.optimization.objective import LineupScoreBreakdown
 from euroleague_fantasy_manager.optimization.sequential_replay import (
@@ -108,7 +102,7 @@ def test_f2_point_in_time_state_reconstruction(test_db: Path) -> None:
         TeamRosterUnit(1001, "HC", "HC1", "PAO", 80, 80, is_coach=True),
     ]
 
-    team = service.create_team(
+    _team = service.create_team(
         team_id="pit_team",
         name="PIT Test Team",
         season="2024/25",

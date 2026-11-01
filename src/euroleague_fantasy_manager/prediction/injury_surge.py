@@ -7,13 +7,12 @@ at the same and adjacent positions, generating predictable fantasy surges (Delta
 """
 
 from dataclasses import dataclass
-import math
 from typing import TYPE_CHECKING, Any, Sequence
 
 from ..evaluation.features import PointInTimeFeatureRow
 
 if TYPE_CHECKING:
-    from .fantasy_points import DecomposedProjection
+    pass
 
 
 @dataclass(frozen=True, slots=True)

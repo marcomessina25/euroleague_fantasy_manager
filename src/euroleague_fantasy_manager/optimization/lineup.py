@@ -1,20 +1,16 @@
 """Pure deterministic fixed-squad lineup optimizer for V0.4 (Phases B, C, D)."""
 
-from collections import Counter
 from dataclasses import dataclass
 from itertools import combinations
-from typing import Iterable, Mapping, Sequence
+from typing import Mapping, Sequence
 
 from ..models import Player, Position
 from ..rules import (
-    COURT_STARTERS_SIZE,
     LEGAL_COURT_FORMATIONS,
-    SQUAD_SIZE,
 )
 from .constraints import (
     OptimizationConstraints,
     PlayerProjectionContract,
-    validate_lineup_constraints,
     validate_squad_constraints,
 )
 from .objective import (

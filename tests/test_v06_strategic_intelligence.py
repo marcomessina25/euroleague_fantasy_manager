@@ -10,8 +10,6 @@ from fastapi.testclient import TestClient
 
 from euroleague_fantasy_manager.competition import (
     CompetitionRuleset,
-    EuroCupRuleset,
-    EuroLeagueRuleset,
     League,
     get_league_ruleset,
 )
@@ -21,16 +19,13 @@ from euroleague_fantasy_manager.intelligence.copilot import (
     generate_copilot_advice,
 )
 from euroleague_fantasy_manager.intelligence.dossier import (
-    ManagerDossier,
     generate_manager_dossier,
 )
 from euroleague_fantasy_manager.intelligence.providers import (
     BaseLLMProvider,
-    HeuristicProvider,
     ProviderError,
     ProviderRequest,
     ProviderResponse,
-    list_available_providers,
 )
 from euroleague_fantasy_manager.intelligence.strategic_analysis import (
     StrategicAnalysisResult,
