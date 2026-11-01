@@ -309,6 +309,7 @@ class TransferOptimizer:
         pruning_notes_list: list[str] = []
 
         # Stage 1: Fast screening of legal trade combinations
+        packages_by_k: dict[int, list[tuple[float, tuple[PlayerProjectionContract, ...], tuple[PlayerProjectionContract, ...], int, int]]] = {}
         screened_packages: list[tuple[float, tuple[PlayerProjectionContract, ...], tuple[PlayerProjectionContract, ...], int, int]] = []
 
         for k in range(1, effective_max_trades + 1):
@@ -351,6 +352,14 @@ class TransferOptimizer:
                         continue
 
                     out_exp_sum = sum(p.expected_fp for p in out_combo)
+                    if unlimited:
+                        cost_k = 0.0
+                    elif use_dynamic:
+                        from .trade_policy import TradeCostContext, compute_package_transfer_cost
+                        ctx = TradeCostContext(is_drw_approaching=drw_app, min_net_gain_threshold=min_thresh)
+                        cost_k, _, _ = compute_package_transfer_cost(out_combo, context=ctx)
+                    else:
+                        cost_k = round(self.transfer_penalty_cost * k, 2)
 
                     for in_tuple_of_tuples in product(*pos_candidate_lists):
                         in_players: list[PlayerProjectionContract] = []
@@ -378,8 +387,8 @@ class TransferOptimizer:
                         evaluated_count += 1
                         new_bank = max_budget - purchases_val
                         in_exp_sum = sum(p.expected_fp for p in in_players)
-                        proxy_gain = in_exp_sum - out_exp_sum
-                        packages.append((proxy_gain, tuple(out_combo), tuple(in_players), new_bank, k))
+                        proxy_net = round((in_exp_sum - out_exp_sum) - cost_k, 2)
+                        packages.append((proxy_net, tuple(out_combo), tuple(in_players), new_bank, k))
                 return packages
 
             k_packages = _evaluate_level_k(base_cand_limit)
@@ -392,12 +401,27 @@ class TransferOptimizer:
 
             # Keep top candidates per trade size k
             k_packages.sort(key=lambda x: x[0], reverse=True)
-            screened_packages.extend(k_packages[:stage2_cap] if not exhaustive_candidates else k_packages)
+            packages_by_k[k] = k_packages
 
-        # Stage 2: Evaluate exact lineup optimization for top screened packages
-        if not exhaustive_candidates and len(screened_packages) > stage2_cap:
-            screened_packages.sort(key=lambda x: x[0], reverse=True)
-            screened_packages = screened_packages[:stage2_cap]
+        # Stage 2: Quota-based allocation per trade size k (OPT-4)
+        if exhaustive_candidates:
+            for pkgs in packages_by_k.values():
+                screened_packages.extend(pkgs)
+        else:
+            import math
+            quota_k = math.ceil(stage2_cap / max(1, effective_max_trades))
+            remaining_packages = []
+
+            for k in range(1, effective_max_trades + 1):
+                pkgs = packages_by_k.get(k, [])
+                screened_packages.extend(pkgs[:quota_k])
+                remaining_packages.extend(pkgs[quota_k:])
+
+            # Redistribute unused slots to other sizes in order of best proxy
+            if len(screened_packages) < stage2_cap and remaining_packages:
+                remaining_packages.sort(key=lambda x: x[0], reverse=True)
+                needed_slots = stage2_cap - len(screened_packages)
+                screened_packages.extend(remaining_packages[:needed_slots])
 
         stage2_evaluations = 0
         for proxy_gain, out_combo, in_players, new_bank, k in screened_packages:

@@ -297,3 +297,77 @@ def test_p4_2_oracle_agrees_on_random_small_markets():
         else:
             assert len(opt_res.recommendations) > 0
             assert round(opt_res.recommendations[0].net_transfer_value, 2) == round(oracle_res.net_transfer_value, 2)
+
+
+def test_p4_3_rank_by_net_value_with_penalty():
+    """OPT-4: Penalty 3.0, max_trades=4 returns the 1-trade package netting ~37.0 as top recommendation."""
+    ruleset = get_league_ruleset(League.EUROLEAGUE)
+    constraints = OptimizationConstraints.from_ruleset(ruleset)
+    opt = TransferOptimizer(constraints=constraints, transfer_penalty_cost=3.0)
+
+    squad = make_standard_squad()
+    # Player 101 (guard) has low expected FP (5.0)
+    squad[0] = make_test_player(101, Position.GUARD, expected_fp=5.0, price_tenths=80, team_id=1)
+    # Players 102, 105, 109 have 10.0 expected FP
+    squad[1] = make_test_player(102, Position.GUARD, expected_fp=10.0, price_tenths=80, team_id=1)
+    squad[4] = make_test_player(105, Position.FORWARD, expected_fp=10.0, price_tenths=80, team_id=2)
+    squad[8] = make_test_player(109, Position.CENTER, expected_fp=10.0, price_tenths=80, team_id=3)
+
+    market = [
+        # Star replacement for 101: gives +40 gross gain
+        make_test_player(901, Position.GUARD, expected_fp=45.0, price_tenths=80, team_id=10),
+        # Marginal replacements that add +2.0 each
+        make_test_player(902, Position.GUARD, expected_fp=12.0, price_tenths=80, team_id=11),
+        make_test_player(903, Position.FORWARD, expected_fp=12.0, price_tenths=80, team_id=12),
+        make_test_player(904, Position.CENTER, expected_fp=12.0, price_tenths=80, team_id=13),
+    ]
+
+    res = opt.optimize_transfers(
+        current_squad=squad,
+        market=market,
+        bank_tenths=50,
+        round_number=2,
+        max_trades=4,
+        unlimited=False,
+        top_n=10,
+    )
+
+    assert len(res.recommendations) > 0
+    top_rec = res.recommendations[0]
+    # The 1-trade package (901 in, 101 out) costs 3.0 penalty and nets ~37.0+
+    # Whereas 4-trade costs 12.0 penalty, netting less.
+    assert len(top_rec.out_players) == 1
+    assert top_rec.out_players[0].player_id == 101
+    assert top_rec.in_players[0].player_id == 901
+    assert top_rec.transfer_cost == 3.0
+    assert top_rec.net_transfer_value >= 37.0
+
+
+def test_p4_3_quota_allocation_includes_all_feasible_trade_sizes():
+    """OPT-4: top_n=30 contains at least one package of each feasible size (1, 2, 3, 4)."""
+    ruleset = get_league_ruleset(League.EUROLEAGUE)
+    constraints = OptimizationConstraints.from_ruleset(ruleset)
+    opt = TransferOptimizer(constraints=constraints, transfer_penalty_cost=0.5)
+
+    squad = make_standard_squad()
+    market = [
+        make_test_player(901, Position.GUARD, expected_fp=25.0, price_tenths=80, team_id=10),
+        make_test_player(902, Position.GUARD, expected_fp=24.0, price_tenths=80, team_id=11),
+        make_test_player(903, Position.FORWARD, expected_fp=25.0, price_tenths=80, team_id=12),
+        make_test_player(904, Position.FORWARD, expected_fp=24.0, price_tenths=80, team_id=13),
+        make_test_player(905, Position.CENTER, expected_fp=25.0, price_tenths=80, team_id=14),
+    ]
+
+    res = opt.optimize_transfers(
+        current_squad=squad,
+        market=market,
+        bank_tenths=50,
+        round_number=2,
+        max_trades=4,
+        unlimited=False,
+        top_n=30,
+    )
+
+    assert len(res.recommendations) >= 4
+    trade_sizes = {len(r.out_players) for r in res.recommendations}
+    assert {1, 2, 3, 4}.issubset(trade_sizes)
