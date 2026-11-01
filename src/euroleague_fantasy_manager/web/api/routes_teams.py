@@ -119,7 +119,7 @@ def create_team(
         elif req.bank_tenths is not None:
             bank_tenths = int(req.bank_tenths)
         else:
-            bank_tenths = None
+            bank_tenths = 1000 if not req.player_ids and round_num == 1 else None
 
         if round_num > 1 and bank_tenths is None:
             raise HTTPException(

@@ -151,7 +151,7 @@ def _ensure_initial_team(team_service: TeamService) -> None:
             season="2026/27",
             round_number=1,
             turn_number=1,
-            bank_tenths=100,
+            bank_tenths=1000,
         )
 
 

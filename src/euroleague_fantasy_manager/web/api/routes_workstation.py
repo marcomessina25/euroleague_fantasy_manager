@@ -146,18 +146,26 @@ def get_dashboard(
         raise HTTPException(status_code=404, detail=f"Team '{team_id}' not found.")
 
     rnd = round_number or team.round_number
+    is_viewing_past_round = round_number is not None and rnd != team.round_number
+    squad_for_round = team_service.store.get_squad(team_id, rnd) if is_viewing_past_round else team.squad
+
+    if not squad_for_round:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "no_squad_for_round", "message": f"No squad found for team '{team_id}' in round {rnd}."},
+        )
+
+    contracts_for_rnd = optimization_service._resolve_squad_contracts(
+        squad_for_round, season, rnd, league=team.league or "euroleague"
+    )
     opt_lineup = optimization_service.optimize_lineup(
         team_id=team_id,
         season=season,
         round_number=rnd,
         risk_mode=team.settings.risk_mode,
         option_value_mode=team.settings.option_value_mode,
+        contracts_override=contracts_for_rnd,
     )
-
-    # store.get_team always loads the team's LIVE round squad, so a round differing
-    # from the live one must be loaded explicitly or the dashboard renders the wrong roster.
-    is_viewing_past_round = round_number is not None and rnd != team.round_number
-    squad_for_round = team_service.store.get_squad(team_id, rnd) if is_viewing_past_round else team.squad
 
     # Squad units with projections
     try:

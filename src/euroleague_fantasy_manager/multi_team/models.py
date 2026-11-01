@@ -178,6 +178,7 @@ class Team:
             "round_number": self.round_number,
             "turn_number": self.turn_number,
             "bank_tenths": self.bank_tenths,
+            "bank_credits": round(self.bank_tenths / 10.0, 1),
             "transfers_remaining": self.transfers_remaining,
             "squad": [unit.to_dict() for unit in self.squad],
             "settings": self.settings.to_dict(),

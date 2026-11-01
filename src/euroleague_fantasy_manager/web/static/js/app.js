@@ -115,7 +115,7 @@ async function loadTeams() {
           season: state.season,
           round_number: 1,
           turn_number: 1,
-          bank_tenths: 100,
+          bank_tenths: 1000,
         }),
       });
       const t1 = await createRes.json();
@@ -189,6 +189,7 @@ async function deleteTeam(teamId) {
   try {
     const res = await fetch(`/api/teams/${encodeURIComponent(teamId)}`, { method: "DELETE" });
     if (res.ok) {
+      resetTransientTeamState();
       state.activeTeamId = null;
       await loadTeams();
       await loadRules(activeTeamLeague());
@@ -206,6 +207,7 @@ async function deleteTeam(teamId) {
 
 async function switchTeam(teamId) {
   const changed = teamId !== state.activeTeamId;
+  resetTransientTeamState();
   state.activeTeamId = teamId;
   await fetch(`/api/teams/${encodeURIComponent(teamId)}/active`, { method: "POST" });
   await loadTeams();
@@ -254,7 +256,7 @@ async function switchCompetition(league) {
           season: state.season,
           round_number: 1,
           turn_number: 1,
-          bank_tenths: 100,
+          bank_tenths: 1000,
         }),
       });
       if (res.ok) {
@@ -362,12 +364,27 @@ async function loadLineupRounds() {
 }
 
 async function loadDashboard() {
+  if (!state.activeTeamId) return;
+  const requestedTeamId = state.activeTeamId;
+  const mySeq = ++dashboardSeq;
+
+  if (dashboardAbortController) {
+    dashboardAbortController.abort();
+  }
+  dashboardAbortController = new AbortController();
+
   try {
-    let url = `/api/workstation/dashboard?team_id=${state.activeTeamId}&season=${state.season}`;
+    let url = `/api/workstation/dashboard?team_id=${encodeURIComponent(requestedTeamId)}&season=${state.season}`;
     if (state.viewRoundNumber !== null) url += `&round_number=${state.viewRoundNumber}`;
-    const res = await fetch(url);
-    if (!res.ok) return;
+    const res = await fetch(url, { signal: dashboardAbortController.signal });
+    if (!res.ok) {
+      if (mySeq !== dashboardSeq || state.activeTeamId !== requestedTeamId) return;
+      const err = await res.json().catch(() => ({}));
+      renderDashboardError(err);
+      return;
+    }
     const data = await res.json();
+    if (mySeq !== dashboardSeq || state.activeTeamId !== requestedTeamId) return;
     state.dashboard = data;
     state.roundNumber = data.round_number;
     await loadLineupRounds();
@@ -2936,3 +2953,52 @@ document.addEventListener("click", (e) => {
     removePlayerFromTeamBuilder(Number(el.dataset.playerId));
   }
 });
+
+
+// --- P5.3 State isolation, Request tokens & race mitigation ---
+let dashboardSeq = 0;
+let dashboardAbortController = null;
+let intelSeq = 0;
+let intelAbortController = null;
+let playerPoolSeq = 0;
+let playerPoolAbortController = null;
+let copilotSeq = 0;
+let copilotAbortController = null;
+let playerPoolDebounceTimer = null;
+
+function resetTransientTeamState() {
+  state.viewRoundNumber = null;
+  tradeStudioState.transfersOut = [];
+  tradeStudioState.transfersIn = [];
+  tradeStudioState.unlimited = false;
+  const unlimToggle = document.getElementById("trade-unlimited-toggle");
+  if (unlimToggle) unlimToggle.checked = false;
+  resetCopilotPanel();
+  clearCourtPlaceholder();
+}
+
+function clearCourtPlaceholder() {
+  const container = document.getElementById("court-starters");
+  if (container) {
+    container.innerHTML = '<div style="display:flex; justify-content:center; align-items:center; height:200px; color:var(--text-muted); font-size:1rem;">Loading squad...</div>';
+  }
+  const benchContainer = document.getElementById("court-bench");
+  if (benchContainer) benchContainer.innerHTML = "";
+}
+
+function resetCopilotPanel() {
+  const adviceEl = document.getElementById("copilot-advice-output");
+  if (adviceEl) adviceEl.innerHTML = "";
+  const adviceSec = document.getElementById("copilot-advice-section");
+  if (adviceSec) adviceSec.style.display = "none";
+}
+
+function renderDashboardError(err) {
+  const container = document.getElementById("court-starters");
+  if (container) {
+    const msg = (err && err.detail && (err.detail.message || err.detail.code || err.detail)) || "Failed to load dashboard.";
+    container.innerHTML = `<div class="dashboard-error" style="display:flex; justify-content:center; align-items:center; height:200px; color:var(--accent-red); font-size:0.95rem;">⚠️ ${escapeHtml(String(msg))}</div>`;
+  }
+  const benchContainer = document.getElementById("court-bench");
+  if (benchContainer) benchContainer.innerHTML = "";
+}

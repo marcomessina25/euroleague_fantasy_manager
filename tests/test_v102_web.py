@@ -203,3 +203,35 @@ def test_p5_2_team_id_migration(tmp_path: Path):
     import re
     assert re.match(r"^[A-Za-z0-9_-]{1,40}$", migrated_id)
     assert migrated_id.startswith("team_invalid_bad__id")
+
+
+def test_p5_3_dashboard_missing_squad_returns_404(tmp_path: Path):
+    """WEB-4, WEB-8: For a round without a stored squad, dashboard returns 404 with code 'no_squad_for_round'."""
+    db_file = tmp_path / "dash_missing.sqlite3"
+    app = create_app(db_path=db_file)
+    client = TestClient(app)
+
+    # team_1 exists but has empty squad
+    res = client.get("/api/workstation/dashboard?team_id=team_1&season=2026/27&round_number=2")
+    assert res.status_code == 404
+    data = res.json()
+    assert "detail" in data
+    assert data["detail"].get("code") == "no_squad_for_round"
+
+
+def test_p5_3_new_empty_team_defaults_to_100_credits(tmp_path: Path):
+    """WEB-4: New empty teams default to bank_tenths: 1000 (100.0 credits)."""
+    db_file = tmp_path / "new_team_bank.sqlite3"
+    app = create_app(db_path=db_file)
+    client = TestClient(app)
+
+    res = client.post("/api/teams", json={
+        "team_id": "team_new_100",
+        "name": "Hundred Credit Squad",
+        "league": "euroleague",
+        "round_number": 1,
+    })
+    assert res.status_code == 200
+    team_data = res.json()
+    assert team_data["bank_tenths"] == 1000
+    assert team_data["bank_credits"] == 100.0
