@@ -672,10 +672,12 @@ def build_parser() -> argparse.ArgumentParser:
     t_show.add_argument("--json", action="store_true", help="Output JSON payload.")
 
     t_select = team_sub.add_parser("select", help="Set active team.")
-    t_select.add_argument("--id", required=True, type=str, help="Team ID to activate.")
+    t_select.add_argument("pos_id", nargs="?", default=None, help="Team ID to activate.")
+    t_select.add_argument("--id", required=False, default=None, type=str, help="Team ID to activate.")
 
     t_del = team_sub.add_parser("delete", help="Delete a team.")
-    t_del.add_argument("--id", required=True, type=str, help="Team ID to delete.")
+    t_del.add_argument("pos_id", nargs="?", default=None, help="Team ID to delete.")
+    t_del.add_argument("--id", required=False, default=None, type=str, help="Team ID to delete.")
 
     t_set_lineup = team_sub.add_parser("set-lineup", help="Set team lineup for a specific round (§3.3).")
     t_set_lineup.add_argument("--team", type=str, default=None, help="Target team ID (default: active team).")
@@ -1482,21 +1484,29 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         if args.team_command == "select":
+            target_id = args.id or getattr(args, "pos_id", None)
+            if not target_id:
+                print("Error: Team ID required.")
+                return 1
             try:
-                ts.set_active_team(args.id)
-                print(f"Active team set to '{args.id}'")
+                ts.set_active_team(target_id)
+                print(f"Active team set to '{target_id}'")
                 return 0
             except KeyError:
-                print(f"Team '{args.id}' not found.")
+                print(f"Team '{target_id}' not found.")
                 return 1
 
         if args.team_command == "delete":
-            deleted = ts.delete_team(args.id)
+            target_id = args.id or getattr(args, "pos_id", None)
+            if not target_id:
+                print("Error: Team ID required.")
+                return 1
+            deleted = ts.delete_team(target_id)
             if deleted:
-                print(f"Deleted team '{args.id}'")
-            else:
-                print(f"Team '{args.id}' not found.")
-            return 0
+                print(f"Deleted team '{target_id}'")
+                return 0
+            print(f"Team '{target_id}' not found.")
+            return 1
 
         if args.team_command == "set-lineup":
             target_id = args.team
