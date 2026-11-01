@@ -30,57 +30,6 @@ from euroleague_fantasy_manager.prediction.learned_models import (
 from euroleague_fantasy_manager.prediction.registry import get_model_registry
 
 
-@pytest.fixture
-def sample_feature_row() -> PointInTimeFeatureRow:
-    """Standardized feature row for testing model inference and explanations."""
-    return PointInTimeFeatureRow(
-        player_id=101,
-        player_name="Facundo Campazzo",
-        position="G",
-        season="E2025",
-        round_number=3,
-        decision_cutoff="2025-10-18T18:00:00Z",
-        team_id=1,
-        team_code="RMB",
-        opponent_team_id=2,
-        opponent_team_code="PAO",
-        home=True,
-        turn_number=1,
-        days_rest=3.0,
-        quotation_at_decision_tenths=150,
-        pre_round_status="available",
-        play_probability=0.98,
-        cold_start_source="current_season",
-        games_played=2,
-        games_missed=0,
-        starter_rate=1.0,
-        season_avg_fantasy_points=18.5,
-        last_1_fantasy_points=19.0,
-        last_3_avg=18.5,
-        last_5_avg=18.5,
-        last_10_avg=18.5,
-        ewma_fantasy_points=18.6,
-        season_avg_minutes=27.5,
-        last_3_minutes=27.5,
-        last_5_minutes=27.5,
-        minutes_trend=0.5,
-        team_strength=0.75,
-        opponent_strength=0.72,
-        usage=0.22,
-        rebound_rate=0.08,
-        assist_rate=0.35,
-        steal_rate=0.03,
-        block_rate=0.01,
-        turnover_rate=0.12,
-        foul_draw_rate=0.18,
-        ewma_minutes=27.4,
-        std_minutes_last5=1.2,
-        dnp_rate_last5=0.0,
-        ewma_fp_per_min=0.68,
-        season_fp_per_min=0.67,
-        pos_prior_fp_per_min=0.54,
-        is_double_round_week=False,
-    )
 
 
 # ============================================================================

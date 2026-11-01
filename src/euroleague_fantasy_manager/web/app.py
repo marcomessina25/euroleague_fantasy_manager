@@ -65,8 +65,12 @@ def _ensure_initial_team(db_path: str | Path) -> None:
         ts = TeamService(store=store)
         # Check if config squad exists
         cfg_path = paths.squad_config_path()
-        if not cfg_path.exists():
-            cfg_path = paths.elf_home() / "config" / "current_squad.example.json" 
+        if not cfg_path.exists() and Path("config/current_squad.json").exists():
+            cfg_path = Path("config/current_squad.json")
+        elif not cfg_path.exists():
+            cfg_path = paths.elf_home() / "config" / "current_squad.example.json"
+            if not cfg_path.exists() and Path("config/current_squad.example.json").exists():
+                cfg_path = Path("config/current_squad.example.json")
 
         if cfg_path.exists():
             try:

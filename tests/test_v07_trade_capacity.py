@@ -84,7 +84,7 @@ def test_engine_returns_packages_across_the_full_action_space():
     from euroleague_fantasy_manager.models import Position
     from euroleague_fantasy_manager.optimization.transfers import TransferOptimizer
 
-    from test_v05_multi_team_and_gui import make_standard_squad, make_test_player
+    from tests.helpers import make_standard_squad, make_test_player
 
     squad = make_standard_squad()
     market = [
@@ -114,7 +114,7 @@ def test_engine_respects_a_smaller_remaining_budget():
     from euroleague_fantasy_manager.models import Position
     from euroleague_fantasy_manager.optimization.transfers import TransferOptimizer
 
-    from test_v05_multi_team_and_gui import make_standard_squad, make_test_player
+    from tests.helpers import make_standard_squad, make_test_player
 
     squad = make_standard_squad()
     market = [

@@ -37,3 +37,8 @@ def learned_dataset_db(tmp_path: Path) -> Path:
     db_file = tmp_path / "learned_dataset.sqlite3"
     build_historical_dataset(database_path=db_file, seasons=["E2024", "E2025"])
     return db_file
+
+@pytest.fixture
+def sample_feature_row():
+    from tests.helpers import sample_feature_row as _helper
+    return _helper()

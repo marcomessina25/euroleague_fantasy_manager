@@ -34,10 +34,7 @@ from euroleague_fantasy_manager.tracking.store import DecisionStore
 from euroleague_fantasy_manager.web.app import create_app
 from euroleague_fantasy_manager.web.deps import set_db_path
 
-try:
-    from tests.test_v04_optimization import make_standard_squad, make_test_player
-except ModuleNotFoundError:
-    from test_v04_optimization import make_standard_squad, make_test_player
+from tests.helpers import make_standard_squad, make_test_player
 
 
 def _build_test_squad_contracts() -> list[PlayerProjectionContract]:

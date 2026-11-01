@@ -25,59 +25,8 @@ from euroleague_fantasy_manager.optimization import (
 from euroleague_fantasy_manager.prediction.fantasy_points import DecomposedProjection
 
 
-def make_test_player(
-    pid: int,
-    pos: Position,
-    expected_fp: float,
-    price_tenths: int = 100,
-    team_id: int | None = None,
-    turn: int = 1,
-    sigma: float = 3.0,
-    prob_play: float = 1.0,
-    uncertainty: float | None = None,
-    turn_number: int | None = None,
-) -> PlayerProjectionContract:
-    eff_team = team_id if team_id is not None else ((pid % 5) + 1)
-    eff_turn = turn_number if turn_number is not None else turn
-    eff_sigma = uncertainty if uncertainty is not None else sigma
-    return PlayerProjectionContract(
-        player_id=pid,
-        player_name=f"Player_{pid}_{pos.name}",
-        position=pos,
-        team_id=eff_team,
-        team_code=f"TM{eff_team}",
-        price_tenths=price_tenths,
-        expected_fp=expected_fp,
-        probability_play=prob_play,
-        expected_minutes=25.0 if pos != Position.HEAD_COACH else 40.0,
-        fp_per_minute=round(expected_fp / 25.0, 3) if pos != Position.HEAD_COACH else 0.0,
-        uncertainty=eff_sigma,
-        turn_number=eff_turn,
-    )
+from tests.helpers import make_standard_squad, make_test_player
 
-
-def make_standard_squad() -> list[PlayerProjectionContract]:
-    """Create a balanced 11-unit squad: 4G, 4F, 2C, 1HC."""
-    squad: list[PlayerProjectionContract] = []
-    # 4 Guards
-    squad.append(make_test_player(101, Position.GUARD, expected_fp=22.0, price_tenths=150, team_id=1, turn=1, sigma=5.0))
-    squad.append(make_test_player(102, Position.GUARD, expected_fp=18.0, price_tenths=120, team_id=2, turn=1, sigma=4.0))
-    squad.append(make_test_player(103, Position.GUARD, expected_fp=14.0, price_tenths=90, team_id=3, turn=2, sigma=3.0))
-    squad.append(make_test_player(104, Position.GUARD, expected_fp=10.0, price_tenths=70, team_id=4, turn=2, sigma=2.0))
-
-    # 4 Forwards
-    squad.append(make_test_player(201, Position.FORWARD, expected_fp=24.0, price_tenths=160, team_id=1, turn=1, sigma=6.0))
-    squad.append(make_test_player(202, Position.FORWARD, expected_fp=19.0, price_tenths=130, team_id=2, turn=1, sigma=4.5))
-    squad.append(make_test_player(203, Position.FORWARD, expected_fp=13.0, price_tenths=85, team_id=3, turn=2, sigma=3.5))
-    squad.append(make_test_player(204, Position.FORWARD, expected_fp=9.0, price_tenths=60, team_id=4, turn=2, sigma=2.5))
-
-    # 2 Centers
-    squad.append(make_test_player(301, Position.CENTER, expected_fp=21.0, price_tenths=140, team_id=1, turn=1, sigma=5.0))
-    squad.append(make_test_player(302, Position.CENTER, expected_fp=16.0, price_tenths=110, team_id=2, turn=2, sigma=3.5))
-
-    # 1 Head Coach
-    squad.append(make_test_player(401, Position.HEAD_COACH, expected_fp=15.0, price_tenths=80, team_id=5, turn=1, sigma=4.0))
-    return squad
 
 
 # ---------------------------------------------------------------------------

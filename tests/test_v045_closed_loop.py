@@ -29,45 +29,8 @@ from euroleague_fantasy_manager.tracking import (
 )
 
 
-def make_test_player(
-    pid: int,
-    pos: Position,
-    expected_fp: float,
-    price_tenths: int = 100,
-    turn: int = 1,
-    team_id: int = 1,
-) -> PlayerProjectionContract:
-    return PlayerProjectionContract(
-        player_id=pid,
-        player_name=f"Player_{pid}",
-        position=pos,
-        team_id=team_id,
-        team_code=f"TM{team_id}",
-        price_tenths=price_tenths,
-        expected_fp=expected_fp,
-        probability_play=1.0,
-        expected_minutes=25.0 if pos != Position.HEAD_COACH else 40.0,
-        fp_per_minute=round(expected_fp / 25.0, 3) if pos != Position.HEAD_COACH else 0.0,
-        uncertainty=3.0,
-        turn_number=turn,
-    )
+from tests.helpers import make_standard_squad, make_test_player
 
-
-def make_standard_squad() -> list[PlayerProjectionContract]:
-    """11-unit squad: 4G, 4F, 2C, 1HC."""
-    return [
-        make_test_player(101, Position.GUARD, expected_fp=22.0, turn=1, team_id=1),
-        make_test_player(102, Position.GUARD, expected_fp=18.0, turn=1, team_id=2),
-        make_test_player(103, Position.GUARD, expected_fp=14.0, turn=2, team_id=3),
-        make_test_player(104, Position.GUARD, expected_fp=10.0, turn=2, team_id=4),
-        make_test_player(201, Position.FORWARD, expected_fp=24.0, turn=1, team_id=1),
-        make_test_player(202, Position.FORWARD, expected_fp=19.0, turn=1, team_id=2),
-        make_test_player(203, Position.FORWARD, expected_fp=13.0, turn=2, team_id=3),
-        make_test_player(204, Position.FORWARD, expected_fp=9.0, turn=2, team_id=4),
-        make_test_player(301, Position.CENTER, expected_fp=21.0, turn=1, team_id=1),
-        make_test_player(302, Position.CENTER, expected_fp=16.0, turn=2, team_id=2),
-        make_test_player(401, Position.HEAD_COACH, expected_fp=15.0, turn=1, team_id=5),
-    ]
 
 
 # ---------------------------------------------------------------------------
