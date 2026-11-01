@@ -1212,8 +1212,9 @@ def test_live_scores_vs_expected_scores_never_equal_cost(tmp_path: Path):
     assert p_unplayed.expected_fp == 14.42  # Decomposed quantitative model
 
 
+@pytest.mark.perf
 def test_transfer_optimizer_speed_and_multiple_recommendations():
-    """Verify that transfer optimization runs fast (<1.5s) and yields multiple distinct options."""
+    """Verify transfer optimization execution speed benchmark."""
     import time
     from euroleague_fantasy_manager.optimization.transfers import TransferOptimizer
 
@@ -1635,8 +1636,9 @@ def test_court_score_breakdown_consistency(tmp_path: Path):
     assert abs((lineup["realized_total_fp"] + lineup["unplayed_expected_fp"]) - lineup["expected_total_fp"]) < 0.01
 
 
+@pytest.mark.perf
 def test_transfer_optimizer_performance_budget():
-    """Verify transfer optimization on 200-player market finishes comfortably under 1.5s per trade count."""
+    """Verify transfer optimization on 200-player market wall-clock performance budget."""
     import time
     from euroleague_fantasy_manager.models import Position
     from euroleague_fantasy_manager.optimization.transfers import TransferOptimizer
@@ -1731,3 +1733,51 @@ def test_realdata_v051_prediction_backtest() -> None:
 
 
 
+
+
+def test_transfer_optimizer_work_bounds_and_multiple_recommendations():
+    """Verify transfer optimization evaluates within bounded search packages and proposes multiple distinct options."""
+    from euroleague_fantasy_manager.optimization.transfers import TransferOptimizer
+
+    squad = make_standard_squad()
+    market = [
+        make_test_player(901, Position.GUARD, expected_fp=25.0, price_tenths=130),
+        make_test_player(902, Position.GUARD, expected_fp=24.0, price_tenths=120),
+        make_test_player(903, Position.GUARD, expected_fp=22.0, price_tenths=110),
+        make_test_player(904, Position.FORWARD, expected_fp=26.0, price_tenths=140),
+        make_test_player(905, Position.FORWARD, expected_fp=25.0, price_tenths=135),
+        make_test_player(906, Position.FORWARD, expected_fp=23.0, price_tenths=115),
+        make_test_player(907, Position.CENTER, expected_fp=27.0, price_tenths=150),
+        make_test_player(908, Position.CENTER, expected_fp=24.0, price_tenths=125),
+    ]
+
+    opt = TransferOptimizer()
+    res_2 = opt.optimize_transfers(current_squad=squad, market=market, bank_tenths=300, max_trades=2, top_n=3)
+    assert res_2.total_evaluated_packages <= 5000
+    assert res_2.stage2_evaluations <= max(25, 3)
+    assert len(res_2.recommendations) > 1
+    assert res_2.recommendations[0].net_transfer_value >= res_2.recommendations[1].net_transfer_value
+
+
+def test_transfer_optimizer_work_bounds():
+    """Verify transfer optimization on 200-player market respects work bounds for all trade sizes."""
+    from euroleague_fantasy_manager.models import Position
+    from euroleague_fantasy_manager.optimization.transfers import TransferOptimizer
+
+    squad = make_standard_squad()
+    market = [
+        make_test_player(
+            1000 + i,
+            [Position.GUARD, Position.FORWARD, Position.CENTER][i % 3],
+            expected_fp=5.0 + (i % 25),
+            price_tenths=40 + (i % 150),
+        )
+        for i in range(200)
+    ]
+
+    opt = TransferOptimizer()
+    for trades in (1, 2, 3, 4):
+        res = opt.optimize_transfers(current_squad=squad, market=market, bank_tenths=100, max_trades=trades)
+        assert res.stage2_evaluations <= 25
+        assert res.total_evaluated_packages <= 30000
+        assert len(res.recommendations) > 0

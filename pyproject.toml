@@ -28,7 +28,11 @@ elf = "euroleague_fantasy_manager.cli:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", ".", "tests"]
-addopts = "-q"
+addopts = "-q -m \"not perf and not realdata\""
+markers = [
+    "perf: performance benchmark tests",
+    "realdata: tests requiring local real data database",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/euroleague_fantasy_manager"]

@@ -53,6 +53,7 @@ class TransferOptimizationResult:
     recommendations: tuple[TransferRecommendation, ...]
     total_evaluated_packages: int
     is_exhaustive: bool
+    stage2_evaluations: int = 0
 
 
 class TransferOptimizer:
@@ -379,7 +380,9 @@ class TransferOptimizer:
             screened_packages.sort(key=lambda x: x[0], reverse=True)
             screened_packages = screened_packages[:stage2_cap]
 
+        stage2_evaluations = 0
         for proxy_gain, out_combo, in_players, new_bank, k in screened_packages:
+            stage2_evaluations += 1
             val_res, _ = validate_transfers_constraints(
                 current_squad=squad_contracts,
                 out_ids=[p.player_id for p in out_combo],
@@ -448,4 +451,5 @@ class TransferOptimizer:
             recommendations=tuple(all_recommendations[:top_n]),
             total_evaluated_packages=evaluated_count,
             is_exhaustive=candidate_pool.is_exhaustive,
+            stage2_evaluations=stage2_evaluations,
         )
