@@ -641,18 +641,20 @@ class TeamService:
                 in_id = t["player_in_id"]
                 out_unit = next((u for u in cur_squad if u.player_id == out_id), None)
                 if out_unit:
+                    in_pos = t.get("player_in_position") or out_unit.position
+                    in_tc = t.get("player_in_team_code") or out_unit.team_code
                     new_unit = TeamRosterUnit(
                         player_id=in_id,
-                        position=out_unit.position,
+                        position=in_pos,
                         name=t.get("player_in_name") or f"Player {in_id}",
-                        team_code=out_unit.team_code,
+                        team_code=in_tc,
                         purchase_price_tenths=t.get("price_in_tenths", 0),
                         current_price_tenths=t.get("price_in_tenths", 0),
                         is_starter=out_unit.is_starter,
                         is_captain=out_unit.is_captain,
                         is_sixth_man=out_unit.is_sixth_man,
                         is_bench=out_unit.is_bench,
-                        is_coach=out_unit.is_coach,
+                        is_coach=(in_pos == "HC" or out_unit.is_coach),
                         turn_number=out_unit.turn_number,
                     )
                     cur_squad = [u if u.player_id != out_id else new_unit for u in cur_squad]
@@ -804,10 +806,19 @@ class TeamService:
                     {
                         "player_out_id": out_pid,
                         "player_out_name": getattr(out_by_id.get(out_pid), "name", ""),
+                        "player_out_position": getattr(out_by_id.get(out_pid), "position", ""),
+                        "player_out_team_code": getattr(out_by_id.get(out_pid), "team_code", ""),
                         "player_in_id": contract.player_id,
                         "player_in_name": contract.player_name,
+                        "player_in_position": (
+                            contract.position.short_code
+                            if hasattr(contract.position, "short_code")
+                            else str(contract.position)
+                        ),
+                        "player_in_team_code": contract.team_code,
                         "price_out_tenths": getattr(out_by_id.get(out_pid), "current_price_tenths", 0),
                         "price_in_tenths": contract.price_tenths,
+                        "is_unlimited_round": 1 if is_unlimited else 0,
                     }
                     for out_pid, contract in zip(ordered_out, new_contracts)
                 ],

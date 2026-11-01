@@ -442,3 +442,290 @@ def test_p2_2_audit_failure_causes_full_rollback_and_preserves_round_pointer(tmp
     # Byte/row identical snapshots across all tables
     for table in tables:
         assert _table_snapshot(db_file, table) == baseline_snapshots[table], f"Table {table} changed on rollback!"
+
+
+def test_p2_3_replay_forward_preserves_player_position_and_club(tmp_path: Path) -> None:
+    """STATE-3: Replay forward preserves incoming players' own position and club instead of inheriting from out_unit.
+
+    Test specification: round-2 trade sells G100 and F200, buys F250 and G150; a later round-1 edit triggers replay;
+    the live squad has (250, 'F', 'RMB') and (150, 'G', 'BAR').
+    """
+    from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
+    from euroleague_fantasy_manager.models import Position
+
+    db_file = tmp_path / "replay_pos_test.sqlite3"
+    team_store = TeamStore(db_path=db_file)
+    team_service = TeamService(store=team_store)
+
+    # Initial squad at round 1:
+    # 101: G, OLY; 102: G, OLY; 103: G, PAO; 104: G, PAO
+    # 105: F, RMB; 106: F, RMB; 107: F, BAR; 108: F, BAR
+    # 109: C, EFS; 110: C, EFS
+    # 111: HC, OLY
+    squad_r1 = _make_legal_squad(offset=100)
+    # Give player 101 and 105 specific IDs and positions matching test:
+    # Let 100 be G (OLY) and 200 be F (PAO)
+    squad_r1[0] = TeamRosterUnit(
+        player_id=100, position="G", name="G100", team_code="OLY",
+        purchase_price_tenths=80, current_price_tenths=80, is_starter=True,
+    )
+    squad_r1[4] = TeamRosterUnit(
+        player_id=200, position="F", name="F200", team_code="PAO",
+        purchase_price_tenths=80, current_price_tenths=80, is_starter=False,
+    )
+
+    team = team_service.create_team(
+        team_id="team_replay",
+        name="Replay Test Team",
+        league="euroleague",
+        round_number=1,
+        bank_tenths=200,
+        squad=squad_r1,
+    )
+
+    # Advance team to round 2
+    team_store.save_round_checkpoint(
+        team_id="team_replay",
+        round_number=2,
+        season="2026/27",
+        bank_tenths=200,
+        transfers_remaining=4,
+        squad=squad_r1,
+    )
+    team.round_number = 2
+    team_store.update_team(team)
+
+    # Market for round 2 trades:
+    # Buying F250 (Forward, RMB) and G150 (Guard, BAR)
+    market_r2 = {
+        250: PlayerProjectionContract(
+            player_id=250, player_name="F250", position=Position.FORWARD,
+            team_id=5, team_code="RMB", price_tenths=80, turn_number=1, is_home=True, expected_fp=15.0,
+        ),
+        150: PlayerProjectionContract(
+            player_id=150, player_name="G150", position=Position.GUARD,
+            team_id=6, team_code="BAR", price_tenths=80, turn_number=1, is_home=True, expected_fp=15.0,
+        ),
+    }
+
+    # Execute round 2 trades:
+    # Sell G100 and F200 -> buy F250 and G150
+    team_service.execute_transfers(
+        team_id="team_replay",
+        transfers_out_ids=[100, 200],
+        transfers_in_ids=[250, 150],
+        round_number=2,
+        season="2026/27",
+        market_projections=market_r2,
+    )
+
+    # Advance team to round 3 (live round)
+    squad_r2 = team_store.get_squad("team_replay", 2)
+    team_store.save_round_checkpoint(
+        team_id="team_replay",
+        round_number=3,
+        season="2026/27",
+        bank_tenths=200,
+        transfers_remaining=4,
+        squad=squad_r2,
+    )
+    team = team_service.get_team("team_replay")
+    team.round_number = 3
+    team.squad = squad_r2
+    team_store.update_team(team)
+
+    # Now simulate a later round-1 edit (e.g. trading player 102 for recruit 999 at round 1)
+    market_r1 = {
+        999: PlayerProjectionContract(
+            player_id=999, player_name="Guard 999", position=Position.GUARD,
+            team_id=1, team_code="OLY", price_tenths=80, turn_number=1, is_home=True, expected_fp=14.0,
+        ),
+    }
+    team_service.execute_transfers(
+        team_id="team_replay",
+        transfers_out_ids=[102],
+        transfers_in_ids=[999],
+        round_number=1,
+        season="2026/27",
+        market_projections=market_r1,
+    )
+
+    # Replay forward ran through round 2 up to live round 3!
+    live_team = team_service.get_team("team_replay")
+    assert live_team.round_number == 3
+
+    # Verify live squad has (250, 'F', 'RMB') and (150, 'G', 'BAR')
+    unit_250 = next((u for u in live_team.squad if u.player_id == 250), None)
+    assert unit_250 is not None
+    assert unit_250.position == "F"
+    assert unit_250.team_code == "RMB"
+
+    unit_150 = next((u for u in live_team.squad if u.player_id == 150), None)
+    assert unit_150 is not None
+    assert unit_150.position == "G"
+    assert unit_150.team_code == "BAR"
+
+
+def test_p2_3_transfers_migration_and_doctor_report(tmp_path: Path) -> None:
+    """Migration adds new columns, backfills from snapshots, and doctor reports unresolved rows."""
+    from euroleague_fantasy_manager.multi_team.migrations import (
+        backfill_transfers_from_snapshots,
+        inspect_database_health,
+        migrate_transfers_schema,
+    )
+    from euroleague_fantasy_manager.db import connect_db
+    import subprocess
+    import sys
+
+    db_file = tmp_path / "doctor_test.sqlite3"
+
+    # Create legacy table without new columns
+    with connect_db(db_file) as conn:
+        conn.execute("""
+            CREATE TABLE managed_teams (
+                team_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                league TEXT NOT NULL DEFAULT 'euroleague',
+                mode TEXT NOT NULL DEFAULT 'classic',
+                season TEXT NOT NULL DEFAULT '2026/27',
+                round_number INTEGER NOT NULL DEFAULT 1,
+                turn_number INTEGER NOT NULL DEFAULT 1,
+                bank_tenths INTEGER NOT NULL DEFAULT 0,
+                transfers_remaining INTEGER NOT NULL DEFAULT 4,
+                settings_json TEXT NOT NULL DEFAULT '{}',
+                is_active INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE team_transfers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                team_id TEXT NOT NULL,
+                round_number INTEGER NOT NULL,
+                season TEXT NOT NULL,
+                player_out_id INTEGER NOT NULL,
+                player_out_name TEXT NOT NULL DEFAULT '',
+                player_in_id INTEGER NOT NULL,
+                player_in_name TEXT NOT NULL DEFAULT '',
+                price_out_tenths INTEGER NOT NULL DEFAULT 0,
+                price_in_tenths INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+        """)
+        # Insert a managed team
+        conn.execute("""
+            INSERT INTO managed_teams VALUES (
+                'team_doc', 'Doc Team', 'euroleague', 'classic', '2026/27', 1, 1, 100, 4, '{}', 1,
+                '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z'
+            );
+        """)
+        # Insert two legacy transfer rows
+        # Row 1 will be resolvable via snapshot
+        conn.execute("""
+            INSERT INTO team_transfers VALUES (
+                1, 'team_doc', 1, '2026/27', 10, 'Out Player', 20, 'In Player', 80, 80, '2026-10-01T00:00:00Z'
+            );
+        """)
+        # Row 2 will be unresolvable (player 9999 not in snapshot)
+        conn.execute("""
+            INSERT INTO team_transfers VALUES (
+                2, 'team_doc', 1, '2026/27', 10, 'Out Player', 9999, 'Missing Player', 80, 80, '2026-10-01T00:00:00Z'
+            );
+        """)
+
+        # Create snapshots and players tables to support backfill
+        conn.execute("""
+            CREATE TABLE snapshots (
+                snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                round_number INTEGER NOT NULL,
+                season_code TEXT,
+                league_id INTEGER NOT NULL,
+                scraped_at TEXT NOT NULL
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE players (
+                snapshot_id INTEGER NOT NULL,
+                id INTEGER NOT NULL,
+                first_name TEXT NOT NULL,
+                last_name TEXT NOT NULL,
+                name TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                position_code TEXT NOT NULL,
+                team_id INTEGER NOT NULL,
+                team_code TEXT NOT NULL,
+                team_name TEXT NOT NULL,
+                price_tenths INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                probability_of_playing REAL NOT NULL DEFAULT 1.0,
+                turn_number INTEGER NOT NULL DEFAULT 1,
+                last_match_pts REAL NOT NULL DEFAULT 0.0,
+                avg_fantasy_pts REAL NOT NULL DEFAULT 0.0,
+                total_plus_tenths INTEGER NOT NULL DEFAULT 0,
+                popularity REAL NOT NULL DEFAULT 0.0,
+                is_injured INTEGER NOT NULL DEFAULT 0,
+                is_on_fire INTEGER NOT NULL DEFAULT 0,
+                has_played INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        conn.execute("INSERT INTO snapshots VALUES (1, 1, '2026/27', 10, '2026-10-01T00:00:00Z');")
+        # Player 10: Guard, OLY
+        conn.execute("""
+            INSERT INTO players VALUES (
+                1, 10, 'First10', 'Last10', 'Out Player', 1, 'G', 1, 'OLY', 'Olympiacos', 80, 'AVAILABLE',
+                1.0, 1, 0.0, 0.0, 0, 0.0, 0, 0, 0
+            );
+        """)
+        # Player 20: Forward, RMB
+        conn.execute("""
+            INSERT INTO players VALUES (
+                1, 20, 'First20', 'Last20', 'In Player', 2, 'F', 2, 'RMB', 'Real Madrid', 80, 'AVAILABLE',
+                1.0, 1, 0.0, 0.0, 0, 0.0, 0, 0, 0
+            );
+        """)
+
+    # 1. Test schema migration
+    with connect_db(db_file) as conn:
+        migrate_transfers_schema(conn)
+        cols = [c[1] for c in conn.execute("PRAGMA table_info(team_transfers);").fetchall()]
+        assert "player_in_position" in cols
+        assert "player_in_team_code" in cols
+        assert "player_out_position" in cols
+        assert "player_out_team_code" in cols
+        assert "is_unlimited_round" in cols
+
+    # 2. Test backfill
+    with connect_db(db_file) as conn:
+        report = backfill_transfers_from_snapshots(conn)
+        assert report.total_scanned == 2
+        assert report.updated == 2  # Both attempted
+        assert len(report.unresolved) == 1  # Row 2 unresolved because player 9999 was not in snapshot
+
+        row1 = conn.execute("SELECT * FROM team_transfers WHERE id = 1;").fetchone()
+        assert row1["player_out_position"] == "G"
+        assert row1["player_out_team_code"] == "OLY"
+        assert row1["player_in_position"] == "F"
+        assert row1["player_in_team_code"] == "RMB"
+
+        row2 = conn.execute("SELECT * FROM team_transfers WHERE id = 2;").fetchone()
+        assert row2["player_out_position"] == "G"
+        assert row2["player_in_position"] is None  # Unresolved
+
+    # 3. Test inspect_database_health
+    health = inspect_database_health(db_file)
+    assert health["status"] == "warning"
+    assert health["unresolved_count"] == 1
+    assert health["unresolved_records"][0]["player_in_id"] == 9999
+
+    # 4. Test elf doctor CLI execution
+    proc = subprocess.run(
+        [sys.executable, "-m", "euroleague_fantasy_manager.cli", "doctor", "--database", str(db_file), "--json"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0
+    import json
+    data = json.loads(proc.stdout)
+    assert data["unresolved_count"] == 1

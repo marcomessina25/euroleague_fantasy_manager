@@ -134,10 +134,15 @@ class TeamStore:
                     season TEXT NOT NULL,
                     player_out_id INTEGER NOT NULL,
                     player_out_name TEXT NOT NULL DEFAULT '',
+                    player_out_position TEXT,
+                    player_out_team_code TEXT,
                     player_in_id INTEGER NOT NULL,
                     player_in_name TEXT NOT NULL DEFAULT '',
+                    player_in_position TEXT,
+                    player_in_team_code TEXT,
                     price_out_tenths INTEGER NOT NULL DEFAULT 0,
                     price_in_tenths INTEGER NOT NULL DEFAULT 0,
+                    is_unlimited_round INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (team_id) REFERENCES managed_teams(team_id) ON DELETE CASCADE
                 );
@@ -168,6 +173,12 @@ class TeamStore:
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS one_active_team ON managed_teams(is_active) WHERE is_active = 1;"
             )
+            from euroleague_fantasy_manager.multi_team.migrations import (
+                backfill_transfers_from_snapshots,
+                migrate_transfers_schema,
+            )
+            migrate_transfers_schema(conn)
+            backfill_transfers_from_snapshots(conn)
 
     def create_team(self, team: Team, conn: sqlite3.Connection | None = None) -> Team:
         """Create a new team, enforcing the strict max 6 teams limit inside BEGIN IMMEDIATE."""
@@ -543,9 +554,11 @@ class TeamStore:
                 cur = c.execute(
                     """
                     INSERT INTO team_transfers (
-                        team_id, round_number, season, player_out_id, player_out_name,
-                        player_in_id, player_in_name, price_out_tenths, price_in_tenths, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                        team_id, round_number, season,
+                        player_out_id, player_out_name, player_out_position, player_out_team_code,
+                        player_in_id, player_in_name, player_in_position, player_in_team_code,
+                        price_out_tenths, price_in_tenths, is_unlimited_round, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
                     (
                         team_id,
@@ -553,10 +566,15 @@ class TeamStore:
                         season,
                         int(m["player_out_id"]),
                         str(m.get("player_out_name", "")),
+                        m.get("player_out_position"),
+                        m.get("player_out_team_code"),
                         int(m["player_in_id"]),
                         str(m.get("player_in_name", "")),
+                        m.get("player_in_position"),
+                        m.get("player_in_team_code"),
                         int(m.get("price_out_tenths", 0)),
                         int(m.get("price_in_tenths", 0)),
+                        1 if m.get("is_unlimited_round") else 0,
                         now,
                     ),
                 )
@@ -605,10 +623,15 @@ class TeamStore:
                 "season": row["season"],
                 "player_out_id": row["player_out_id"],
                 "player_out_name": row["player_out_name"],
+                "player_out_position": row["player_out_position"] if "player_out_position" in row.keys() else None,
+                "player_out_team_code": row["player_out_team_code"] if "player_out_team_code" in row.keys() else None,
                 "player_in_id": row["player_in_id"],
                 "player_in_name": row["player_in_name"],
+                "player_in_position": row["player_in_position"] if "player_in_position" in row.keys() else None,
+                "player_in_team_code": row["player_in_team_code"] if "player_in_team_code" in row.keys() else None,
                 "price_out_tenths": row["price_out_tenths"],
                 "price_in_tenths": row["price_in_tenths"],
+                "is_unlimited_round": bool(row["is_unlimited_round"]) if "is_unlimited_round" in row.keys() else False,
                 "created_at": row["created_at"],
             }
             for row in rows

@@ -58,6 +58,9 @@ def test_db(tmp_path: Path) -> Path:
         seasons=("E2024", "E2025", "U2024", "U2025"),
         rounds_per_season=4,
     )
+    import sqlite3
+    with sqlite3.connect(str(db_path)) as c:
+        c.execute("PRAGMA wal_checkpoint(TRUNCATE);")
     return db_path
 
 

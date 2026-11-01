@@ -766,6 +766,13 @@ def build_parser() -> argparse.ArgumentParser:
     cert_parser = subparsers.add_parser("certify-v1", help="Run automated V1.0 release certification suite.")
     cert_parser.add_argument("--json", action="store_true", help="Output JSON certification report.")
 
+    doctor_parser = subparsers.add_parser(
+        "doctor",
+        help="Inspect database health and list unresolved migration/backfill records.",
+    )
+    doctor_parser.add_argument("--database", type=Path, default=None, help="Database path override.")
+    doctor_parser.add_argument("--json", action="store_true", help="Output JSON report.")
+
     return parser
 
 
@@ -1725,6 +1732,28 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"  - {sc} ({data['competition']}): {data['games_saved']} games, {data['boxscores_saved']} box scores")
             print("=" * 60)
         return 0
+
+    if args.command == "doctor":
+        from .multi_team.migrations import inspect_database_health
+        target_db = args.database or args.db or paths.database_path()
+        report = inspect_database_health(target_db)
+        if getattr(args, "json", False):
+            print(json.dumps(report, indent=2))
+        else:
+            print("=== EuroLeague Fantasy Manager Doctor ===")
+            print(f"Database: {report.get('database_path')}")
+            print(f"Status:   {report.get('status', 'unknown').upper()}")
+            print(f"Scanned:  {report.get('scanned', 0)}")
+            print(f"Updated:  {report.get('backfilled', 0)}")
+            print(f"Unresolved rows: {report.get('unresolved_count', 0)}")
+            if report.get("unresolved_records"):
+                print("\nUnresolved transfer records:")
+                for rec in report["unresolved_records"]:
+                    print(
+                        f"  - Trade ID {rec.get('id')}: Team {rec.get('team_id')} Round {rec.get('round_number')} "
+                        f"(Sold {rec.get('player_out_id')}, Bought {rec.get('player_in_id')})"
+                    )
+        return 0 if report.get("status") != "error" else 1
 
     if args.command == "certify-v1":
         from .certification import run_v1_certification

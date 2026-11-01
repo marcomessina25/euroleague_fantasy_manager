@@ -238,7 +238,7 @@ def test_w2_eurocup_ingestion_and_schema_v3(tmp_path: Path):
     with store._connect() as conn:
         row = conn.execute("SELECT competition_code FROM snapshots WHERE id = ?", (summary.snapshot_id,)).fetchone()
         assert row["competition_code"] == "U"
-        assert store._get_schema_version(conn) == 3
+        assert store._get_schema_version(conn) >= 3
         # Check index idx_snapshots_league_id exists
         indices = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_snapshots_league_id'"
