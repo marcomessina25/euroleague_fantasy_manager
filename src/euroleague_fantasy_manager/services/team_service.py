@@ -64,6 +64,9 @@ class TeamService:
             raise ValueError(f"round_number must be at least 1; got {round_number}.")
         if bank_tenths < 0:
             raise ValueError("Bank credits cannot be negative.")
+        import re
+        if not re.match(r"^[A-Za-z0-9_-]{1,40}$", team_id):
+            raise ValueError(f"Invalid team_id '{team_id}'; must match ^[A-Za-z0-9_-]{{1,40}}$")
         existing = self.store.get_team(team_id)
         if existing:
             raise ValueError(f"Team with ID '{team_id}' already exists.")

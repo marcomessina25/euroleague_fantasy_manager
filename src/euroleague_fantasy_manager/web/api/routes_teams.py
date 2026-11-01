@@ -6,7 +6,7 @@ import re
 import time
 from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from euroleague_fantasy_manager.competition.ruleset import League
 from euroleague_fantasy_manager.models import NoSnapshotForRoundError, UnknownPlayerError
@@ -33,6 +33,13 @@ router = APIRouter(prefix="/api/teams", tags=["teams"])
 class CreateTeamRequest(BaseModel):
     team_id: str | None = None
     name: str
+
+    @field_validator("team_id")
+    @classmethod
+    def validate_team_id(cls, v: str | None) -> str | None:
+        if v is not None and not re.match(r"^[A-Za-z0-9_-]{1,40}$", v):
+            raise ValueError("team_id must match ^[A-Za-z0-9_-]{1,40}$")
+        return v
     league: str = "euroleague"
     mode: str = "classic"
     season: str = "2026/27"

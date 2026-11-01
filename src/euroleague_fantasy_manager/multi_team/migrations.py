@@ -221,3 +221,33 @@ def inspect_database_health(db_path: Path) -> dict[str, Any]:
             "unresolved_count": len(unresolved_records),
             "unresolved_records": unresolved_records,
         }
+
+
+def migrate_invalid_team_ids(conn: sqlite3.Connection) -> int:
+    """Rename any legacy invalid team IDs to match ^[A-Za-z0-9_-]{1,40}$ (WEB-10)."""
+    import re
+
+    has_teams = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='managed_teams';"
+    ).fetchone()
+    if not has_teams:
+        return 0
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT team_id FROM managed_teams")
+    rows = cursor.fetchall()
+    migrated = 0
+    for (tid,) in rows:
+        if not re.match(r"^[A-Za-z0-9_-]{1,40}$", str(tid)):
+            clean = re.sub(r"[^A-Za-z0-9_-]", "_", str(tid))[:40] or "team_legacy"
+            new_tid = clean
+            suffix = 1
+            while cursor.execute("SELECT 1 FROM managed_teams WHERE team_id = ?", (new_tid,)).fetchone():
+                new_tid = f"{clean[:35]}_{suffix}"
+                suffix += 1
+            cursor.execute("UPDATE managed_teams SET team_id = ? WHERE team_id = ?", (new_tid, tid))
+            cursor.execute("UPDATE managed_team_squads SET team_id = ? WHERE team_id = ?", (new_tid, tid))
+            cursor.execute("UPDATE team_round_checkpoints SET team_id = ? WHERE team_id = ?", (new_tid, tid))
+            cursor.execute("UPDATE team_transfers SET team_id = ? WHERE team_id = ?", (new_tid, tid))
+            migrated += 1
+    return migrated

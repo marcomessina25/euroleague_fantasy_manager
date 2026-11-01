@@ -175,9 +175,11 @@ class TeamStore:
             )
             from euroleague_fantasy_manager.multi_team.migrations import (
                 backfill_transfers_from_snapshots,
+                migrate_invalid_team_ids,
                 migrate_transfers_schema,
             )
             migrate_transfers_schema(conn)
+            migrate_invalid_team_ids(conn)
             backfill_transfers_from_snapshots(conn)
 
     def create_team(self, team: Team, conn: sqlite3.Connection | None = None) -> Team:

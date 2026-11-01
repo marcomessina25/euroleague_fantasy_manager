@@ -187,7 +187,7 @@ async function loadTeams() {
 
 async function deleteTeam(teamId) {
   try {
-    const res = await fetch(`/api/teams/${teamId}`, { method: "DELETE" });
+    const res = await fetch(`/api/teams/${encodeURIComponent(teamId)}`, { method: "DELETE" });
     if (res.ok) {
       state.activeTeamId = null;
       await loadTeams();
@@ -207,7 +207,7 @@ async function deleteTeam(teamId) {
 async function switchTeam(teamId) {
   const changed = teamId !== state.activeTeamId;
   state.activeTeamId = teamId;
-  await fetch(`/api/teams/${teamId}/active`, { method: "POST" });
+  await fetch(`/api/teams/${encodeURIComponent(teamId)}/active`, { method: "POST" });
   await loadTeams();
   await loadRules(activeTeamLeague());
   await loadDashboard();
@@ -295,7 +295,7 @@ async function submitRenameTeam() {
   if (!newName) return;
 
   try {
-    const res = await fetch(`/api/teams/${teamId}`, {
+    const res = await fetch(`/api/teams/${encodeURIComponent(teamId)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: newName }),
@@ -479,10 +479,10 @@ function createPlayerCard(player, lineup, roleType = "starter") {
   if (!isCoach) {
     actionHtml = `
       <div class="card-action-bar">
-        <button class="card-action-btn ${isCap ? "active-cap" : ""}" title="${isCap ? "Current Captain" : "Make Captain"}" onclick="event.stopPropagation(); setCaptain(${player.player_id})">
+        <button class="card-action-btn ${isCap ? "active-cap" : ""}" title="${isCap ? "Current Captain" : "Make Captain"}" data-action="set-captain" data-player-id="${player.player_id}">
           👑 ${isCap ? "Cap" : "Cap"}
         </button>
-        <button class="card-action-btn ${isSubSource ? "active-cap" : ""}" title="Substitute Player" onclick="event.stopPropagation(); toggleSubMode(${player.player_id})">
+        <button class="card-action-btn ${isSubSource ? "active-cap" : ""}" title="Substitute Player" data-action="toggle-sub-mode" data-player-id="${player.player_id}">
           ⇄ Sub
         </button>
       </div>
@@ -647,7 +647,7 @@ async function setCaptain(playerId) {
   const coachId = l.coach ? l.coach.player_id : (l.coach_id || 0);
 
   try {
-    const res = await fetch(`/api/teams/${state.activeTeamId}/lineup`, {
+    const res = await fetch(`/api/teams/${encodeURIComponent(state.activeTeamId)}/lineup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -759,7 +759,7 @@ async function executeDirectSwap(sourceId, targetId) {
   }
 
   try {
-    const res = await fetch(`/api/teams/${state.activeTeamId}/lineup`, {
+    const res = await fetch(`/api/teams/${encodeURIComponent(state.activeTeamId)}/lineup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -874,7 +874,7 @@ function renderBadgeChip(badgeText, playerId) {
   else if (b.includes("Foul")) cls += " badge-foul";
   else cls += " badge-blue";
 
-  const clickAttr = playerId ? `onclick="event.stopPropagation(); openPlayerIntelModal(${playerId})"` : "";
+  const clickAttr = playerId ? `data-action="open-player-intel" data-player-id="${playerId}"` : "";
   return `<span class="${cls}" style="font-size:0.7rem; padding:0.1rem 0.35rem; cursor:pointer;" title="${escapeHtml(b)}" ${clickAttr}>${escapeHtml(b)}</span>`;
 }
 
@@ -1030,7 +1030,7 @@ async function triggerOptimizeLineup() {
   if (res.ok) {
     const lineup = await res.json();
     // Persist optimized lineup to team
-    await fetch(`/api/teams/${state.activeTeamId}/lineup`, {
+    await fetch(`/api/teams/${encodeURIComponent(state.activeTeamId)}/lineup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1054,7 +1054,7 @@ async function triggerOptimizeLineup() {
 async function undoLineupOptimization() {
   if (!previousLineupSnapshot || !state.activeTeamId) return;
   try {
-    const res = await fetch(`/api/teams/${state.activeTeamId}/lineup`, {
+    const res = await fetch(`/api/teams/${encodeURIComponent(state.activeTeamId)}/lineup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...previousLineupSnapshot, ...lineupRoundPayload() }),
@@ -1122,7 +1122,7 @@ function renderIntraRoundSquadTable(lineup) {
 
     tr.innerHTML = `
       <td>
-        <strong style="cursor:pointer;" onclick="openPlayerModal(${p.player_id})">${escapeHtml(p.name)}</strong>
+        <strong style="cursor:pointer;" data-action="open-player-modal" data-player-id="${p.player_id}">${escapeHtml(p.name)}</strong>
         <span class="player-pos-badge" style="margin-left:0.3rem;">${pos}</span>
       </td>
       <td>${roleBadge}</td>
@@ -1223,7 +1223,7 @@ function renderIntraSubResults(data) {
   if (!isOptimalNow) {
     actionBtnHtml = `
       <div style="margin-top:1rem; display:flex; justify-content:flex-end;">
-        <button class="btn btn-primary" onclick="applyIntraRoundSubstitutions()" id="btn-apply-intra-sub">
+        <button class="btn btn-primary" data-action="apply-intra-sub" id="btn-apply-intra-sub">
           ✓ Apply Optimal Substitutions & Log Decision
         </button>
       </div>
@@ -1304,7 +1304,7 @@ async function confirmRevertRoundStart() {
   }
 
   try {
-    const res = await fetch(`/api/teams/${state.activeTeamId}/revert-round-start`, {
+    const res = await fetch(`/api/teams/${encodeURIComponent(state.activeTeamId)}/revert-round-start`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ season: state.season, round_number: state.roundNumber }),
@@ -1343,7 +1343,7 @@ async function loadTradeStudio() {
   if (!state.activeTeamId) return;
 
   try {
-    const res = await fetch(`/api/teams/${state.activeTeamId}`);
+    const res = await fetch(`/api/teams/${encodeURIComponent(state.activeTeamId)}`);
     if (!res.ok) return;
     const team = await res.json();
 
@@ -1393,7 +1393,7 @@ function renderTradeStudioSquad() {
 
     tr.innerHTML = `
       <td>
-        <strong style="cursor:pointer;" onclick="openPlayerModal(${unit.player_id})">${escapeHtml(unit.name)}</strong>
+        <strong style="cursor:pointer;" data-action="open-player-modal" data-player-id="${unit.player_id}">${escapeHtml(unit.name)}</strong>
         <span style="color:var(--text-muted); font-size:0.75rem;">(${escapeHtml(unit.team_code || "UNK")})</span>
       </td>
       <td><span class="player-pos-badge">${pos}</span></td>
@@ -1402,7 +1402,7 @@ function renderTradeStudioSquad() {
       <td>
         <button class="btn ${isOut ? "btn-secondary" : "btn-primary"}"
                 style="padding:0.2rem 0.5rem; font-size:0.75rem; ${isOut ? "border-color:var(--accent-red); color:var(--accent-red);" : ""}"
-                onclick="toggleTradeOut(${unit.player_id}, '${escapeHtml(unit.name).replace(/'/g, "\\'")}', ${unit.current_price_tenths / 10.0})">
+                data-action="toggle-trade-out" data-player-id="${unit.player_id}" data-player-name="${escapeHtml(unit.name)}" data-player-credits="${unit.current_price_tenths / 10.0}">
           ${isOut ? "✓ Selected (Out)" : "✕ Sell"}
         </button>
       </td>
@@ -1493,7 +1493,7 @@ function updateTradeStudioUI() {
       outContainer.innerHTML = `<span style="color:var(--text-muted); font-size:0.8rem; font-style:italic;">None selected</span>`;
     } else {
       outContainer.innerHTML = tradeStudioState.transfersOut.map(
-        (p) => `<span class="trade-chip out">${escapeHtml(p.name)} (${p.credits} cr) <span class="trade-chip-remove" onclick="removeTradeOut(${p.id})">✕</span></span>`
+        (p) => `<span class="trade-chip out">${escapeHtml(p.name)} (${p.credits} cr) <span class="trade-chip-remove" data-action="remove-trade-out" data-player-id="${p.id}">✕</span></span>`
       ).join(" ");
     }
   }
@@ -1504,7 +1504,7 @@ function updateTradeStudioUI() {
       inContainer.innerHTML = `<span style="color:var(--text-muted); font-size:0.8rem; font-style:italic;">None selected</span>`;
     } else {
       inContainer.innerHTML = tradeStudioState.transfersIn.map(
-        (p) => `<span class="trade-chip in">${escapeHtml(p.name)} (${p.credits} cr) <span class="trade-chip-remove" onclick="removeTradeIn(${p.id})">✕</span></span>`
+        (p) => `<span class="trade-chip in">${escapeHtml(p.name)} (${p.credits} cr) <span class="trade-chip-remove" data-action="remove-trade-in" data-player-id="${p.id}">✕</span></span>`
       ).join(" ");
     }
   }
@@ -1574,6 +1574,7 @@ async function triggerSuggestTransfers() {
       const recs = (data.recommendations && data.recommendations.length > 0)
         ? data.recommendations
         : (data.best_recommendation ? [data.best_recommendation] : []);
+      tradeStudioState.currentRecommendations = recs;
 
       if (recs.length === 0 || !recs[0].transfers_out_details || recs[0].transfers_out_details.length === 0) {
         if (banner) {
@@ -1612,7 +1613,7 @@ async function triggerSuggestTransfers() {
                 </div>
               </div>
               <div>
-                <button class="btn ${isOptimal ? "btn-primary" : "btn-secondary"}" style="padding:0.35rem 0.8rem; font-size:0.8rem;" onclick="applySuggestedTrade(${outsJson}, ${insJson})">
+                <button class="btn ${isOptimal ? "btn-primary" : "btn-secondary"}" style="padding:0.35rem 0.8rem; font-size:0.8rem;" data-action="apply-suggested-trade-package" data-rec-idx="${idx}">
                   Apply to Studio
                 </button>
               </div>
@@ -1646,7 +1647,7 @@ async function submitExecuteTransfers() {
   if (btn) btn.disabled = true;
 
   try {
-    const res = await fetch(`/api/teams/${state.activeTeamId}/transfers`, {
+    const res = await fetch(`/api/teams/${encodeURIComponent(state.activeTeamId)}/transfers`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1733,9 +1734,9 @@ async function loadPlayerPool(opts) {
         if (inSquad) {
           actionBtn = `<span style="font-size:0.75rem; color:var(--text-muted); font-style:italic;">In Squad</span>`;
         } else if (isIn) {
-          actionBtn = `<button class="btn btn-secondary" style="padding:0.2rem 0.5rem; font-size:0.75rem; color:var(--accent-green); border-color:var(--accent-green);" onclick="removeTradeIn(${p.player_id})">✓ In (Remove)</button>`;
+          actionBtn = `<button class="btn btn-secondary" style="padding:0.2rem 0.5rem; font-size:0.75rem; color:var(--accent-green); border-color:var(--accent-green);" data-action="remove-trade-in" data-player-id="${p.player_id}">✓ In (Remove)</button>`;
         } else {
-          actionBtn = `<button class="btn btn-primary" style="padding:0.2rem 0.5rem; font-size:0.75rem;" onclick="addTradeIn(${p.player_id}, '${escapeHtml(p.name).replace(/'/g, "\\'")}', ${p.credits})">+ Buy</button>`;
+          actionBtn = `<button class="btn btn-primary" style="padding:0.2rem 0.5rem; font-size:0.75rem;" data-action="add-trade-in" data-player-id="${p.player_id}" data-player-name="${escapeHtml(p.name)}" data-player-credits="${p.credits}">+ Buy</button>`;
         }
 
         let badgesHtml = "";
@@ -1746,7 +1747,7 @@ async function loadPlayerPool(opts) {
         tr.innerHTML = `
           <td>
             <div style="display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap;">
-              <strong style="cursor:pointer;" onclick="openPlayerIntelModal(${p.player_id})" title="Click to view basketball intelligence">${escapeHtml(p.name)}</strong>
+              <strong style="cursor:pointer;" data-action="open-player-intel" data-player-id="${p.player_id}" title="Click to view basketball intelligence">${escapeHtml(p.name)}</strong>
               <span style="color:var(--text-muted); font-size:0.75rem;">(${escapeHtml(p.team_code || "UNK")})</span>
               ${badgesHtml}
             </div>
@@ -1977,7 +1978,7 @@ async function loadTeamBuilderPool() {
     const count = teamBuilderState.allPlayers.length;
     if (count === 0) {
       const label = league === "eurocup" ? "EuroCup" : "EuroLeague";
-      poolIndicator.innerHTML = `0 players available — <a href="#" onclick="triggerUpdateData('${league === "eurocup" ? "eurocup" : "euroleague"}'); return false;">download ${label} data</a>`;
+      poolIndicator.innerHTML = `0 players available — <a href="#" data-action="trigger-update-data" data-league="${league === "eurocup" ? "eurocup" : "euroleague"}">download ${label} data</a>`;
     } else {
       poolIndicator.textContent = `${count} players available (Round ${round})`;
     }
@@ -2324,7 +2325,7 @@ function updateTeamBuilderUI() {
       <td style="color:var(--accent-orange); font-weight:700;">${p.expected_fp} FP</td>
       <td><span class="badge ${p.is_locked ? "badge-blue" : "badge-green"}">${p.is_locked ? "🔒 Locked" : "⚡ Suggested"}</span></td>
       <td>
-        <button class="btn btn-secondary" style="padding:0.2rem 0.5rem; font-size:0.75rem; color:var(--accent-red);" onclick="removePlayerFromTeamBuilder(${p.player_id})">✕ Remove</button>
+        <button class="btn btn-secondary" style="padding:0.2rem 0.5rem; font-size:0.75rem; color:var(--accent-red);" data-action="remove-team-builder-player" data-player-id="${p.player_id}">✕ Remove</button>
       </td>
     `;
     tbody.appendChild(tr);
@@ -2604,8 +2605,23 @@ function onCopilotModelChanged() {
 function restoreCopilotApiKey() {
   const providerSel = document.getElementById("copilot-provider");
   const keyInput = document.getElementById("copilot-api-key");
+  const rememberCb = document.getElementById("copilot-remember-key");
+  const warn = document.getElementById("copilot-remember-warning");
   if (!providerSel || !keyInput) return;
-  keyInput.value = localStorage.getItem(`elf_copilot_api_key_${providerSel.value}`) || "";
+
+  const keyName = `elf_copilot_api_key_${providerSel.value}`;
+  const localVal = localStorage.getItem(keyName);
+  const sessionVal = sessionStorage.getItem(keyName);
+
+  if (localVal) {
+    keyInput.value = localVal;
+    if (rememberCb) rememberCb.checked = true;
+    if (warn) warn.style.display = "block";
+  } else {
+    keyInput.value = sessionVal || "";
+    if (rememberCb) rememberCb.checked = false;
+    if (warn) warn.style.display = "none";
+  }
   const hint = document.getElementById("copilot-key-hint");
   if (hint) hint.style.display = "none";
 }
@@ -2613,8 +2629,18 @@ function restoreCopilotApiKey() {
 function onCopilotApiKeyInput() {
   const providerSel = document.getElementById("copilot-provider");
   const keyInput = document.getElementById("copilot-api-key");
+  const rememberCb = document.getElementById("copilot-remember-key");
   if (!providerSel || !keyInput) return;
-  localStorage.setItem(`elf_copilot_api_key_${providerSel.value}`, keyInput.value);
+
+  const keyName = `elf_copilot_api_key_${providerSel.value}`;
+  const val = keyInput.value;
+  sessionStorage.setItem(keyName, val);
+
+  if (rememberCb && rememberCb.checked) {
+    localStorage.setItem(keyName, val);
+  } else {
+    localStorage.removeItem(keyName);
+  }
 }
 
 function toggleCopilotApiKeyVisibility() {
@@ -2859,3 +2885,54 @@ function copyCopilotAdvice() {
     console.error("Failed to copy advice:", err);
   });
 }
+
+
+function onCopilotRememberKeyChange() {
+  const cb = document.getElementById("copilot-remember-key");
+  const warn = document.getElementById("copilot-remember-warning");
+  if (warn) warn.style.display = (cb && cb.checked) ? "block" : "none";
+  onCopilotApiKeyInput();
+}
+
+// Delegated click handler for data-action elements (eliminates inline JS handlers)
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-action]");
+  if (!el) return;
+  const action = el.dataset.action;
+  if (!action) return;
+
+  if (action === "set-captain") {
+    e.stopPropagation();
+    setCaptain(Number(el.dataset.playerId));
+  } else if (action === "toggle-sub-mode") {
+    e.stopPropagation();
+    toggleSubMode(Number(el.dataset.playerId));
+  } else if (action === "open-player-intel") {
+    e.stopPropagation();
+    openPlayerIntelModal(Number(el.dataset.playerId));
+  } else if (action === "open-player-modal") {
+    e.stopPropagation();
+    openPlayerModal(Number(el.dataset.playerId));
+  } else if (action === "apply-intra-sub") {
+    applyIntraRoundSubstitutions();
+  } else if (action === "toggle-trade-out") {
+    toggleTradeOut(Number(el.dataset.playerId), el.dataset.playerName, Number(el.dataset.playerCredits));
+  } else if (action === "remove-trade-out") {
+    removeTradeOut(Number(el.dataset.playerId));
+  } else if (action === "remove-trade-in") {
+    removeTradeIn(Number(el.dataset.playerId));
+  } else if (action === "apply-suggested-trade-package") {
+    const idx = Number(el.dataset.recIdx);
+    if (tradeStudioState.currentRecommendations && tradeStudioState.currentRecommendations[idx]) {
+      const rec = tradeStudioState.currentRecommendations[idx];
+      applySuggestedTrade(rec.transfers_out_details, rec.transfers_in_details);
+    }
+  } else if (action === "add-trade-in") {
+    addTradeIn(Number(el.dataset.playerId), el.dataset.playerName, Number(el.dataset.playerCredits));
+  } else if (action === "trigger-update-data") {
+    e.preventDefault();
+    triggerUpdateData(el.dataset.league);
+  } else if (action === "remove-team-builder-player") {
+    removePlayerFromTeamBuilder(Number(el.dataset.playerId));
+  }
+});

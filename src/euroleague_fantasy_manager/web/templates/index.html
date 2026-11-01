@@ -493,7 +493,7 @@
           </div>
 
           <div class="form-group">
-            <label for="copilot-api-key">API Key (stored locally only)</label>
+            <label for="copilot-api-key">API Key (session storage by default)</label>
             <div style="display:flex; gap:0.35rem;">
               <input type="password" id="copilot-api-key" class="form-control" style="flex:1;"
                      placeholder="Paste provider API key" autocomplete="off" spellcheck="false"
@@ -501,6 +501,11 @@
               <button type="button" class="btn btn-secondary" id="copilot-api-key-toggle"
                       onclick="toggleCopilotApiKeyVisibility()" title="Show/hide key" style="padding:0.45rem 0.65rem;">👁️</button>
             </div>
+            <label style="font-size:0.75rem; margin-top:0.35rem; display:flex; align-items:center; gap:0.35rem;">
+              <input type="checkbox" id="copilot-remember-key" onchange="onCopilotRememberKeyChange()">
+              Remember key on this device
+            </label>
+            <span id="copilot-remember-warning" style="display:none; font-size:0.7rem; color:var(--accent-amber); margin-top:0.2rem;">⚠️ Warning: Key will be stored unencrypted in browser localStorage.</span>
             <span id="copilot-key-hint" style="display:none; font-size:0.75rem; color:var(--accent-red); margin-top:0.25rem;"></span>
           </div>
 

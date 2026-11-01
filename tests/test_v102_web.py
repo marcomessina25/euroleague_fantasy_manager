@@ -110,3 +110,96 @@ def test_p5_1_run_server_rejects_external_hosts():
 
     with pytest.raises(ValueError, match="forbidden"):
         run_server(host="192.168.1.50")
+
+
+def test_p5_2_static_no_inline_template_handlers():
+    """WEB-2: Static check that app.js contains no inline on*="...${ handlers."""
+    import re
+
+    app_js = Path(__file__).resolve().parent.parent / "src" / "euroleague_fantasy_manager" / "web" / "static" / "js" / "app.js"
+    assert app_js.is_file()
+    content = app_js.read_text(encoding="utf-8")
+
+    pat = r'on[a-z]+\s*=\s*["\']' + r'[^"\']*\$\{'
+    matches = re.findall(pat, content, re.IGNORECASE)
+    assert len(matches) == 0, f"Found {len(matches)} inline template handlers in app.js: {matches}"
+
+
+def test_p5_2_node_render_test():
+    """WEB-2: Run Node.js rendering and click delegation harness."""
+    import shutil
+    import subprocess
+
+    node_bin = shutil.which("node")
+    if not node_bin:
+        pytest.skip("Node.js not installed on system")
+
+    js_test = Path(__file__).resolve().parent / "js" / "test_render.mjs"
+    assert js_test.is_file()
+
+    res = subprocess.run([node_bin, str(js_test)], capture_output=True, text=True)
+    assert res.returncode == 0, f"Node render test failed: {res.stderr}\n{res.stdout}"
+    assert "All JS render tests passed" in res.stdout
+
+
+def test_p5_2_team_id_validation_regex(tmp_path: Path):
+    """WEB-10: Server validates team_id against ^[A-Za-z0-9_-]{1,40}$ on create."""
+    db_file = tmp_path / "team_val.sqlite3"
+    app = create_app(db_path=db_file)
+    client = TestClient(app)
+
+    # Valid team_ids
+    for valid_id in ("team_val_1", "team-alpha", "TEAM_2026", "a" * 40):
+        res = client.post("/api/teams", json={
+            "team_id": valid_id,
+            "name": f"Team {valid_id}",
+            "league": "euroleague",
+        })
+        assert res.status_code == 200, f"Expected 200 for valid team_id '{valid_id}', got {res.status_code}"
+
+    # Invalid team_ids
+    for invalid_id in ("team/evil", "team id", "team<script>", "a" * 41, "", "team.dot"):
+        res = client.post("/api/teams", json={
+            "team_id": invalid_id,
+            "name": "Invalid Team",
+            "league": "euroleague",
+        })
+        assert res.status_code == 422, f"Expected 422 for invalid team_id '{invalid_id}', got {res.status_code}"
+
+
+def test_p5_2_team_id_migration(tmp_path: Path):
+    """WEB-10: TeamStore migration safely renames legacy invalid team_ids."""
+    import sqlite3
+    from euroleague_fantasy_manager.multi_team.store import TeamStore
+
+    db_file = tmp_path / "legacy_teams.sqlite3"
+    conn = sqlite3.connect(db_file)
+    conn.execute("""
+        CREATE TABLE managed_teams (
+            team_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            league TEXT NOT NULL DEFAULT 'euroleague',
+            mode TEXT NOT NULL DEFAULT 'classic',
+            season TEXT NOT NULL DEFAULT '2026/27',
+            round_number INTEGER NOT NULL DEFAULT 1,
+            turn_number INTEGER NOT NULL DEFAULT 1,
+            bank_tenths INTEGER NOT NULL DEFAULT 0,
+            transfers_remaining INTEGER NOT NULL DEFAULT 4,
+            settings_json TEXT NOT NULL DEFAULT '{}',
+            is_active INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT ''
+        );
+    """)
+    conn.execute("INSERT INTO managed_teams (team_id, name) VALUES ('team invalid/bad! id', 'Legacy Team');")
+    conn.commit()
+    conn.close()
+
+    # Initializing TeamStore runs migration
+    store = TeamStore(db_path=db_file)
+    teams = store.list_teams()
+    assert len(teams) == 1
+    migrated_id = teams[0].team_id
+    import re
+    assert re.match(r"^[A-Za-z0-9_-]{1,40}$", migrated_id)
+    assert migrated_id.startswith("team_invalid_bad__id")
