@@ -770,7 +770,8 @@ def list_players_endpoint(
     try:
         from euroleague_fantasy_manager.storage import SnapshotStore
         s_store = SnapshotStore(prediction_service.database_path)
-        p_list = s_store.load_latest_players(league_id=get_league_ruleset(league).league_id)
+        snap = s_store.get_snapshot_for_round(league_id=get_league_ruleset(league).league_id, round_number=round_number) or s_store.get_latest_summary(league_id=get_league_ruleset(league).league_id)
+        p_list = s_store.load_players_for_snapshot(snap.snapshot_id) if snap else []
         ownership_map = {p.id: p.popularity for p in p_list}
     except Exception:
         ownership_map = {}
@@ -1009,7 +1010,8 @@ def player_intel_endpoint(
     try:
         from euroleague_fantasy_manager.storage import SnapshotStore
         s_store = SnapshotStore(prediction_service.database_path)
-        p_list = s_store.load_latest_players(league_id=get_league_ruleset(league).league_id)
+        snap = s_store.get_snapshot_for_round(league_id=get_league_ruleset(league).league_id, round_number=round_number) or s_store.get_latest_summary(league_id=get_league_ruleset(league).league_id)
+        p_list = s_store.load_players_for_snapshot(snap.snapshot_id) if snap else []
         ownership_map = {p.id: p.popularity for p in p_list}
     except Exception:
         ownership_map = {}

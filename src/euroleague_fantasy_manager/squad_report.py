@@ -48,7 +48,7 @@ def generate_squad_report(
                 league_id=eff_league_id,
                 round_number=active_round,
             )
-    if snap is None:
+    else:
         snap = store.get_latest_summary(league_id=eff_league_id)
     if snap is not None:
         all_players = store.load_players_for_snapshot(snap.snapshot_id)

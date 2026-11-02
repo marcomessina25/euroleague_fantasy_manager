@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any, Sequence
 
 from euroleague_fantasy_manager.models import Position
@@ -89,13 +90,19 @@ class OptimizationService:
         self._custom_constraints = constraints is not None
         if constraints is None:
             from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
-            self.constraints = OptimizationConstraints.from_ruleset(get_league_ruleset())
+            db_p = getattr(team_service, "db_path", None)
+            self.constraints = OptimizationConstraints.from_ruleset(get_league_ruleset(db_path=db_p))
         else:
             self.constraints = constraints
         self.lineup_optimizer = FixedSquadLineupOptimizer(constraints=self.constraints)
         self.transfer_optimizer = TransferOptimizer(constraints=self.constraints)
         self.multi_round_optimizer = MultiRoundOptimizer(constraints=self.constraints)
         self.intra_round_optimizer = IntraRoundSubstitutionOptimizer()
+
+    @property
+    def db_path(self) -> Path | str | None:
+        """Database path inherited from team service."""
+        return getattr(self.team_service, "db_path", None)
 
     def _resolve_constraints(self, league: str) -> OptimizationConstraints:
         """Resolve constraints parameterized by the league ruleset unless custom constraints are set."""
@@ -278,7 +285,7 @@ class OptimizationService:
         team = self.team_service.get_team(team_id)
         rnd = round_number or team.round_number
         league = _team_league(team)
-        ruleset = get_league_ruleset(league)
+        ruleset = get_league_ruleset(league, db_path=self.db_path)
         is_round_unlimited = ruleset.is_unlimited_trade_round(rnd)
 
         # OPT-14: reject client-supplied unlimited flag that contradicts ruleset in normal rounds
@@ -306,7 +313,8 @@ class OptimizationService:
                 from euroleague_fantasy_manager.storage import SnapshotStore
                 store = SnapshotStore(self.team_service.store.db_path)
                 try:
-                    players = store.load_latest_players()
+                    snap = store.get_snapshot_for_round(league_id=ruleset.league_id, round_number=rnd) or store.get_latest_summary(league_id=ruleset.league_id)
+                    players = store.load_players_for_snapshot(snap.snapshot_id) if snap else []
                     ownership_map = {p.id: p.popularity for p in players}
                 except Exception:
                     ownership_map = {}
@@ -348,7 +356,7 @@ class OptimizationService:
         s_rnd = start_round or team.round_number
 
         league = _team_league(team)
-        ruleset = get_league_ruleset(league)
+        ruleset = get_league_ruleset(league, db_path=self.db_path)
         pool_by_round: dict[int, list[PlayerProjectionContract]] = {}
         for r in range(s_rnd, s_rnd + eff_horizon):
             pool_by_round[r] = self.prediction_service.get_projections(season, r, league=league)

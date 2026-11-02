@@ -63,7 +63,7 @@ def create_app(db_path: str | Path = "data/euroleague.sqlite3") -> FastAPI:
         response = await call_next(request)
         response.headers.setdefault(
             "Content-Security-Policy",
-            "default-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'",
         )
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")

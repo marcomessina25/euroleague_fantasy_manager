@@ -309,9 +309,12 @@ def resolve_ruleset(
     return merged
 
 
-def get_league_ruleset(league: League | str | None = None) -> CompetitionRuleset:
+def get_league_ruleset(
+    league: League | str | None = None,
+    db_path: Path | str | None = None,
+) -> CompetitionRuleset:
     """Retrieve active ruleset for a given league (defaults to EuroLeague if None), resolving from DB if available."""
-    return resolve_ruleset(league=league)
+    return resolve_ruleset(league=league, db_path=db_path)
 
 
 def is_unlimited_trade_round(round_number: int, ruleset: CompetitionRuleset) -> bool:

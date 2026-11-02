@@ -132,7 +132,7 @@ class TeamService:
             return team
 
         snap_store = SnapshotStore(db_path)
-        ruleset = get_league_ruleset(League.from_str(team.league))
+        ruleset = get_league_ruleset(League.from_str(team.league), db_path=self.db_path)
         summary = snap_store.get_latest_summary(league_id=ruleset.league_id)
         if summary is None or summary.round_number <= team.round_number:
             return team
@@ -1213,7 +1213,7 @@ class TeamService:
             raise UnknownPlayerError(player_id, f"No snapshot database available to resolve player {player_id}.")
 
         snap_store = SnapshotStore(db_path)
-        ruleset = get_league_ruleset(League.from_str(league))
+        ruleset = get_league_ruleset(League.from_str(league), db_path=self.db_path)
         snap = snap_store.get_snapshot_by_round(
             round_number=round_number,
             season_code=season,
