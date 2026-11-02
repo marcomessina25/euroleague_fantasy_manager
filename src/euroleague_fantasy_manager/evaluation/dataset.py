@@ -822,20 +822,20 @@ EUROCUP_ROSTER = [
     # Team 14 (CJB)
     (1401, "Guillem Vives", "G", 14, "CJB", 100, 1, 11.0),
     (1402, "Devon Dotson", "G", 14, "CJB", 130, 0, 14.0),
-    (1403, "Adam Hanga", "F", 14, "CJB", 125, 1, 13.5),
-    (1404, "Ante Tomic", "C", 14, "CJB", 145, 1, 17.5),
+    (1403, "Adam Hanga", "F", 14, "CJB", 65, 1, 13.5),
+    (1404, "Ante Tomic", "C", 14, "CJB", 80, 1, 17.5),
     (1491, "Dani Miret", "HC", 14, "CJB", 75, 1, 8.5),
     # Team 15 (BES)
     (1501, "Derek Needham", "G", 15, "BES", 120, 1, 13.0),
     (1502, "Jonah Mathews", "G", 15, "BES", 135, 1, 15.0),
-    (1503, "Matt Mitchell", "F", 15, "BES", 125, 1, 13.5),
-    (1504, "Dustin Sleva", "C", 15, "BES", 110, 1, 12.0),
+    (1503, "Matt Mitchell", "F", 15, "BES", 65, 1, 13.5),
+    (1504, "Dustin Sleva", "C", 15, "BES", 75, 1, 12.0),
     (1591, "Dusan Alimpijevic", "HC", 15, "BES", 75, 1, 8.0),
     # Team 16 (TRE)
-    (1601, "Quinn Ellis", "G", 16, "TRE", 95, 1, 10.5),
+    (1601, "Quinn Ellis", "G", 16, "TRE", 60, 1, 10.5),
     (1602, "Jordan Ford", "G", 16, "TRE", 110, 1, 12.0),
-    (1603, "Anthony Lamb", "F", 16, "TRE", 125, 1, 14.0),
-    (1604, "Selom Mawugbe", "C", 16, "TRE", 90, 1, 9.5),
+    (1603, "Anthony Lamb", "F", 16, "TRE", 65, 1, 14.0),
+    (1604, "Selom Mawugbe", "C", 16, "TRE", 65, 1, 9.5),
     (1691, "Paolo Galbiati", "HC", 16, "TRE", 60, 1, 4.0),
 ]
 

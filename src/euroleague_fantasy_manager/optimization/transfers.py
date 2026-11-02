@@ -373,7 +373,7 @@ class TransferOptimizer:
                         cost_k = round(self.transfer_penalty_cost * k, 2)
 
                     for in_tuple_of_tuples in product(*pos_candidate_lists):
-                        if evaluated_count >= max_evaluations:
+                        if exhaustive_candidates and evaluated_count >= max_evaluations:
                             stopped_reason = "max_evaluations_reached"
                             break
                         if time.monotonic() - start_time >= time_budget_s:
@@ -528,7 +528,7 @@ class TransferOptimizer:
             reverse=True,
         )
 
-        is_exh = False if (unlimited or stopped_reason is not None) else candidate_pool.is_exhaustive
+        is_exh = False if (unlimited or stopped_reason is not None or not exhaustive_candidates) else candidate_pool.is_exhaustive
         obj = "sum_expected_fp" if unlimited else "lineup_objective"
         return TransferOptimizationResult(
             round_number=round_number,

@@ -1014,7 +1014,8 @@ def player_intel_endpoint(
     except Exception:
         ownership_map = {}
 
-    own_pct = float(ownership_map.get(player_id, 10.0))
+    raw_own = ownership_map.get(player_id)
+    own_pct = float(raw_own) if raw_own is not None else 10.0
     own_prof = compute_player_ownership_profile(
         player_id=player_id,
         player_name=contract.player_name,

@@ -623,10 +623,6 @@ class TeamService:
         from euroleague_fantasy_manager.models import normalize_position
         counts = {"G": 0, "F": 0, "C": 0, "HC": 0}
         for u in units:
-            if not getattr(u, "team_code", None) or not str(u.team_code).strip():
-                raise ValueError(
-                    f"Roster unit {getattr(u, 'player_id', getattr(u, 'name', 'unknown'))} has an empty team_code."
-                )
             pos_enum = normalize_position(u.position)
             counts[pos_enum.short_code] += 1
 
@@ -636,6 +632,12 @@ class TeamService:
                 pos_display = pos.name if hasattr(pos, "name") else str(pos)
                 raise ValueError(
                     f"Invalid squad: requires {req} {pos_display}s, found {counts.get(key, 0)}."
+                )
+
+        for u in units:
+            if not getattr(u, "team_code", None) or not str(u.team_code).strip():
+                raise ValueError(
+                    f"Roster unit {getattr(u, 'player_id', getattr(u, 'name', 'unknown'))} has an empty team_code."
                 )
 
         self._validate_club_quota(units, league=league)

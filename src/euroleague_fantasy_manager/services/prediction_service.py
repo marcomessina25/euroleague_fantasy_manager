@@ -137,8 +137,14 @@ class PredictionService:
 
         store_eval = EvaluationDatasetStore(self.database_path)
         is_synthetic = (store_eval.get_season_source(season) == "synthetic" or store_eval.get_season_source(norm_season) == "synthetic")
-        # The historical evaluation dataset only covers EuroLeague and must not be synthetic for live requests.
-        if not is_synthetic and league_enum == League.EUROLEAGUE and norm_season in store_eval.list_seasons():
+        # For live requests (price_prior_v1), synthetic data must never be served (P3.6 / PRED-3).
+        # Feature models (e.g. season_mean, learned_v09) can evaluate on eval datasets.
+        can_use_eval_features = (
+            league_enum == League.EUROLEAGUE
+            and norm_season in store_eval.list_seasons()
+            and (not is_synthetic or canon_model != "price_prior_v1")
+        )
+        if can_use_eval_features:
             cutoff = store_eval.get_round_decision_cutoff(norm_season, round_number)
             if cutoff:
                 if canon_model in ("fp_decomposed_calibrated_v03", "xpdk_calibrated_v03"):
