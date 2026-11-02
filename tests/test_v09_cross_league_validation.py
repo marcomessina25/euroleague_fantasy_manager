@@ -7,6 +7,7 @@ between EuroLeague (league_id=10) and EuroCup (league_id=11).
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 import pytest
 
 from euroleague_fantasy_manager.competition.ruleset import (
@@ -14,18 +15,15 @@ from euroleague_fantasy_manager.competition.ruleset import (
     get_league_ruleset,
 )
 from euroleague_fantasy_manager.evaluation.dataset import build_historical_dataset
-from euroleague_fantasy_manager.models import Player, Position
+from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.optimization.constraints import (
     OptimizationConstraints,
     PlayerProjectionContract,
-    validate_lineup_constraints,
     validate_squad_constraints,
 )
 from euroleague_fantasy_manager.optimization.lineup import FixedSquadLineupOptimizer
-from euroleague_fantasy_manager.optimization.multi_round import MultiRoundOptimizer
 from euroleague_fantasy_manager.optimization.sequential_replay import SequentialDecisionSimulator
 from euroleague_fantasy_manager.optimization.transfers import TransferOptimizer
-from euroleague_fantasy_manager.services.prediction_service import PredictionService
 from euroleague_fantasy_manager.storage import SnapshotStore
 
 

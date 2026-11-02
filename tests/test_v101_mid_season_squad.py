@@ -141,15 +141,15 @@ def test_create_team_mid_season_validation(tmp_path: Path):
     assert resp.status_code == 400
     assert "cannot be negative" in resp.json()["detail"].lower()
 
-    # 3. Invalid round_number (< 1) must fail (HTTP 400)
+    # 3. Invalid round_number (< 1) must fail (HTTP 400 or 422)
     resp = client.post("/api/teams", json={
         "name": "Mid Season Team",
         "round_number": 0,
         "credits": 2.0,
         "league": "euroleague",
     })
-    assert resp.status_code == 400
-    assert "round_number must be at least 1" in resp.json()["detail"].lower()
+    assert resp.status_code in (400, 422)
+    assert "round_number" in str(resp.json()["detail"]).lower() or "greater than or equal to 1" in str(resp.json()["detail"]).lower()
 
 
 def test_create_team_mid_season_with_squad_and_transfers(tmp_path: Path):

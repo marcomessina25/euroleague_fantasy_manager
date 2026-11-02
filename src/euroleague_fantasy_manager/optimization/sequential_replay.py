@@ -10,9 +10,11 @@ to persistent database tables and live team states.
 
 from __future__ import annotations
 
+import logging
+
 import csv
 import io
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -34,8 +36,6 @@ from euroleague_fantasy_manager.optimization.objective import LineupScoreBreakdo
 from euroleague_fantasy_manager.optimization.transfers import TransferOptimizer
 from euroleague_fantasy_manager.rules import (
     MAX_TRADES_PER_ROUND,
-    SQUAD_QUOTAS,
-    UNLIMITED_TRADE_ROUNDS,
 )
 
 
@@ -98,6 +98,7 @@ class SequentialRoundResult:
     regret: RegretAttribution = field(
         default_factory=lambda: RegretAttribution(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     )
+    trade_error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -117,6 +118,7 @@ class SequentialRoundResult:
             "formation": self.formation,
             "substitutions_made": list(self.substitutions_made),
             "regret": self.regret.to_dict(),
+            "trade_error": self.trade_error,
         }
 
 
@@ -138,6 +140,7 @@ class SequentialSeasonReplayLedger:
     avg_regret: float
     regret_attribution: RegretAttribution
     round_results: tuple[SequentialRoundResult, ...]
+    oracle_is_heuristic: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -155,6 +158,7 @@ class SequentialSeasonReplayLedger:
             "avg_regret": round(self.avg_regret, 2),
             "regret_attribution": self.regret_attribution.to_dict(),
             "round_results": [r.to_dict() for r in self.round_results],
+            "oracle_is_heuristic": self.oracle_is_heuristic,
         }
 
     def to_markdown(self) -> str:
@@ -292,6 +296,9 @@ class ModelComparisonLedger:
         return csv_str
 
 
+logger = logging.getLogger(__name__)
+
+
 class SequentialDecisionSimulator:
     """Longitudinal decision simulator across multiple fantasy rounds (F3).
 
@@ -300,8 +307,14 @@ class SequentialDecisionSimulator:
       No tables or team records are mutated.
     """
 
-    def __init__(self, constraints: OptimizationConstraints | None = None) -> None:
-        self.constraints = constraints or OptimizationConstraints()
+    def __init__(self, constraints: OptimizationConstraints | None = None, league: str | Any = "euroleague") -> None:
+        from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset, League
+        eff_league = League.from_str(league) if isinstance(league, str) else league
+        self.ruleset = get_league_ruleset(eff_league)
+        if constraints is None:
+            self.constraints = OptimizationConstraints.from_ruleset(self.ruleset)
+        else:
+            self.constraints = constraints
         self.lineup_optimizer = FixedSquadLineupOptimizer(constraints=self.constraints)
         self.sub_optimizer = IntraRoundSubstitutionOptimizer()
         self.transfer_optimizer = TransferOptimizer(constraints=self.constraints)
@@ -388,12 +401,14 @@ class SequentialDecisionSimulator:
         self,
         contracts: Mapping[int, PlayerProjectionContract],
     ) -> list[PlayerProjectionContract]:
-        """Select a legal reference squad (4G, 4F, 2C, 1HC) by highest expectation under budget."""
-        guards = sorted([c for c in contracts.values() if c.position == Position.GUARD], key=lambda x: -x.expected_fp)[:4]
-        forwards = sorted([c for c in contracts.values() if c.position == Position.FORWARD], key=lambda x: -x.expected_fp)[:4]
-        centers = sorted([c for c in contracts.values() if c.position == Position.CENTER], key=lambda x: -x.expected_fp)[:2]
-        coaches = sorted([c for c in contracts.values() if c.position == Position.HEAD_COACH], key=lambda x: -x.expected_fp)[:1]
-        return guards + forwards + centers + coaches
+        """Select a legal reference squad (4G, 4F, 2C, 1HC) by highest expectation under budget and rules (OPT-9)."""
+        from .initial_team import optimize_initial_team
+        budget_credits = (self.constraints.budget_tenths or 1000) / 10.0
+        return optimize_initial_team(
+            pool=list(contracts.values()),
+            budget_credits=budget_credits,
+            constraints=self.constraints,
+        )
 
     def _optimize_transfers(
         self,
@@ -403,10 +418,10 @@ class SequentialDecisionSimulator:
         round_number: int,
         max_transfers: int = MAX_TRADES_PER_ROUND,
         is_oracle: bool = False,
-    ) -> tuple[list[PlayerProjectionContract], int, list[tuple[int, int]], float]:
-        """Simulate between-round transfers."""
-        is_unlimited = round_number in UNLIMITED_TRADE_ROUNDS
-        allowed_trades = 11 if is_unlimited else min(max_transfers, MAX_TRADES_PER_ROUND)
+    ) -> tuple[list[PlayerProjectionContract], int, list[tuple[int, int]], float, str | None]:
+        """Simulate between-round transfers (OPT-10, OPT-15)."""
+        is_unlimited = self.ruleset.is_unlimited_trade_round(round_number)
+        allowed_trades = self.constraints.squad_size if is_unlimited else min(max_transfers, self.constraints.max_transfers)
 
         # Map current squad to updated round contracts
         mapped_squad: list[PlayerProjectionContract] = []
@@ -425,6 +440,7 @@ class SequentialDecisionSimulator:
                 market=market_list,
                 bank_tenths=current_bank_tenths,
                 max_trades=allowed_trades,
+                unlimited=is_unlimited,
                 round_number=round_number,
                 exhaustive_candidates=False,
             )
@@ -448,11 +464,12 @@ class SequentialDecisionSimulator:
                         (out_p.player_id, in_p.player_id)
                         for out_p, in_p in zip(best_rec.out_players, best_rec.in_players)
                     ]
-                    return new_squad, best_rec.remaining_bank_tenths, moves, best_rec.gross_score_gain
-        except Exception:
-            pass
+                    return new_squad, best_rec.remaining_bank_tenths, moves, best_rec.gross_score_gain, None
+        except Exception as e:
+            logger.warning("Transfer optimization error in round %s: %s", round_number, e)
+            return mapped_squad, current_bank_tenths, [], 0.0, str(e)
 
-        return mapped_squad, current_bank_tenths, [], 0.0
+        return mapped_squad, current_bank_tenths, [], 0.0, None
 
     def _simulate_substitutions(
         self,
@@ -461,9 +478,7 @@ class SequentialDecisionSimulator:
         actuals: Mapping[int, float],
     ) -> tuple[OptimalLineupDecision, list[dict[str, Any]], float]:
         """Simulate T1 -> T2 turn substitutions using IntraRoundSubstitutionOptimizer."""
-        unit_map = {p.player_id: p for p in squad}
         starter_set = set(lineup.starter_ids)
-        bench_set = set(lineup.bench_ids)
 
         units: list[IntraRoundPlayerUnit] = []
         for p in squad:
@@ -539,40 +554,35 @@ class SequentialDecisionSimulator:
         pre_sub_score: float,
         post_sub_score: float,
     ) -> RegretAttribution:
-        """Decompose regret via a telescoping chain (F5).
+        """Decompose regret via a signed telescoping chain (OPT-11).
 
-        Each component is the marginal improvement from fixing one decision
-        dimension while holding all others constant. The chain walks from
-        the realized outcome (S0) to the full oracle (S6):
-
-            S0  model squad, model lineup, post-substitution   (realized)
-            S1  S0 + bad substitution recovery                 turn_sub_regret = S1 - S0
-            S2  S1 + optimal captain                           captain_regret  = S2 - S1
-            S3  S2 + optimal sixth man                         sixth_man_regret = S3 - S2
-            S4  S3 + optimal starters (formation)              formation_regret = S4 - S3
-            S5  S4 + optimal bench (model squad)               bench_regret    = S5 - S4
-            S6  oracle squad, optimal lineup                   transfer_regret = S6 - S5
-
-        Mathematical invariant (by construction):
-            sum(components) == total_regret   (residual ≡ 0.0)
+        S0: realized score (post-substitution, model squad, model lineup)
+        S1: S0 + turn substitution regret (pre_sub_score - post_sub_score)
+        S2: S1 + captain regret
+        S3: S2 + sixth man regret
+        S4: S3 + formation regret
+        S5: S4 + bench regret (0.0)
+        S6: S5 + transfer regret (oracle_score - model_squad_oracle_score)
+        
+        Total regret = oracle_opt - post_sub_score
+        Residual = total_regret - sum(components) == 0.0
         """
-        # S0: realized score (post-substitution, model squad, model lineup)
         s0 = round(post_sub_score, 2)
 
-        # S1: undo bad intra-round substitutions if they cost points
-        turn_sub_reg = max(0.0, round(pre_sub_score - post_sub_score, 2))
+        # S1: undo intra-round substitutions
+        turn_sub_reg = round(pre_sub_score - post_sub_score, 2)
         s1 = round(s0 + turn_sub_reg, 2)
-        base_lineup = pre_lineup if pre_sub_score > post_sub_score else chosen_lineup
+        base_lineup = pre_lineup
 
-        # S2: optimal captain from the active starting 5
+        # S2: optimal captain from active starting 5
         best_captain_id = max(base_lineup.starter_ids, key=lambda pid: actuals.get(pid, 0.0))
-        cap_reg = max(0.0, round(actuals.get(best_captain_id, 0.0) - actuals.get(base_lineup.captain_id, 0.0), 2))
+        cap_reg = round(actuals.get(best_captain_id, 0.0) - actuals.get(base_lineup.captain_id, 0.0), 2)
         s2 = round(s1 + cap_reg, 2)
 
-        # S3: optimal sixth man from the bench pool (sixth man gets 1.0x, bench gets 0.5x)
+        # S3: optimal sixth man from bench pool (sixth man gets 1.0x, bench gets 0.5x)
         bench_pool = [base_lineup.sixth_man_id] + list(base_lineup.bench_ids)
         best_sixth_id = max(bench_pool, key=lambda pid: actuals.get(pid, 0.0))
-        sixth_reg = max(0.0, round(0.5 * (actuals.get(best_sixth_id, 0.0) - actuals.get(base_lineup.sixth_man_id, 0.0)), 2))
+        sixth_reg = round(0.5 * (actuals.get(best_sixth_id, 0.0) - actuals.get(base_lineup.sixth_man_id, 0.0)), 2)
         s3 = round(s2 + sixth_reg, 2)
 
         # S4: optimal starters / formation from the model squad
@@ -584,14 +594,14 @@ class SequentialDecisionSimulator:
             head_coach_id=model_squad_oracle_lineup.head_coach_id,
             actuals=actuals,
         )
-        form_reg = max(0.0, round(model_squad_opt - s3, 2))
+        form_reg = round(model_squad_opt - s3, 2)
         s4 = round(s3 + form_reg, 2)
 
-        # S5: optimal bench from model squad (fully determined by S4, 0 degrees of freedom)
+        # S5: optimal bench from model squad (0 degrees of freedom)
         bench_reg = 0.0
         s5 = s4
 
-        # S6: oracle squad with optimal lineup (transfer regret)
+        # S6: oracle squad with optimal lineup
         oracle_opt = score_lineup_with_actuals(
             starter_ids=oracle_lineup.starter_ids,
             captain_id=oracle_lineup.captain_id,
@@ -600,24 +610,11 @@ class SequentialDecisionSimulator:
             head_coach_id=oracle_lineup.head_coach_id,
             actuals=actuals,
         )
-        trans_reg = max(0.0, round(oracle_opt - s5, 2))
-        s6 = round(s5 + trans_reg, 2)
+        trans_reg = round(oracle_opt - s5, 2)
 
-        # Total regret is exactly s6 - s0
-        total_regret = round(s6 - s0, 2)
-        comp_sum = round(cap_reg + sixth_reg + bench_reg + turn_sub_reg + trans_reg + form_reg, 2)
+        total_regret = round(oracle_opt - s0, 2)
+        comp_sum = round(turn_sub_reg + cap_reg + sixth_reg + bench_reg + form_reg + trans_reg, 2)
         residual = round(total_regret - comp_sum, 2)
-
-        return RegretAttribution(
-            captain_regret=cap_reg,
-            sixth_man_regret=sixth_reg,
-            bench_regret=bench_reg,
-            turn_substitution_regret=turn_sub_reg,
-            transfer_regret=trans_reg,
-            formation_regret=form_reg,
-            residual=residual,
-            total_regret=total_regret,
-        )
 
         return RegretAttribution(
             captain_regret=cap_reg,
@@ -671,7 +668,7 @@ class SequentialDecisionSimulator:
             pre_transfer_squad = list(current_squad)
 
             # 1. Between-round transfers (model's decision)
-            current_squad, current_bank, transfers_made, trans_gain = self._optimize_transfers(
+            current_squad, current_bank, transfers_made, trans_gain, trade_error = self._optimize_transfers(
                 current_squad=current_squad,
                 contracts=contracts,
                 current_bank_tenths=current_bank,
@@ -720,7 +717,7 @@ class SequentialDecisionSimulator:
                 )
 
             # Oracle transfer optimization from the same starting point as the model
-            oracle_squad, _, _, oracle_trans_gain = self._optimize_transfers(
+            oracle_squad, _, _, _, _ = self._optimize_transfers(
                 current_squad=pre_transfer_squad,
                 contracts=oracle_market,
                 current_bank_tenths=bank_start,
@@ -813,6 +810,7 @@ class SequentialDecisionSimulator:
                     formation=post_lineup.formation,
                     substitutions_made=tuple(subs_made),
                     regret=regret,
+                    trade_error=trade_error,
                 )
             )
 

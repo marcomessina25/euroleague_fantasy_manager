@@ -1,7 +1,7 @@
 """Formal fantasy constraints and prediction contract for V0.4 decision layer."""
 
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Iterable, Sequence
 
 from ..models import Player, Position
@@ -10,7 +10,6 @@ from ..rules import (
     HEAD_COACH_SIZE,
     LEGAL_COURT_FORMATIONS,
     MAX_BUDGET_TENTHS,
-    MAX_PLAYERS_PER_TEAM,
     MAX_TRADES_PER_ROUND,
     SIXTH_MAN_SIZE,
     SQUAD_QUOTAS,
@@ -373,32 +372,81 @@ class PlayerProjectionContract:
         )
 
 
+def club_key(unit: Any, ruleset: Any = None) -> int | str | None:
+    """Return club identifier for a unit, or None if the unit does not count toward quota."""
+    pos = getattr(unit, "position", None)
+    is_coach = False
+    if pos == Position.HEAD_COACH or str(pos).upper() in ("HC", "HEAD_COACH", "4"):
+        is_coach = True
+
+    counts_coach = getattr(ruleset, "club_quota_counts_coach", False)
+    if is_coach and not counts_coach:
+        return None
+
+    team_id = getattr(unit, "team_id", None)
+    if team_id is not None:
+        return team_id
+    team_code = getattr(unit, "team_code", None)
+    if team_code:
+        return team_code
+    return None
+
+
+def club_counts(units: Iterable[Any], ruleset: Any = None) -> Counter[int | str]:
+    """Count units per club according to ruleset club quota rules."""
+    counts: Counter[int | str] = Counter()
+    for u in units:
+        key = club_key(u, ruleset)
+        if key is not None:
+            counts[key] += 1
+    return counts
+
+
 @dataclass(frozen=True, slots=True)
 class OptimizationConstraints:
-    """Formal deterministic constraint parameters for EuroLeague Fantasy Challenge Classic Mode."""
+    """Formal deterministic constraint parameters for Fantasy Challenge Classic Mode."""
 
+    max_players_per_club: int
     squad_size: int = SQUAD_SIZE
     court_starters_size: int = COURT_STARTERS_SIZE
     bench_size: int = SQUAD_SIZE - COURT_STARTERS_SIZE - SIXTH_MAN_SIZE - HEAD_COACH_SIZE  # 4
     sixth_man_size: int = SIXTH_MAN_SIZE
     head_coach_size: int = HEAD_COACH_SIZE
-    max_players_per_club: int = MAX_PLAYERS_PER_TEAM
     max_transfers: int = MAX_TRADES_PER_ROUND
     unlimited_transfers: bool = False
     budget_tenths: int | None = MAX_BUDGET_TENTHS
     legal_formations: frozenset[tuple[int, int, int]] = LEGAL_COURT_FORMATIONS
     quotas: dict[Position, int] = field(default_factory=lambda: dict(SQUAD_QUOTAS))
+    club_quota_counts_coach: bool = False
+    unlimited_trade_rounds: frozenset[int] = frozenset()
 
     @classmethod
     def from_ruleset(cls, ruleset: Any) -> "OptimizationConstraints":
         """Instantiate OptimizationConstraints parameterized by a CompetitionRuleset."""
         return cls(
+            max_players_per_club=getattr(ruleset, "max_court_players_per_club", 6),
             squad_size=getattr(ruleset, "squad_size", SQUAD_SIZE),
             court_starters_size=getattr(ruleset, "starters_count", COURT_STARTERS_SIZE),
+            bench_size=getattr(ruleset, "bench_count", 4),
             sixth_man_size=getattr(ruleset, "sixth_man_count", SIXTH_MAN_SIZE),
             head_coach_size=getattr(ruleset, "head_coach_count", HEAD_COACH_SIZE),
-            max_players_per_club=getattr(ruleset, "max_court_players_per_club", MAX_PLAYERS_PER_TEAM),
+            max_transfers=getattr(ruleset, "max_trades_per_round", MAX_TRADES_PER_ROUND),
             budget_tenths=int(getattr(ruleset, "budget_credits", 100.0) * 10),
+            club_quota_counts_coach=getattr(ruleset, "club_quota_counts_coach", False),
+            unlimited_trade_rounds=getattr(ruleset, "unlimited_trade_rounds", frozenset()),
+        )
+
+    def for_round(self, round_number: int, ruleset: Any = None) -> "OptimizationConstraints":
+        """Return a copy of constraints updated for the specific round (handling unlimited windows)."""
+        is_unlimited = (
+            ruleset.is_unlimited_trade_round(round_number)
+            if ruleset is not None and hasattr(ruleset, "is_unlimited_trade_round")
+            else round_number in self.unlimited_trade_rounds
+        )
+        return replace(
+            self,
+            unlimited_transfers=is_unlimited,
+            max_transfers=self.squad_size if is_unlimited else self.max_transfers,
         )
 
 
@@ -406,6 +454,13 @@ class OptimizationConstraints:
 class ConstraintValidationResult:
     is_valid: bool
     errors: tuple[str, ...]
+
+    def __iter__(self):
+        yield self.is_valid
+        yield self.errors
+
+    def __bool__(self) -> bool:
+        return self.is_valid
 
     @classmethod
     def success(cls) -> "ConstraintValidationResult":
@@ -423,7 +478,11 @@ def validate_squad_constraints(
     check_budget: bool = True,
 ) -> ConstraintValidationResult:
     """Validate that an 11-unit squad satisfies squad size, position quotas, unique players, budget, and club quotas."""
-    cfg = constraints or OptimizationConstraints()
+    if constraints is None:
+        from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
+        cfg = OptimizationConstraints.from_ruleset(get_league_ruleset())
+    else:
+        cfg = constraints
     squad = tuple(players)
     errors: list[str] = []
 
@@ -449,12 +508,7 @@ def validate_squad_constraints(
             errors.append(f"Position {pos.name} requires {required} units; found {actual}.")
 
     # Club quota: court players max_players_per_club
-    court_players = [p for p in squad if p.position != Position.HEAD_COACH]
-    team_counts = Counter(
-        (p.team_id if p.team_id is not None else p.team_code)
-        for p in court_players
-        if (p.team_id is not None or p.team_code)
-    )
+    team_counts = club_counts(squad, cfg)
     for team_key, count in sorted(team_counts.items(), key=lambda x: str(x[0])):
         if count > cfg.max_players_per_club:
             errors.append(f"Club {team_key} has {count} players; maximum allowed is {cfg.max_players_per_club}.")
@@ -473,7 +527,11 @@ def validate_lineup_constraints(
     constraints: OptimizationConstraints | None = None,
 ) -> ConstraintValidationResult:
     """Validate Starting 5 formation (G-F-C), Captain, Sixth Man, and Head Coach against official constraints."""
-    cfg = constraints or OptimizationConstraints()
+    if constraints is None:
+        from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
+        cfg = OptimizationConstraints.from_ruleset(get_league_ruleset())
+    else:
+        cfg = constraints
     squad_list = list(squad)
     squad_by_id = {
         (p.player_id if isinstance(p, PlayerProjectionContract) else p.id): p
@@ -535,7 +593,11 @@ def validate_transfers_constraints(
     constraints: OptimizationConstraints | None = None,
 ) -> tuple[ConstraintValidationResult, int]:
     """Validate 1..4 trades (or unlimited) and return (ValidationResult, remaining_bank_tenths)."""
-    cfg = constraints or OptimizationConstraints()
+    if constraints is None:
+        from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
+        cfg = OptimizationConstraints.from_ruleset(get_league_ruleset())
+    else:
+        cfg = constraints
     squad_by_id = {
         (p.player_id if isinstance(p, PlayerProjectionContract) else p.id): p
         for p in current_squad

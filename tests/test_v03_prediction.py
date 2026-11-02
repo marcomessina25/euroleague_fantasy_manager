@@ -1,3 +1,4 @@
+import importlib.metadata
 """Comprehensive test suite for V0.3 Validated Predictive Projection Layer."""
 
 from dataclasses import asdict
@@ -9,7 +10,6 @@ import pytest
 from euroleague_fantasy_manager import __version__
 from euroleague_fantasy_manager.cli import main as cli_main
 from euroleague_fantasy_manager.evaluation import (
-    DATASET_VERSION,
     EvaluationDatasetStore,
     PointInTimeFeatureRow,
     build_historical_dataset,
@@ -18,19 +18,13 @@ from euroleague_fantasy_manager.evaluation import (
     run_walk_forward_evaluation,
 )
 from euroleague_fantasy_manager.evaluation.baselines import (
-    canonical_model_name,
     predict_round_baselines,
-    predict_single_player_baseline,
 )
 from euroleague_fantasy_manager.prediction import (
-    CalibrationModel,
     DecomposedProjection,
-    ModelMetadata,
     compute_availability_calibration_bins,
     compute_brier_score,
-    compute_empirical_residual_intervals,
     compute_log_loss,
-    estimate_prediction_uncertainty,
     fit_out_of_sample_calibrator,
     get_model_registry,
     predict_expected_coach_conditional_fp,
@@ -38,7 +32,6 @@ from euroleague_fantasy_manager.prediction import (
     predict_expected_minutes_if_play,
     predict_play_probability,
     predict_player_fantasy_points,
-    predict_round_decomposed,
 )
 from euroleague_fantasy_manager.valuation import (
     DEFAULT_REPLACEMENT_THRESHOLDS,
@@ -319,7 +312,7 @@ def test_multi_season_walk_forward_evaluation_and_sqlite(tmp_path: Path) -> None
         reports_dir=reports_dir,
     )
 
-    assert __version__ in ("0.2.5", "0.3.0", "0.4.0", "0.4.5", "0.5.0", "0.6.5", "0.7.0", "0.8.0", "0.9.0", "1.0.0", "1.0.1")
+    assert __version__ == importlib.metadata.version("euroleague-fantasy-manager")
     assert len(res["models"]) == 4
     assert len(res["paired_comparisons"]) >= 1
 

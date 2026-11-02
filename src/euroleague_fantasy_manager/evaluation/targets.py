@@ -115,7 +115,7 @@ def reconstruct_player_fantasy_points(
     return round(float(pir) * win_mult, 2)
 
 
-def reconstruct_coach_fantasy_points(margin: int | float) -> float:
+def reconstruct_coach_fantasy_points(margin: int | float, league: str = "euroleague") -> float:
     """Reconstruct actual Head Coach fantasy points from final game margin (team_score - opp_score).
 
     Head Coach scoring is kept strictly separate from Court Player targets (Section 7.2):

@@ -10,13 +10,11 @@ Verifies:
 
 from __future__ import annotations
 
-import math
 from pathlib import Path
-import pytest
 
 from euroleague_fantasy_manager.evaluation.dataset import build_historical_dataset
+from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
 from euroleague_fantasy_manager.models import Position
-from euroleague_fantasy_manager.optimization.candidates import CandidateGenerator
 from euroleague_fantasy_manager.optimization.constraints import (
     OptimizationConstraints,
     PlayerProjectionContract,
@@ -31,7 +29,6 @@ from euroleague_fantasy_manager.optimization.multi_round import (
 )
 from euroleague_fantasy_manager.optimization.objective import RiskMode
 from euroleague_fantasy_manager.optimization.sequential_replay import (
-    ModelComparisonLedger,
     SequentialDecisionSimulator,
 )
 from euroleague_fantasy_manager.optimization.transfers import (
@@ -77,7 +74,7 @@ def _make_squad_contracts() -> list[PlayerProjectionContract]:
 def test_fixed_squad_optimizer_matches_exhaustive_oracle() -> None:
     """11.1: Pruned FixedSquadLineupOptimizer matches brute force oracle across risk modes."""
     squad = _make_squad_contracts()
-    constraints = OptimizationConstraints()
+    constraints = OptimizationConstraints.from_ruleset(get_league_ruleset())
 
     for r_mode in (RiskMode.EXPECTED, RiskMode.CONSERVATIVE, RiskMode.AGGRESSIVE):
         optimizer = FixedSquadLineupOptimizer(

@@ -7,18 +7,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from euroleague_fantasy_manager.intelligence.copilot import (
-    CopilotAdviceResult,
     generate_copilot_advice,
     resolve_tier,
 )
 from euroleague_fantasy_manager.intelligence.dossier import (
-    ManagerDossier,
     generate_manager_dossier,
 )
 from euroleague_fantasy_manager.intelligence.providers import list_available_providers
 from euroleague_fantasy_manager.intelligence.security import redact_secrets
 from euroleague_fantasy_manager.intelligence.strategic_analysis import (
-    StrategicAnalysisResult,
     analyze_dossier,
 )
 from euroleague_fantasy_manager.services.optimization_service import OptimizationService
@@ -36,19 +33,20 @@ router = APIRouter(prefix="/api/workstation", tags=["intelligence"])
 class CopilotAdviseRequest(BaseModel):
     team_id: str
     season: str = "2026/27"
-    round_number: int | None = None
+    round_number: int | None = Field(default=None, ge=1, le=50)
     persona: str = "briefing"
     provider: str = "heuristic"
     tier: str = "standard"
     model: str | None = None
     api_key: str | None = None
+    consent_remote: bool = False
 
 
 @router.get("/dossier")
 def get_manager_dossier_endpoint(
     team_id: str = Query(..., description="Target managed team ID"),
     season: str = Query("2026/27", description="Season code"),
-    round_number: int | None = Query(None, description="Round number"),
+    round_number: int | None = Query(None, ge=1, le=50, description="Round number"),
     team_service: TeamService = Depends(get_team_service),
     prediction_service: PredictionService = Depends(get_prediction_service),
     optimization_service: OptimizationService = Depends(get_optimization_service),
@@ -74,7 +72,7 @@ def get_manager_dossier_endpoint(
 def get_strategic_analysis_endpoint(
     team_id: str = Query(..., description="Target managed team ID"),
     season: str = Query("2026/27", description="Season code"),
-    round_number: int | None = Query(None, description="Round number"),
+    round_number: int | None = Query(None, ge=1, le=50, description="Round number"),
     team_service: TeamService = Depends(get_team_service),
     prediction_service: PredictionService = Depends(get_prediction_service),
     optimization_service: OptimizationService = Depends(get_optimization_service),
@@ -122,14 +120,19 @@ def copilot_advise_endpoint(
             prediction_service=prediction_service,
             optimization_service=optimization_service,
         )
+        effective_provider = req.provider
+        if effective_provider == "auto" and not req.consent_remote:
+            effective_provider = "heuristic"
+
         advice = generate_copilot_advice(
             dossier=dossier,
             persona=req.persona,
-            provider_name=req.provider,
+            provider_name=effective_provider,
             api_key=req.api_key,
             model=req.model,
             database_path=prediction_service.database_path,
             tier=tier,
+            consent_remote=req.consent_remote,
         )
         return advice.to_dict()
     except KeyError:

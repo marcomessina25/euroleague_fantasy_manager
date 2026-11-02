@@ -1,6 +1,5 @@
 """Hermetic unit tests for SQLite SnapshotStore, squad import, and `elf` CLI commands."""
 
-import json
 from pathlib import Path
 
 from euroleague_fantasy_manager.cli import main as cli_main
@@ -138,7 +137,7 @@ def test_schema_migration_idempotent(tmp_path: Path):
     # Initialize store 1
     store1 = SnapshotStore(database_path=db_file)
     with store1._connect() as conn:
-        assert store1._get_schema_version(conn) == 3
+        assert store1._get_schema_version(conn) == 5
         info1 = conn.execute("PRAGMA table_info(players)").fetchall()
         assert any(col[1] == "has_played" for col in info1)
         snap_info1 = conn.execute("PRAGMA table_info(snapshots)").fetchall()
@@ -148,7 +147,7 @@ def test_schema_migration_idempotent(tmp_path: Path):
     # Initialize store 2 on same database (idempotent migration)
     store2 = SnapshotStore(database_path=db_file)
     with store2._connect() as conn:
-        assert store2._get_schema_version(conn) == 3
+        assert store2._get_schema_version(conn) == 5
         info2 = conn.execute("PRAGMA table_info(players)").fetchall()
         assert any(col[1] == "has_played" for col in info2)
         snap_info2 = conn.execute("PRAGMA table_info(snapshots)").fetchall()

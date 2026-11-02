@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any, Mapping, Sequence
+from pathlib import Path
+from typing import Any, Sequence
 
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.rules import (
-    COURT_STARTERS_SIZE,
     MAX_TRADES_PER_ROUND,
-    SQUAD_QUOTAS,
-    SQUAD_SIZE,
 )
 from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit
 from euroleague_fantasy_manager.optimization.constraints import (
@@ -29,7 +27,6 @@ from euroleague_fantasy_manager.optimization.intra_round import (
 )
 from euroleague_fantasy_manager.optimization.lineup import (
     FixedSquadLineupOptimizer,
-    OptimalLineupDecision,
     brute_force_exhaustive_lineup,
 )
 from euroleague_fantasy_manager.optimization.multi_round import (
@@ -41,6 +38,7 @@ from euroleague_fantasy_manager.optimization.transfers import (
     TransferOptimizationResult,
     TransferOptimizer,
 )
+from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
 from euroleague_fantasy_manager.services.prediction_service import PredictionService
 from euroleague_fantasy_manager.services.team_service import TeamService
 
@@ -90,18 +88,29 @@ class OptimizationService:
         self.team_service = team_service
         self.prediction_service = prediction_service
         self._custom_constraints = constraints is not None
-        self.constraints = constraints or OptimizationConstraints()
+        if constraints is None:
+            from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
+            db_p = getattr(team_service, "db_path", None)
+            self.constraints = OptimizationConstraints.from_ruleset(get_league_ruleset(db_path=db_p))
+        else:
+            self.constraints = constraints
         self.lineup_optimizer = FixedSquadLineupOptimizer(constraints=self.constraints)
         self.transfer_optimizer = TransferOptimizer(constraints=self.constraints)
         self.multi_round_optimizer = MultiRoundOptimizer(constraints=self.constraints)
         self.intra_round_optimizer = IntraRoundSubstitutionOptimizer()
 
+    @property
+    def db_path(self) -> Path | str | None:
+        """Database path inherited from team service."""
+        return getattr(self.team_service, "db_path", None)
+
     def _resolve_constraints(self, league: str) -> OptimizationConstraints:
         """Resolve constraints parameterized by the league ruleset unless custom constraints are set."""
         if self._custom_constraints:
             return self.constraints
-        from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
-        ruleset = get_league_ruleset(league)
+        from euroleague_fantasy_manager.competition.ruleset import resolve_ruleset
+        db_path = getattr(self.team_service, "db_path", None)
+        ruleset = resolve_ruleset(league, db_path=db_path)
         return OptimizationConstraints.from_ruleset(ruleset)
 
     def optimize_intra_round(
@@ -113,7 +122,10 @@ class OptimizationService:
         """Compute optimal legal intra-round bench-to-court substitutions."""
         team = self.team_service.get_team(team_id)
         rnd = round_number or team.round_number
-        proj_dict = self.prediction_service.get_projections_dict(season, rnd, league=_team_league(team))
+        try:
+            proj_dict = self.prediction_service.get_projections_dict(season, rnd, league=_team_league(team))
+        except Exception:
+            proj_dict = {}
 
         units: list[IntraRoundPlayerUnit] = []
         for u in team.squad:
@@ -183,6 +195,7 @@ class OptimizationService:
             risk_mode=r_mode,
             risk_lambda=risk_lambda,
             include_option_value=include_opt_val,
+            constraints=eff_constraints,
         )
         oracle_match = (
             abs(opt_decision.objective_value - oracle_decision.objective_value) < 1e-4
@@ -265,19 +278,25 @@ class OptimizationService:
         exhaustive: bool = False,
         strategy_preset: str = "balanced_value",
         top_n: int = 5,
+        max_evaluations: int = 20_000,
+        time_budget_s: float = 10.0,
     ) -> TransferOptimizationResult:
         """Find optimal trade combinations for the team."""
         team = self.team_service.get_team(team_id)
         rnd = round_number or team.round_number
-
-        # G2: Clamp max_trades against the team's actual transfers_remaining
-        # so direct API callers cannot receive suggestions exceeding budget (unless unlimited is requested).
-        if unlimited:
-            effective_max = max_trades if max_trades is not None else MAX_TRADES_PER_ROUND
-        else:
-            effective_max = min(max_trades, team.transfers_remaining, MAX_TRADES_PER_ROUND)
-
         league = _team_league(team)
+        ruleset = get_league_ruleset(league, db_path=self.db_path)
+        is_round_unlimited = ruleset.is_unlimited_trade_round(rnd)
+
+        # OPT-14: reject client-supplied unlimited flag that contradicts ruleset in normal rounds
+        if unlimited and not is_round_unlimited:
+            raise ValueError(f"Round {rnd} is not an unlimited transfer round.")
+        unlimited = is_round_unlimited
+
+        if unlimited:
+            effective_max = max_trades if max_trades is not None else ruleset.squad_size
+        else:
+            effective_max = min(max_trades, team.transfers_remaining, ruleset.max_trades_per_round)
         squad_contracts = self._resolve_squad_contracts(team.squad, season, rnd, league=league)
         market = (
             list(candidate_pool)
@@ -294,13 +313,15 @@ class OptimizationService:
                 from euroleague_fantasy_manager.storage import SnapshotStore
                 store = SnapshotStore(self.team_service.store.db_path)
                 try:
-                    players = store.load_latest_players()
+                    snap = store.get_snapshot_for_round(league_id=ruleset.league_id, round_number=rnd) or store.get_latest_summary(league_id=ruleset.league_id)
+                    players = store.load_players_for_snapshot(snap.snapshot_id) if snap else []
                     ownership_map = {p.id: p.popularity for p in players}
                 except Exception:
                     ownership_map = {}
             market, _ = apply_strategy_preset_to_market(market, ownership_map, preset=strategy_preset)
 
-        eff_constraints = self._resolve_constraints(league)
+        base_constraints = self._resolve_constraints(league)
+        eff_constraints = base_constraints.for_round(rnd, ruleset=ruleset)
         transfer_opt = (
             self.transfer_optimizer
             if self._custom_constraints
@@ -315,6 +336,8 @@ class OptimizationService:
             unlimited=unlimited,
             exhaustive_candidates=exhaustive,
             top_n=top_n,
+            max_evaluations=max_evaluations,
+            time_budget_s=time_budget_s,
         )
 
     def plan_multi_round(
@@ -327,12 +350,15 @@ class OptimizationService:
         beam_width: int = 4,
     ) -> MultiRoundPlan:
         """Run beam search multi-round transfer planner across N rounds."""
+        # OPT-8: Clamp horizon to 1..4 before fetching projections
+        eff_horizon = max(1, min(horizon, 4))
         team = self.team_service.get_team(team_id)
         s_rnd = start_round or team.round_number
 
         league = _team_league(team)
+        ruleset = get_league_ruleset(league, db_path=self.db_path)
         pool_by_round: dict[int, list[PlayerProjectionContract]] = {}
-        for r in range(s_rnd, s_rnd + horizon):
+        for r in range(s_rnd, s_rnd + eff_horizon):
             pool_by_round[r] = self.prediction_service.get_projections(season, r, league=league)
 
         squad_contracts = self._resolve_squad_contracts(team.squad, season, s_rnd, league=league)
@@ -348,10 +374,12 @@ class OptimizationService:
 
         return mr_opt.optimize_multi_round(
             start_round=s_rnd,
-            horizon=horizon,
+            horizon=eff_horizon,
             initial_squad=squad_contracts,
             projections_by_round=pool_by_round,
             initial_bank_tenths=team.bank_tenths,
+            transfers_remaining_first_round=team.transfers_remaining,
+            ruleset=ruleset,
         )
 
     def recommend_initial_team(
@@ -369,11 +397,14 @@ class OptimizationService:
         if not market:
             return []
         try:
+            resolved_league = league or "euroleague"
+            c_cfg = self._resolve_constraints(resolved_league)
             return optimize_initial_team(
                 pool=market,
                 budget_credits=budget_credits,
                 risk_mode=risk_mode,
                 locked_player_ids=locked_player_ids,
+                constraints=c_cfg,
             )
         except ValueError:
             return []
@@ -406,12 +437,15 @@ class OptimizationService:
                 "strategy_description": "Round-1 starting squad optimization under budget & fantasy rules",
             }
 
+        resolved_league = league or "euroleague"
+        c_cfg = self._resolve_constraints(resolved_league)
         try:
             detailed = optimize_initial_team_detailed(
                 pool=market,
                 budget_credits=budget_credits,
                 risk_mode=risk_mode,
                 locked_player_ids=locked_player_ids,
+                constraints=c_cfg,
             )
             contracts = detailed.squad
             obj_name = detailed.objective_name
@@ -429,7 +463,7 @@ class OptimizationService:
                 "strategy_description": "Round-1 starting squad optimization under budget & fantasy rules",
             }
 
-        val = validate_squad_constraints(contracts, budget_tenths=budget_limit_tenths)
+        val = validate_squad_constraints(contracts, budget_tenths=budget_limit_tenths, constraints=c_cfg)
 
         player_views = []
         for c in contracts:
@@ -475,7 +509,10 @@ class OptimizationService:
         league: str | None = None,
     ) -> list[PlayerProjectionContract]:
         """Convert TeamRosterUnits into valid PlayerProjectionContracts."""
-        projections_dict = self.prediction_service.get_projections_dict(season, round_number, league=league)
+        try:
+            projections_dict = self.prediction_service.get_projections_dict(season, round_number, league=league)
+        except Exception:
+            projections_dict = {}
         contracts: list[PlayerProjectionContract] = []
         has_market_data = bool(projections_dict)
 

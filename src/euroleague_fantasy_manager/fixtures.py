@@ -7,13 +7,8 @@ from typing import Any
 
 from .models import Player, Position
 from .squad_state import load_current_squad
+from . import paths
 from .storage import SnapshotStore
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIRECTORY = PROJECT_ROOT / "data"
-DATABASE_PATH = DATA_DIRECTORY / "euroleague.sqlite3"
-DEFAULT_SQUAD_PATH = PROJECT_ROOT / "config" / "current_squad.json"
-FIXTURES_REPORT_PATH = PROJECT_ROOT / "reports" / "fixtures_report.json"
 
 HOME_COURT_ADVANTAGE_PTS = 3.8
 MARGIN_SPREAD_SCALE = 26.0
@@ -111,15 +106,19 @@ def position_fdr_multiplier(fdr: int, position: Position, is_home: bool) -> floa
     return round(1.0 + fdr_delta * base_step + home_bonus, 4)
 
 
+_DEFAULT_REPORT = object()
+
+
 def analyze_team_fixtures(
-    database_path: Path = DATABASE_PATH,
+    database_path: Path | None = None,
     num_rounds: int = 5,
     start_round: int | None = None,
-    report_path: Path | None = FIXTURES_REPORT_PATH,
+    report_path: Path | None | object = _DEFAULT_REPORT,
     league_id: int | None = None,
 ) -> dict[str, Any]:
     """Analyze upcoming fixtures, Turns (T1/T2), Win Probabilities, and FDR for teams."""
-    store = SnapshotStore(database_path)
+    resolved_db = Path(database_path) if database_path is not None else paths.database_path()
+    store = SnapshotStore(resolved_db)
     if start_round is None:
         start_round = get_current_round(store, league_id=league_id)
 
@@ -206,24 +205,31 @@ def analyze_team_fixtures(
         "num_rounds": num_rounds,
         "team_rankings": rankings,
     }
-    if report_path is not None:
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    resolved_report_path: Path | None = (
+        paths.elf_home() / "reports" / "fixtures_report.json"
+        if report_path is _DEFAULT_REPORT
+        else (Path(report_path) if report_path is not None else None)
+    )
+    if resolved_report_path is not None:
+        resolved_report_path.parent.mkdir(parents=True, exist_ok=True)
+        resolved_report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return report
 
 
 def analyze_squad_fixtures(
-    squad_path: Path = DEFAULT_SQUAD_PATH,
-    database_path: Path = DATABASE_PATH,
+    squad_path: Path | None = None,
+    database_path: Path | None = None,
     num_rounds: int = 5,
     start_round: int | None = None,
     league_id: int | None = None,
 ) -> dict[str, Any]:
     """Analyze upcoming multi-round fixtures specifically for the 11 units in the current squad."""
-    state = load_current_squad(squad_path)
+    resolved_squad_path = Path(squad_path) if squad_path is not None else paths.squad_config_path()
+    resolved_db = Path(database_path) if database_path is not None else paths.database_path()
+    state = load_current_squad(resolved_squad_path)
     eff_league_id = league_id if league_id is not None else getattr(state, "league_id", None)
     team_report = analyze_team_fixtures(
-        database_path=database_path,
+        database_path=resolved_db,
         num_rounds=num_rounds,
         start_round=start_round,
         report_path=None,
@@ -231,7 +237,7 @@ def analyze_squad_fixtures(
     )
     team_by_id = {t["team_id"]: t for t in team_report["team_rankings"]}
 
-    store = SnapshotStore(database_path)
+    store = SnapshotStore(resolved_db)
     players_by_id = {p.id: p for p in store.load_latest_players(league_id=eff_league_id)}
 
     squad_fixtures: list[dict[str, Any]] = []
@@ -275,3 +281,27 @@ def analyze_squad_fixtures(
         "num_rounds": num_rounds,
         "squad_units": squad_fixtures,
     }
+
+
+def __getattr__(name: str) -> Any:
+    if name == "PROJECT_ROOT":
+        import warnings
+        warnings.warn("PROJECT_ROOT is deprecated, use paths.elf_home()", DeprecationWarning, stacklevel=2)
+        return paths.elf_home()
+    if name == "DATA_DIRECTORY":
+        import warnings
+        warnings.warn("DATA_DIRECTORY is deprecated, use paths.elf_home() / 'data'", DeprecationWarning, stacklevel=2)
+        return paths.elf_home() / "data"
+    if name == "DATABASE_PATH":
+        import warnings
+        warnings.warn("DATABASE_PATH is deprecated, use paths.database_path()", DeprecationWarning, stacklevel=2)
+        return paths.database_path()
+    if name == "DEFAULT_SQUAD_PATH":
+        import warnings
+        warnings.warn("DEFAULT_SQUAD_PATH is deprecated, use paths.squad_config_path()", DeprecationWarning, stacklevel=2)
+        return paths.squad_config_path()
+    if name == "FIXTURES_REPORT_PATH":
+        import warnings
+        warnings.warn("FIXTURES_REPORT_PATH is deprecated", DeprecationWarning, stacklevel=2)
+        return paths.elf_home() / "reports" / "fixtures_report.json"
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

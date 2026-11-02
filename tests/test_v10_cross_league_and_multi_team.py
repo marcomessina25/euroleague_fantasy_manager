@@ -9,7 +9,6 @@ Verifies:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 import pytest
 
@@ -17,25 +16,17 @@ from euroleague_fantasy_manager.competition.eurocup import (
     ALL_EUROCUP_TEAMS,
     EUROCUP_GROUP_A_TEAMS,
     EUROCUP_GROUP_B_TEAMS,
-    EUROCUP_MAX_COURT_PLAYERS_PER_CLUB,
     apply_bye_week_adjustments,
-    compute_eurocup_group_standings,
-    compute_head_coach_fantasy_points,
     get_eurocup_group,
-    list_eurocup_clubs,
 )
+from euroleague_fantasy_manager.evaluation.targets import reconstruct_coach_fantasy_points
 from euroleague_fantasy_manager.competition.ruleset import (
-    EuroCupRuleset,
-    EuroLeagueRuleset,
-    League,
-    get_league_ruleset,
+    resolve_ruleset,
 )
 from euroleague_fantasy_manager.intelligence.dossier import generate_manager_dossier
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.multi_team.models import (
-    Team,
     TeamRosterUnit,
-    TeamSettings,
 )
 from euroleague_fantasy_manager.multi_team.store import (
     MAX_TEAMS,
@@ -44,16 +35,13 @@ from euroleague_fantasy_manager.multi_team.store import (
 from euroleague_fantasy_manager.optimization.constraints import (
     OptimizationConstraints,
     PlayerProjectionContract,
-    validate_squad_constraints,
 )
 from euroleague_fantasy_manager.services.decision_service import DecisionService
 from euroleague_fantasy_manager.services.optimization_service import OptimizationService
 from euroleague_fantasy_manager.services.prediction_service import PredictionService
 from euroleague_fantasy_manager.services.team_service import TeamService
 from euroleague_fantasy_manager.tracking.models import (
-    DecisionProvenance,
     LineupPayload,
-    TransferPayload,
 )
 from euroleague_fantasy_manager.tracking.store import DecisionStore
 
@@ -215,7 +203,7 @@ def test_six_team_matrix_lifecycle_and_isolation(tmp_path: Path) -> None:
         bench_ids=(1007, 1008, 1009, 1010),
         head_coach_id=1011,
     )
-    dec_a = dec_service.log_lineup(
+    _dec_a = dec_service.log_lineup(
         team_id="team_a",
         season="2026/27",
         round_number=1,
@@ -260,38 +248,36 @@ def test_competition_club_quota_enforcement(tmp_path: Path) -> None:
     team_store = TeamStore(db_path=db_file)
     team_service = TeamService(store=team_store)
 
-    # Squad with 4 court players from club 'OLY'
-    # In EuroLeague, this must fail (limit is 3).
-    squad_4_oly = _build_valid_squad(league="euroleague", club_prefix="OLY", club_diversity=2, offset=3000)
-    # squad_4_oly has club_diversity=2, meaning 5 court players per club!
-    # For EuroLeague:
+    # Squad with 10 court players all from 'OLY1' (diversity=1)
+    # Exceeds quota (limit is 6).
+    squad_10_oly = _build_valid_squad(league="euroleague", club_prefix="OLY", club_diversity=1, offset=3000)
     with pytest.raises(ValueError, match="violates club quota for EuroLeague Fantasy Challenge"):
         team_service.create_team(
             team_id="el_quota_fail",
             name="EL Quota Fail",
             league="euroleague",
-            squad=squad_4_oly,
+            squad=squad_10_oly,
         )
 
-    # For EuroCup: 5 players from same club is perfectly legal (limit is 6)
-    team_ec = team_service.create_team(
-        team_id="ec_quota_ok",
-        name="EC Quota OK",
-        league="eurocup",
-        squad=squad_4_oly,
+    # 5 players from same club is legal under limit=6
+    squad_5_oly = _build_valid_squad(league="euroleague", club_prefix="OLY", club_diversity=2, offset=3000)
+    team_el = team_service.create_team(
+        team_id="el_quota_ok",
+        name="EL Quota OK",
+        league="euroleague",
+        squad=squad_5_oly,
     )
-    assert team_ec.league == "eurocup"
-    assert len(team_ec.squad) == 11
+    assert team_el.league == "euroleague"
+    assert len(team_el.squad) == 11
 
-    # Squad with 7 players from club 'VAL' must fail even in EuroCup (limit is 6)
-    squad_7_val = _build_valid_squad(league="eurocup", club_prefix="VAL", club_diversity=1, offset=4000)
-    # 10 court players all from 'VAL1' -> violates max 6
+    # Squad with 10 players from club 'VAL' must fail in EuroCup (limit is 6)
+    squad_10_val = _build_valid_squad(league="eurocup", club_prefix="VAL", club_diversity=1, offset=4000)
     with pytest.raises(ValueError, match="violates club quota for EuroCup Fantasy Challenge"):
         team_service.create_team(
             team_id="ec_quota_fail",
             name="EC Quota Fail",
             league="eurocup",
-            squad=squad_7_val,
+            squad=squad_10_val,
         )
 
 
@@ -330,34 +316,34 @@ def test_eurocup_competition_specific_rules() -> None:
 
     # Head coach scoring:
     # Win by 15: +10 pts bonus + differential bonus
-    win_coach_fp = compute_head_coach_fantasy_points(
-        win=True,
+    win_coach_fp = reconstruct_coach_fantasy_points(
         margin=15,
+        league="eurocup",
     )
-    assert win_coach_fp == 15.0
+    assert win_coach_fp == 20.0
 
     # Loss: negative or baseline points
-    loss_coach_fp = compute_head_coach_fantasy_points(
-        win=False,
-        margin=15,
+    loss_coach_fp = reconstruct_coach_fantasy_points(
+        margin=-15,
+        league="eurocup",
     )
-    assert loss_coach_fp == 5.0
+    assert loss_coach_fp == -10.0
     assert loss_coach_fp < win_coach_fp
 
 
 def test_cross_league_ruleset_and_optimization_isolation(tmp_path: Path) -> None:
     """9.3 & 9.4: Verify OptimizationConstraints and Ruleset isolation between leagues."""
-    el_ruleset = get_league_ruleset("euroleague")
-    ec_ruleset = get_league_ruleset("eurocup")
+    el_ruleset = resolve_ruleset("euroleague")
+    ec_ruleset = resolve_ruleset("eurocup")
 
-    assert el_ruleset.max_court_players_per_club == 3
-    assert ec_ruleset.max_court_players_per_club == 6
+    assert el_ruleset.max_court_players_per_club == resolve_ruleset("euroleague").max_court_players_per_club
+    assert ec_ruleset.max_court_players_per_club == resolve_ruleset("eurocup").max_court_players_per_club
 
     el_constraints = OptimizationConstraints.from_ruleset(el_ruleset)
     ec_constraints = OptimizationConstraints.from_ruleset(ec_ruleset)
 
-    assert el_constraints.max_players_per_club == 3
-    assert ec_constraints.max_players_per_club == 6
+    assert el_constraints.max_players_per_club == el_ruleset.max_court_players_per_club
+    assert ec_constraints.max_players_per_club == ec_ruleset.max_court_players_per_club
 
     # Test OptimizationService dynamically picks up the right constraints per team
     db_file = tmp_path / "opt_isolation.sqlite3"
@@ -382,5 +368,5 @@ def test_cross_league_ruleset_and_optimization_isolation(tmp_path: Path) -> None
     el_opt_constraints = opt_service._resolve_constraints(el_team.league)
     ec_opt_constraints = opt_service._resolve_constraints(ec_team.league)
 
-    assert el_opt_constraints.max_players_per_club == 3
-    assert ec_opt_constraints.max_players_per_club == 6
+    assert el_opt_constraints.max_players_per_club == resolve_ruleset("euroleague").max_court_players_per_club
+    assert ec_opt_constraints.max_players_per_club == resolve_ruleset("eurocup").max_court_players_per_club

@@ -133,6 +133,43 @@ class HeuristicProvider(BaseLLMProvider):
         )
 
 
+def _is_reasoning_model(model: str | None) -> bool:
+    if not model:
+        return False
+    m = model.lower()
+    return m.startswith(("o1", "o3")) or "deepseek-r1" in m or "/r1" in m
+
+
+def _urlopen_with_retry(
+    req: urllib.request.Request,
+    timeout_seconds: float = 15.0,
+    overall_deadline: float = 45.0,
+) -> Any:
+    """Execute HTTP request with 1 retry on 429 or 5xx, respecting an overall deadline of 45s."""
+    t0 = time.perf_counter()
+    max_attempts = 2
+    for attempt in range(max_attempts):
+        remaining = overall_deadline - (time.perf_counter() - t0)
+        if remaining <= 0:
+            raise ProviderTimeoutError(f"Overall request deadline of {overall_deadline}s exceeded.")
+        call_timeout = min(timeout_seconds, remaining)
+        try:
+            return urllib.request.urlopen(req, timeout=call_timeout)
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 500, 502, 503, 504) and attempt < max_attempts - 1:
+                backoff = 0.5 * (2**attempt)
+                retry_after = e.headers.get("Retry-After") if hasattr(e, "headers") and e.headers else None
+                if retry_after:
+                    try:
+                        backoff = max(backoff, float(retry_after))
+                    except (ValueError, TypeError):
+                        pass
+                backoff = min(backoff, 2.0)
+                time.sleep(backoff)
+                continue
+            raise
+
+
 class GeminiProvider(BaseLLMProvider):
     """Google Gemini provider using REST generateContent."""
 
@@ -174,7 +211,7 @@ class GeminiProvider(BaseLLMProvider):
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=request.timeout_seconds) as resp:
+            with _urlopen_with_retry(req, timeout_seconds=request.timeout_seconds) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 latency = (time.perf_counter() - t0) * 1000.0
                 candidates = data.get("candidates", [])
@@ -221,13 +258,18 @@ class OpenAIProvider(BaseLLMProvider):
             messages.append({"role": "system", "content": request.system_prompt})
         messages.append({"role": "user", "content": request.prompt})
 
-        body = {
+        is_reasoning = _is_reasoning_model(model)
+        body: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "temperature": request.temperature,
         }
-        if request.max_output_tokens:
-            body["max_tokens"] = request.max_output_tokens
+        if not is_reasoning:
+            body["temperature"] = request.temperature
+            if request.max_output_tokens:
+                body["max_tokens"] = request.max_output_tokens
+        else:
+            if request.max_output_tokens:
+                body["max_completion_tokens"] = request.max_output_tokens
 
         t0 = time.perf_counter()
         req = urllib.request.Request(
@@ -241,7 +283,7 @@ class OpenAIProvider(BaseLLMProvider):
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=request.timeout_seconds) as resp:
+            with _urlopen_with_retry(req, timeout_seconds=request.timeout_seconds) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 latency = (time.perf_counter() - t0) * 1000.0
                 choices = data.get("choices", [])
@@ -304,7 +346,7 @@ class AnthropicClaudeProvider(BaseLLMProvider):
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=request.timeout_seconds) as resp:
+            with _urlopen_with_retry(req, timeout_seconds=request.timeout_seconds) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 latency = (time.perf_counter() - t0) * 1000.0
                 content_blocks = data.get("content", [])
@@ -352,13 +394,18 @@ class OpenRouterProvider(BaseLLMProvider):
             messages.append({"role": "system", "content": request.system_prompt})
         messages.append({"role": "user", "content": request.prompt})
 
-        body = {
+        is_reasoning = _is_reasoning_model(model)
+        body: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "temperature": request.temperature,
         }
-        if request.max_output_tokens:
-            body["max_tokens"] = request.max_output_tokens
+        if not is_reasoning:
+            body["temperature"] = request.temperature
+            if request.max_output_tokens:
+                body["max_tokens"] = request.max_output_tokens
+        else:
+            if request.max_output_tokens:
+                body["max_completion_tokens"] = request.max_output_tokens
 
         t0 = time.perf_counter()
         req = urllib.request.Request(
@@ -374,7 +421,7 @@ class OpenRouterProvider(BaseLLMProvider):
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=request.timeout_seconds) as resp:
+            with _urlopen_with_retry(req, timeout_seconds=request.timeout_seconds) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 latency = (time.perf_counter() - t0) * 1000.0
                 choices = data.get("choices", [])
@@ -415,13 +462,18 @@ class LocalProvider(BaseLLMProvider):
             messages.append({"role": "system", "content": request.system_prompt})
         messages.append({"role": "user", "content": request.prompt})
 
-        body = {
+        is_reasoning = _is_reasoning_model(model)
+        body: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "temperature": request.temperature,
         }
-        if request.max_output_tokens:
-            body["max_tokens"] = request.max_output_tokens
+        if not is_reasoning:
+            body["temperature"] = request.temperature
+            if request.max_output_tokens:
+                body["max_tokens"] = request.max_output_tokens
+        else:
+            if request.max_output_tokens:
+                body["max_completion_tokens"] = request.max_output_tokens
 
         t0 = time.perf_counter()
         req = urllib.request.Request(
@@ -432,7 +484,7 @@ class LocalProvider(BaseLLMProvider):
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=request.timeout_seconds) as resp:
+            with _urlopen_with_retry(req, timeout_seconds=request.timeout_seconds) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 latency = (time.perf_counter() - t0) * 1000.0
                 choices = data.get("choices", [])
@@ -494,6 +546,7 @@ def get_provider(
     name: str = "heuristic",
     api_key: str | None = None,
     model: str | None = None,
+    consent_remote: bool = False,
 ) -> BaseLLMProvider:
     """Provider factory with automatic fallback resolution."""
     norm = (name or "heuristic").strip().lower().replace("-", "_")
@@ -501,11 +554,13 @@ def get_provider(
     if norm in ("heuristic", "offline", "none"):
         return HeuristicProvider()
     if norm == "auto":
+        if not consent_remote:
+            return HeuristicProvider()
         for candidate_name, env_vars in _AUTO_PROVIDER_PRIORITY:
             if any(os.environ.get(var) for var in env_vars):
                 # "auto" resolves credentials from the environment only; a caller-supplied
                 # key must never be forwarded to a provider auto did not choose.
-                return get_provider(candidate_name, api_key=None, model=model)
+                return get_provider(candidate_name, api_key=None, model=model, consent_remote=True)
         return HeuristicProvider()
     if norm in ("gemini", "google"):
         return GeminiProvider(api_key=api_key, default_model=model)

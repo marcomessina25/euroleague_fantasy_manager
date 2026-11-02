@@ -11,10 +11,8 @@ from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.multi_team.models import (
     Team,
     TeamRosterUnit,
-    TeamSettings,
 )
 from euroleague_fantasy_manager.multi_team.store import (
-    MAX_TEAMS,
     TeamStore,
 )
 from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
@@ -27,17 +25,11 @@ from euroleague_fantasy_manager.services.team_service import TeamService
 from euroleague_fantasy_manager.tracking.models import (
     DecisionType,
     LineupPayload,
-    TransferPayload,
-    TurnSubPayload,
 )
 from euroleague_fantasy_manager.tracking.store import DecisionStore
 from euroleague_fantasy_manager.web.app import create_app
-from euroleague_fantasy_manager.web.deps import set_db_path
 
-try:
-    from tests.test_v04_optimization import make_standard_squad, make_test_player
-except ModuleNotFoundError:
-    from test_v04_optimization import make_standard_squad, make_test_player
+from tests.helpers import make_standard_squad, make_test_player
 
 
 def _build_test_squad_contracts() -> list[PlayerProjectionContract]:
@@ -143,7 +135,7 @@ def test_multi_team_strict_isolation(tmp_path: Path):
     squad_a = _build_team_roster_units(contracts)
 
     team_a = store.create_team(Team(team_id="team_a", name="Team A", bank_tenths=100, squad=squad_a))
-    team_b = store.create_team(Team(team_id="team_b", name="Team B", bank_tenths=500, squad=[]))
+    _team_b = store.create_team(Team(team_id="team_b", name="Team B", bank_tenths=500, squad=[]))
 
     # Verify initial isolation
     fetched_a = store.get_team("team_a")
@@ -311,7 +303,7 @@ def test_scenario_service_immutability(tmp_path: Path):
 
     contracts = _build_test_squad_contracts()
     units = _build_team_roster_units(contracts)
-    team = ts.create_team(team_id="scen_team", name="Scenario Team", squad=units, bank_tenths=100)
+    _team = ts.create_team(team_id="scen_team", name="Scenario Team", squad=units, bank_tenths=100)
 
     # Run what-if scenario: rule out the top scorer (contracts[9])
     ruled_out_id = contracts[9].player_id
@@ -395,7 +387,6 @@ def test_decision_and_evaluation_service_lifecycle(tmp_path: Path):
 # 3. Local Web GUI & FastAPI Workstation Integration Tests
 def test_fastapi_workstation_endpoints(tmp_path: Path):
     db_file = tmp_path / "web_test.sqlite3"
-    set_db_path(db_file)
     app = create_app(db_path=db_file)
     client = TestClient(app)
 
@@ -479,7 +470,6 @@ def test_fastapi_workstation_endpoints(tmp_path: Path):
 def test_initial_team_builder_optimization_and_api(tmp_path: Path):
     """Test initial team suggestion (scratch & partial locked) and team creation via Web API."""
     db_file = tmp_path / "initial_builder_test.sqlite3"
-    set_db_path(db_file)
     app = create_app(db_path=db_file)
     client = TestClient(app)
 
@@ -586,7 +576,7 @@ def test_snapshot_store_fallback_and_update_endpoint(tmp_path: Path):
     from euroleague_fantasy_manager.storage import SnapshotStore, SnapshotSummary
 
     db_file = tmp_path / "fallback_test.sqlite3"
-    store = SnapshotStore(db_file)
+    _store = SnapshotStore(db_file)
 
     # Initialize a mock snapshot with players in the SQLite database
     with sqlite3.connect(db_file) as conn:
@@ -731,7 +721,7 @@ def test_workstation_player_details_rename_transfers_and_multiround(tmp_path: Pa
     db_file = tmp_path / "trade_studio_test.sqlite3"
     ts = TeamService(db_path=db_file)
     ps = PredictionService(database_path=db_file)
-    opt = OptimizationService(ts, ps)
+    _opt = OptimizationService(ts, ps)
 
     contracts = _build_test_squad_contracts()
     cheap_contracts = [
@@ -1107,10 +1097,7 @@ def test_live_scores_vs_expected_scores_never_equal_cost(tmp_path: Path):
 
     and expected score is calculated via decomposed model rather than equating to cost."""
     import sqlite3
-    from euroleague_fantasy_manager.storage import SnapshotStore
     from euroleague_fantasy_manager.services.prediction_service import PredictionService
-    from euroleague_fantasy_manager.web.app import create_app
-    from starlette.testclient import TestClient
 
     db_file = tmp_path / "live_scores.sqlite3"
     with sqlite3.connect(db_file) as conn:
@@ -1212,8 +1199,9 @@ def test_live_scores_vs_expected_scores_never_equal_cost(tmp_path: Path):
     assert p_unplayed.expected_fp == 14.42  # Decomposed quantitative model
 
 
+@pytest.mark.perf
 def test_transfer_optimizer_speed_and_multiple_recommendations():
-    """Verify that transfer optimization runs fast (<1.5s) and yields multiple distinct options."""
+    """Verify transfer optimization execution speed benchmark."""
     import time
     from euroleague_fantasy_manager.optimization.transfers import TransferOptimizer
 
@@ -1412,7 +1400,6 @@ def test_revert_round_start_checkpoint_lifecycle(tmp_path: Path):
 def test_workstation_simulate_and_apply_intra_round_routes(tmp_path: Path):
     """Verify workstation routes for intra-round simulation, application, and revert."""
     db_file = tmp_path / "routes_test.sqlite3"
-    set_db_path(db_file)
     app = create_app(db_path=db_file)
     client = TestClient(app)
 
@@ -1535,10 +1522,8 @@ def test_court_score_breakdown_consistency(tmp_path: Path):
     import sqlite3
     from euroleague_fantasy_manager.services.team_service import TeamService
     from euroleague_fantasy_manager.web.app import create_app
-    from euroleague_fantasy_manager.web.deps import get_prediction_service, set_db_path
 
     db_file = tmp_path / "court_breakdown_test.sqlite3"
-    set_db_path(db_file)
     app = create_app(db_path=db_file)
     client = TestClient(app)
 
@@ -1607,7 +1592,7 @@ def test_court_score_breakdown_consistency(tmp_path: Path):
     with sqlite3.connect(db_file) as conn:
         conn.execute("UPDATE players SET has_played = 1, last_match_pts = 16.5 WHERE id IN (101, 102, 105, 110)")
 
-    get_prediction_service().clear_cache()
+    app.state.prediction_service.clear_cache()
 
     resp = client.get("/api/workstation/dashboard?team_id=cb_team&round_number=1")
     assert resp.status_code == 200
@@ -1622,7 +1607,7 @@ def test_court_score_breakdown_consistency(tmp_path: Path):
     with sqlite3.connect(db_file) as conn:
         conn.execute("UPDATE players SET has_played = 1, last_match_pts = 14.0")
 
-    get_prediction_service().clear_cache()
+    app.state.prediction_service.clear_cache()
 
     resp = client.get("/api/workstation/dashboard?team_id=cb_team&round_number=1")
     assert resp.status_code == 200
@@ -1635,8 +1620,9 @@ def test_court_score_breakdown_consistency(tmp_path: Path):
     assert abs((lineup["realized_total_fp"] + lineup["unplayed_expected_fp"]) - lineup["expected_total_fp"]) < 0.01
 
 
+@pytest.mark.perf
 def test_transfer_optimizer_performance_budget():
-    """Verify transfer optimization on 200-player market finishes comfortably under 1.5s per trade count."""
+    """Verify transfer optimization on 200-player market wall-clock performance budget."""
     import time
     from euroleague_fantasy_manager.models import Position
     from euroleague_fantasy_manager.optimization.transfers import TransferOptimizer
@@ -1674,7 +1660,6 @@ def test_v051_prediction_calibration_vs_v050(tmp_path: Path):
     """Compare V0.5.0 and V0.5.1 prediction accuracy on historical / hermetic dataset."""
     import sqlite3
     from euroleague_fantasy_manager.evaluation.backtest_v051_predictions import run_v051_prediction_backtest
-    from euroleague_fantasy_manager.fixtures import DATABASE_PATH
 
     # 1. Hermetic dataset verification
     hermetic_db = tmp_path / "hermetic_eval.sqlite3"
@@ -1709,13 +1694,22 @@ def test_v051_prediction_calibration_vs_v050(tmp_path: Path):
     assert hermetic_res.v051_mae <= hermetic_res.v050_mae + 0.05
     assert hermetic_res.v051_xm_mae < 10.0
 
-    # 2. If main database exists locally, verify full backtest passes regression gate
-    if DATABASE_PATH.exists():
-        real_res = run_v051_prediction_backtest(database_path=DATABASE_PATH)
-        assert real_res.total_samples > 0
-        assert real_res.passed_regression_gate
-        assert real_res.v051_mae <= real_res.v050_mae + 0.05
-        assert real_res.v051_spearman >= real_res.v050_spearman - 0.02
+
+
+
+@pytest.mark.realdata
+def test_realdata_v051_prediction_backtest() -> None:
+    from euroleague_fantasy_manager import paths
+    from euroleague_fantasy_manager.evaluation.backtest_v051_predictions import run_v051_prediction_backtest
+
+    db_path = paths.database_path()
+    if not db_path.exists():
+        pytest.skip("Real data database not present")
+    real_res = run_v051_prediction_backtest(database_path=db_path)
+    assert real_res.total_samples > 0
+    assert real_res.passed_regression_gate
+    assert real_res.v051_mae <= real_res.v050_mae + 0.05
+    assert real_res.v051_spearman >= real_res.v050_spearman - 0.02
 
 
 
@@ -1726,3 +1720,51 @@ def test_v051_prediction_calibration_vs_v050(tmp_path: Path):
 
 
 
+
+
+def test_transfer_optimizer_work_bounds_and_multiple_recommendations():
+    """Verify transfer optimization evaluates within bounded search packages and proposes multiple distinct options."""
+    from euroleague_fantasy_manager.optimization.transfers import TransferOptimizer
+
+    squad = make_standard_squad()
+    market = [
+        make_test_player(901, Position.GUARD, expected_fp=25.0, price_tenths=130),
+        make_test_player(902, Position.GUARD, expected_fp=24.0, price_tenths=120),
+        make_test_player(903, Position.GUARD, expected_fp=22.0, price_tenths=110),
+        make_test_player(904, Position.FORWARD, expected_fp=26.0, price_tenths=140),
+        make_test_player(905, Position.FORWARD, expected_fp=25.0, price_tenths=135),
+        make_test_player(906, Position.FORWARD, expected_fp=23.0, price_tenths=115),
+        make_test_player(907, Position.CENTER, expected_fp=27.0, price_tenths=150),
+        make_test_player(908, Position.CENTER, expected_fp=24.0, price_tenths=125),
+    ]
+
+    opt = TransferOptimizer()
+    res_2 = opt.optimize_transfers(current_squad=squad, market=market, bank_tenths=300, max_trades=2, top_n=3)
+    assert res_2.total_evaluated_packages <= 5000
+    assert res_2.stage2_evaluations <= max(25, 3)
+    assert len(res_2.recommendations) > 1
+    assert res_2.recommendations[0].net_transfer_value >= res_2.recommendations[1].net_transfer_value
+
+
+def test_transfer_optimizer_work_bounds():
+    """Verify transfer optimization on 200-player market respects work bounds for all trade sizes."""
+    from euroleague_fantasy_manager.models import Position
+    from euroleague_fantasy_manager.optimization.transfers import TransferOptimizer
+
+    squad = make_standard_squad()
+    market = [
+        make_test_player(
+            1000 + i,
+            [Position.GUARD, Position.FORWARD, Position.CENTER][i % 3],
+            expected_fp=5.0 + (i % 25),
+            price_tenths=40 + (i % 150),
+        )
+        for i in range(200)
+    ]
+
+    opt = TransferOptimizer()
+    for trades in (1, 2, 3, 4):
+        res = opt.optimize_transfers(current_squad=squad, market=market, bank_tenths=100, max_trades=trades)
+        assert res.stage2_evaluations <= 25
+        assert res.total_evaluated_packages <= 30000
+        assert len(res.recommendations) > 0

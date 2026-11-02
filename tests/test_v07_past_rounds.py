@@ -537,9 +537,13 @@ def test_viewing_a_past_round_does_not_overwrite_the_live_rounds_lineup(ctx):
     ]
     assert after_round2 == before_round2
 
-    # Round 1 itself was auto-synced to a full lineup by the dashboard's role backfill.
+    # Under P2.8 / WEB-1, GET never writes to the database. The returned payload reports
+    # roles_assigned: false along with the suggested lineup for explicit application.
+    body = res.json()
+    assert body.get("roles_assigned") is False
+    assert len(body.get("current_lineup", {}).get("starters", [])) == 5
     round1 = service.store.get_squad("bt", 1)
-    assert sum(1 for u in round1 if u.is_starter) == 5
+    assert sum(1 for u in round1 if u.is_starter) == 0
 
 
 def test_gui_exposes_a_round_selector_on_the_lineup_tab():

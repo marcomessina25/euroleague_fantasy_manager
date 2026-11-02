@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+import sqlite3
 import uuid
 
 from ..optimization.constraints import PlayerProjectionContract
@@ -49,6 +50,7 @@ class DecisionLogger:
         actual_lineup: LineupPayload | None = None,
         snapshot: StateSnapshot | None = None,
         league: str = "euroleague",
+        conn: sqlite3.Connection | None = None,
     ) -> DecisionRecord:
         """Record a pre-round or initial lineup decision."""
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -58,7 +60,7 @@ class DecisionLogger:
         snapshot_id: str | None = None
         if snapshot:
             snapshot_id = snapshot.snapshot_id
-            self.store.save_snapshot(snapshot)
+            self.store.save_snapshot(snapshot, conn=conn)
         elif squad_contracts:
             snapshot_id = f"snap_{season}_r{round_number:02d}_t{turn_number}_{uuid.uuid4().hex[:8]}"
             player_meta = {
@@ -86,7 +88,7 @@ class DecisionLogger:
                 created_at=now_iso,
                 league=league,
             )
-            self.store.save_snapshot(snap)
+            self.store.save_snapshot(snap, conn=conn)
 
         # 2. Recommended Lineup Payload
         rec_payload: LineupPayload | None = recommended_lineup
@@ -171,7 +173,7 @@ class DecisionLogger:
             league=league,
         )
 
-        self.store.log_decision(record)
+        self.store.log_decision(record, conn=conn)
         return record
 
     def log_transfer_decision(
@@ -190,6 +192,7 @@ class DecisionLogger:
         actual_transfers: TransferPayload | None = None,
         snapshot: StateSnapshot | None = None,
         league: str = "euroleague",
+        conn: sqlite3.Connection | None = None,
     ) -> DecisionRecord:
         """Record between-round transfer decision."""
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -198,7 +201,7 @@ class DecisionLogger:
         snapshot_id: str | None = None
         if snapshot:
             snapshot_id = snapshot.snapshot_id
-            self.store.save_snapshot(snapshot)
+            self.store.save_snapshot(snapshot, conn=conn)
 
         rec_payload: TransferPayload | None = recommended_transfers
         if rec_payload is None and recommended_transfer:
@@ -243,6 +246,7 @@ class DecisionLogger:
             decision_type=DecisionType.TRANSFERS,
             created_at=now_iso,
             provenance=prov,
+            state_snapshot_id=snapshot_id,
             recommended_transfers=rec_payload,
             actual_transfers=act_payload,
             is_override=is_override,
@@ -250,7 +254,7 @@ class DecisionLogger:
             league=league,
         )
 
-        self.store.log_decision(record)
+        self.store.log_decision(record, conn=conn)
         return record
 
     def log_turn_substitution(
@@ -272,6 +276,7 @@ class DecisionLogger:
         actual_turn_sub: TurnSubPayload | None = None,
         snapshot: StateSnapshot | None = None,
         league: str = "euroleague",
+        conn: sqlite3.Connection | None = None,
     ) -> DecisionRecord:
         """Record intra-round Turn 1 -> Turn 2 substitutions or captain switch."""
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -307,7 +312,7 @@ class DecisionLogger:
             league=league,
         )
 
-        self.store.log_decision(record)
+        self.store.log_decision(record, conn=conn)
         return record
 
     def log_initial_team_decision(
@@ -327,6 +332,7 @@ class DecisionLogger:
         notes: str | None = None,
         snapshot: StateSnapshot | None = None,
         league: str = "euroleague",
+        conn: sqlite3.Connection | None = None,
     ) -> DecisionRecord:
         """Record initial season team selection/builder decision."""
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -338,7 +344,7 @@ class DecisionLogger:
         snapshot_id: str | None = None
         if snapshot:
             snapshot_id = snapshot.snapshot_id
-            self.store.save_snapshot(snapshot)
+            self.store.save_snapshot(snapshot, conn=conn)
         else:
             squad_to_snap = act_squad or rec_squad
             if squad_to_snap:
@@ -384,7 +390,7 @@ class DecisionLogger:
                 created_at=now_iso,
                 league=league,
             )
-            self.store.save_snapshot(snap)
+            self.store.save_snapshot(snap, conn=conn)
 
         is_override = False
         if rec_squad and act_squad and set(rec_squad) != set(act_squad):
@@ -419,5 +425,5 @@ class DecisionLogger:
             league=league,
         )
 
-        self.store.log_decision(record)
+        self.store.log_decision(record, conn=conn)
         return record

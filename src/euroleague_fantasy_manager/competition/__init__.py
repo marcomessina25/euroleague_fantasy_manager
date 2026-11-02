@@ -7,7 +7,6 @@ from .eurocup import (
     EuroCupClub,
     apply_bye_week_adjustments,
     compute_eurocup_group_standings,
-    compute_head_coach_fantasy_points,
     get_eurocup_group,
     list_eurocup_clubs,
 )
@@ -16,7 +15,9 @@ from .ruleset import (
     EuroCupRuleset,
     EuroLeagueRuleset,
     League,
+    get_base_ruleset,
     get_league_ruleset,
+    resolve_ruleset,
 )
 
 __all__ = [
@@ -34,6 +35,8 @@ __all__ = [
     "compute_eurocup_group_standings",
     "compute_head_coach_fantasy_points",
     "get_eurocup_group",
+    "get_base_ruleset",
     "get_league_ruleset",
+    "resolve_ruleset",
     "list_eurocup_clubs",
 ]

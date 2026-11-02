@@ -9,7 +9,7 @@ from ..models import Position
 from ..optimization.backtest import score_lineup_with_actuals
 from ..optimization.constraints import OptimizationConstraints, PlayerProjectionContract
 from ..optimization.lineup import FixedSquadLineupOptimizer
-from .models import DecisionOutcome, DecisionRecord, LineupPayload, OutcomeStatus, StateSnapshot
+from .models import DecisionOutcome, LineupPayload, OutcomeStatus, StateSnapshot
 from .store import DecisionStore
 
 
@@ -23,7 +23,11 @@ class OutcomeUpdater:
         constraints: OptimizationConstraints | None = None,
     ) -> None:
         self.store = store or DecisionStore(database_path)
-        self.constraints = constraints or OptimizationConstraints()
+        if constraints is None:
+            from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
+            self.constraints = OptimizationConstraints.from_ruleset(get_league_ruleset())
+        else:
+            self.constraints = constraints
         self.optimizer = FixedSquadLineupOptimizer(
             constraints=self.constraints,
             include_option_value=False,

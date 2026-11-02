@@ -31,7 +31,7 @@ Real-World Player Modeling Examples:
 
 from dataclasses import dataclass
 import math
-from typing import Any, Sequence
+from typing import Any
 
 from ..evaluation.features import PointInTimeFeatureRow
 

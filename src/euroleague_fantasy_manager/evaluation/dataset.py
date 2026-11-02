@@ -7,7 +7,7 @@ box scores across seasons (E2022..E2025, U2022..U2025) without network access. G
 EuroLeague/EuroCup box-score ingestion is scheduled for V0.8.
 """
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
 import sqlite3
@@ -81,7 +81,13 @@ class EvaluationDatasetStore:
         with self._connect() as conn:
             conn.executescript(
                 """
-                CREATE TABLE IF NOT EXISTS eval_players (
+                                CREATE TABLE IF NOT EXISTS eval_dataset_meta (
+                    season TEXT PRIMARY KEY,
+                    source TEXT NOT NULL CHECK(source IN ('synthetic', 'historical_feeds')),
+                    created_at TEXT NOT NULL
+                );
+
+CREATE TABLE IF NOT EXISTS eval_players (
                     player_id INTEGER PRIMARY KEY,
                     name TEXT NOT NULL,
                     position TEXT NOT NULL,
@@ -479,6 +485,19 @@ class EvaluationDatasetStore:
                 return str(row["decision_cutoff"])
         raise KeyError(f"No round cutoff found for season={norm_season}, round={round_number}")
 
+    def get_season_source(self, season: str) -> str | None:
+        """Return data source for a season ('synthetic' or 'historical_feeds'), or None."""
+        norm_season = normalize_season_code(season)
+        try:
+            with self._connect() as conn:
+                row = conn.execute(
+                    "SELECT source FROM eval_dataset_meta WHERE season = ?",
+                    (norm_season,),
+                ).fetchone()
+                return str(row["source"]) if row else None
+        except Exception:
+            return None
+
     def list_seasons(self, league: str | None = None) -> list[str]:
         with self._connect() as conn:
             rows = conn.execute("SELECT DISTINCT season FROM eval_rounds ORDER BY season").fetchall()
@@ -748,16 +767,16 @@ EUROLEAGUE_ROSTER = [
     (4001, "Scottie Wilbekin", "G", 4, "FBB", 125, 1, 13.5),
     (4002, "Marko Guduric", "G", 4, "FBB", 115, 0, 12.0),
     (4003, "Nigel Hayes-Davis", "F", 4, "FBB", 155, 1, 18.0),
-    (4004, "Tarik Biberovic", "F", 4, "FBB", 85, 0, 9.0),
+    (4004, "Tarik Biberovic", "F", 4, "FBB", 65, 0, 9.0),
     (4091, "Saras Jasikevicius", "HC", 4, "FBB", 85, 1, 10.0),
     # Team 5 (ASM)
     (5001, "Mike James", "G", 5, "ASM", 170, 1, 21.5),
     (5002, "Elie Okobo", "G", 5, "ASM", 125, 0, 14.0),
     (5003, "Alpha Diallo", "F", 5, "ASM", 130, 1, 15.0),
-    (5004, "Donatas Motiejunas", "C", 5, "ASM", 105, 1, 11.5),
+    (5004, "Donatas Motiejunas", "C", 5, "ASM", 80, 1, 11.5),
     (5091, "Sasa Obradovic", "HC", 5, "ASM", 80, 1, 9.0),
     # Team 6 (BER)
-    (6001, "Martin Hermannsson", "G", 6, "BER", 85, 1, 9.5),
+    (6001, "Martin Hermannsson", "G", 6, "BER", 65, 1, 9.5),
     (6002, "Gabriele Procida", "F", 6, "BER", 75, 1, 8.5),
     (6003, "Louis Olinde", "F", 6, "BER", 70, 0, 7.5),
     (6004, "Trevion Williams", "C", 6, "BER", 95, 1, 11.0),
@@ -803,20 +822,20 @@ EUROCUP_ROSTER = [
     # Team 14 (CJB)
     (1401, "Guillem Vives", "G", 14, "CJB", 100, 1, 11.0),
     (1402, "Devon Dotson", "G", 14, "CJB", 130, 0, 14.0),
-    (1403, "Adam Hanga", "F", 14, "CJB", 125, 1, 13.5),
-    (1404, "Ante Tomic", "C", 14, "CJB", 145, 1, 17.5),
+    (1403, "Adam Hanga", "F", 14, "CJB", 65, 1, 13.5),
+    (1404, "Ante Tomic", "C", 14, "CJB", 80, 1, 17.5),
     (1491, "Dani Miret", "HC", 14, "CJB", 75, 1, 8.5),
     # Team 15 (BES)
     (1501, "Derek Needham", "G", 15, "BES", 120, 1, 13.0),
     (1502, "Jonah Mathews", "G", 15, "BES", 135, 1, 15.0),
-    (1503, "Matt Mitchell", "F", 15, "BES", 125, 1, 13.5),
-    (1504, "Dustin Sleva", "C", 15, "BES", 110, 1, 12.0),
+    (1503, "Matt Mitchell", "F", 15, "BES", 65, 1, 13.5),
+    (1504, "Dustin Sleva", "C", 15, "BES", 75, 1, 12.0),
     (1591, "Dusan Alimpijevic", "HC", 15, "BES", 75, 1, 8.0),
     # Team 16 (TRE)
-    (1601, "Quinn Ellis", "G", 16, "TRE", 95, 1, 10.5),
+    (1601, "Quinn Ellis", "G", 16, "TRE", 60, 1, 10.5),
     (1602, "Jordan Ford", "G", 16, "TRE", 110, 1, 12.0),
-    (1603, "Anthony Lamb", "F", 16, "TRE", 125, 1, 14.0),
-    (1604, "Selom Mawugbe", "C", 16, "TRE", 90, 1, 9.5),
+    (1603, "Anthony Lamb", "F", 16, "TRE", 65, 1, 14.0),
+    (1604, "Selom Mawugbe", "C", 16, "TRE", 65, 1, 9.5),
     (1691, "Paolo Galbiati", "HC", 16, "TRE", 60, 1, 4.0),
 ]
 
@@ -1108,6 +1127,12 @@ def build_historical_dataset(
                         f"Point-in-time snapshot before {season_code} Round {rnum}",
                     ),
                 )
+
+                for s in norm_seasons:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO eval_dataset_meta (season, source, created_at) VALUES (?, 'synthetic', ?)",
+                        (s, datetime.now(timezone.utc).isoformat()),
+                    )
 
     return HistoricalBuildSummary(
         dataset_version=dataset_version,

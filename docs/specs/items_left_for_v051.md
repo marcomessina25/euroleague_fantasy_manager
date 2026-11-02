@@ -452,7 +452,7 @@ def test_transfer_optimizer_performance_budget():
 - [x] **RECOMMENDED #4:** Round checkpoint fail-fast implemented and tested.
 - [x] **RECOMMENDED #5:** Transfer multi-option ranking test passes.
 - [x] **RECOMMENDED #6:** UI score breakdown consistency asserted in routes + tests pass.
-- [x] **GOOD TO HAVE #7:** Performance benchmarking test passes (<1.5s).
+- [x] **GOOD TO HAVE #7:** Performance benchmarking test passes (work-bound / opt-in perf marker).
 - [x] All unit tests in `tests/test_v05_multi_team_and_gui.py` pass (including new V0.5.1 tests).
 - [x] Integration tests: `test_workstation_simulate_and_apply_intra_round_routes()` passes.
 - [x] No lint/format issues (`black`, `mypy`, `pylint` if configured).

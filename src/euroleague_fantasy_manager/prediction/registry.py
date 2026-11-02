@@ -326,6 +326,20 @@ class ModelRegistry:
                 ),
                 fallback_model_id="fp_context_v08",
             ),
+            ModelMetadata(
+                model_id="price_prior_v1",
+                model_version="1.0.2",
+                model_family="heuristic_prior",
+                target_type="fantasy_points",
+                training_window="price_and_position_prior",
+                feature_set_version="1.0.0",
+                hyperparameters={},
+                calibration_method="none",
+                created_at=now_iso,
+                capabilities=("expected_fp", "play_probability", "minutes", "uncertainty_bounds"),
+                required_features=(),
+                fallback_model_id="price_prior_v1",
+            ),
         ]
         for m in defaults:
             self.register(m)

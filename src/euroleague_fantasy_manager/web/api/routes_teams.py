@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Any
+from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from euroleague_fantasy_manager.competition.ruleset import League
-from euroleague_fantasy_manager.models import Position
-from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit, TeamSettings
-from euroleague_fantasy_manager.rules import MAX_TRADES_PER_ROUND
+from euroleague_fantasy_manager.models import NoSnapshotForRoundError, UnknownPlayerError
+from euroleague_fantasy_manager.multi_team.store import ConcurrentModificationError
+from euroleague_fantasy_manager.multi_team.models import AuditIntent, ReplayConflictError, TeamRosterUnit
 from euroleague_fantasy_manager.optimization.constraints import (
-    OptimizationConstraints,
     PlayerProjectionContract,
     validate_squad_constraints,
 )
@@ -34,10 +33,17 @@ router = APIRouter(prefix="/api/teams", tags=["teams"])
 class CreateTeamRequest(BaseModel):
     team_id: str | None = None
     name: str
+
+    @field_validator("team_id")
+    @classmethod
+    def validate_team_id(cls, v: str | None) -> str | None:
+        if v is not None and not re.match(r"^[A-Za-z0-9_-]{1,40}$", v):
+            raise ValueError("team_id must match ^[A-Za-z0-9_-]{1,40}$")
+        return v
     league: str = "euroleague"
     mode: str = "classic"
     season: str = "2026/27"
-    round_number: int = 1
+    round_number: int = Field(default=1, ge=1, le=50)
     turn_number: int = 1
     bank_tenths: int | None = None
     credits: float | None = None
@@ -46,13 +52,28 @@ class CreateTeamRequest(BaseModel):
     recommended_player_ids: list[int] = Field(default_factory=list)
 
 
+class TeamSettingsUpdate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    risk_mode: Literal["expected", "conservative", "aggressive"] | None = None
+    risk_lambda: float | None = None
+    option_value_mode: str | None = None
+    objective: str | None = None
+    custom_weights: dict[str, float] | None = None
+
+
 class UpdateTeamRequest(BaseModel):
-    name: str | None = None
-    round_number: int | None = None
-    turn_number: int | None = None
-    bank_tenths: int | None = None
-    transfers_remaining: int | None = None
-    settings: dict[str, Any] | None = None
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = Field(None, min_length=1, max_length=32)
+    round_number: int | None = Field(None, ge=1, le=40)
+    transfers_remaining: int | None = Field(None, ge=0, le=40)
+    turn_number: int | None = Field(None, ge=1)
+    settings: TeamSettingsUpdate | None = None
+    updated_at: str | None = None
+
+
+class AdjustBankRequest(BaseModel):
+    delta_tenths: int
+    reason: str = "manual adjustment" 
 
 
 class UpdateLineupRequest(BaseModel):
@@ -98,7 +119,7 @@ def create_team(
         elif req.bank_tenths is not None:
             bank_tenths = int(req.bank_tenths)
         else:
-            bank_tenths = None
+            bank_tenths = 1000 if not req.player_ids and round_num == 1 else None
 
         if round_num > 1 and bank_tenths is None:
             raise HTTPException(
@@ -125,15 +146,19 @@ def create_team(
             spent_tenths = sum(c.price_tenths for c in contracts)
 
             # Validate squad
+            from ...competition.ruleset import resolve_ruleset
+            from ...optimization.constraints import OptimizationConstraints
+            ruleset = resolve_ruleset(league, db_path=service.db_path)
+            c_cfg = OptimizationConstraints.from_ruleset(ruleset)
             if round_num == 1:
-                val = validate_squad_constraints(contracts, budget_tenths=1000)
+                val = validate_squad_constraints(contracts, budget_tenths=1000, constraints=c_cfg)
                 if not val.is_valid:
                     raise HTTPException(status_code=400, detail=f"Invalid squad: {'; '.join(val.errors)}")
                 if bank_tenths is None:
                     bank_tenths = max(0, 1000 - spent_tenths)
             else:
                 # Mid-season creation: squad value reflects market changes; validate structure & quotas
-                val = validate_squad_constraints(contracts, check_budget=False)
+                val = validate_squad_constraints(contracts, check_budget=False, constraints=c_cfg)
                 if not val.is_valid:
                     raise HTTPException(status_code=400, detail=f"Invalid squad: {'; '.join(val.errors)}")
 
@@ -143,8 +168,9 @@ def create_team(
             starter_set = set(lineup.starter_ids)
             bench_set = set(lineup.bench_ids)
 
+            from euroleague_fantasy_manager.models import normalize_position
             for c in contracts:
-                pos_str = c.position.name if hasattr(c.position, "name") else str(c.position)
+                pos_str = normalize_position(c.position).short_code
                 pid = c.player_id
                 squad_units.append(
                     TeamRosterUnit(
@@ -210,10 +236,10 @@ def create_team(
         return team.to_dict()
     except HTTPException:
         raise
-    except ValueError as e:
+    except (ValueError, UnknownPlayerError, NoSnapshotForRoundError) as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Required transfer decision audit log failed: {e}")
 
 
 @router.get("/{team_id}")
@@ -225,22 +251,52 @@ def get_team(team_id: str, service: TeamService = Depends(get_team_service)) -> 
         raise HTTPException(status_code=404, detail=f"Team '{team_id}' not found.")
 
 
+@router.post("/{team_id}/adjust-bank")
+def adjust_bank(
+    team_id: str,
+    req: AdjustBankRequest,
+    service: TeamService = Depends(get_team_service),
+    decision_service: DecisionService = Depends(get_decision_service),
+) -> dict[str, Any]:
+    try:
+        team = service.adjust_bank(
+            team_id=team_id,
+            delta_tenths=req.delta_tenths,
+            reason=req.reason,
+            audit=AuditIntent(decision_service=decision_service, notes=req.reason),
+        )
+        return team.to_dict()
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Team '{team_id}' not found.")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.put("/{team_id}")
 @router.patch("/{team_id}")
-def update_team(team_id: str, req: UpdateTeamRequest, service: TeamService = Depends(get_team_service)) -> dict[str, Any]:
+def update_team(
+    team_id: str,
+    req: UpdateTeamRequest,
+    service: TeamService = Depends(get_team_service),
+) -> dict[str, Any]:
     try:
+        settings_dict = None
+        if req.settings is not None:
+            settings_dict = {k: v for k, v in req.settings.model_dump().items() if v is not None}
         team = service.update_team(
             team_id=team_id,
             name=req.name,
             round_number=req.round_number,
             turn_number=req.turn_number,
-            bank_tenths=req.bank_tenths,
             transfers_remaining=req.transfers_remaining,
-            settings=req.settings,
+            settings=settings_dict,
+            updated_at=req.updated_at,
         )
         return team.to_dict()
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Team '{team_id}' not found.")
+    except ConcurrentModificationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 @router.delete("/{team_id}")
@@ -301,12 +357,8 @@ class ExecuteTransfersRequest(BaseModel):
     transfers_in_ids: list[int]
     unlimited: bool = False
     season: str = "2026/27"
-    # Entering trades for a PAST round is deliberately not supported yet: it
-    # requires per-round financial state to propagate into every later round,
-    # which is the point-in-time reconstruction built in V0.7 W6. Accepting the
-    # field and rejecting it is clearer than silently applying the trades to the
-    # live round. See docs/specs/v07.md.
-    round_number: int | None = None
+    round_number: int | None = Field(default=None, ge=1, le=50)
+    discard_conflicting: bool = False
 
 
 @router.post("/{team_id}/transfers")
@@ -324,70 +376,47 @@ def execute_transfers(
         target_round = req.round_number if req.round_number is not None else team.round_number
 
         # Resolve projection contracts for market
-        proj_dict = prediction_service.get_projections_dict(req.season, target_round, league=team.league or "euroleague")
+        try:
+            proj_dict = prediction_service.get_projections_dict(req.season, target_round, league=team.league or "euroleague")
+        except (NoSnapshotForRoundError, Exception):
+            proj_dict = {}
 
-        # Snapshot state before transfers for audit rollback
-        prev_team = service.get_team(team_id)
-        prev_bank_tenths = prev_team.bank_tenths
-        prev_transfers_remaining = prev_team.transfers_remaining
-        prev_squad = list(service.store.get_squad(team_id, target_round))
-
-        res = service.execute_transfers(
+        service.execute_transfers(
             team_id=team_id,
             transfers_out_ids=req.transfers_out_ids,
             transfers_in_ids=req.transfers_in_ids,
             round_number=target_round,
             season=req.season,
             unlimited=req.unlimited,
+            discard_conflicting=req.discard_conflicting,
             market_projections=proj_dict,
             lineup_optimizer=optimization_service.lineup_optimizer,
+            audit=AuditIntent(
+                decision_service=decision_service,
+                notes=f"Executed {len(req.transfers_out_ids)} trade(s)" if not req.unlimited else "Executed Unlimited Overhaul",
+            ),
         )
-
-        # Log decision audit
-        try:
-            from euroleague_fantasy_manager.tracking.models import TransferPayload
-            payload = TransferPayload(
-                out_player_ids=tuple(res["out_ids"]),
-                in_player_ids=tuple(res["in_ids"]),
-                num_trades=len(res["in_ids"]),
-                net_transfer_value=0.0,
-                bank_tenths_before=res["base_bank_tenths"],
-                bank_tenths_after=res["new_bank_tenths"],
-            )
-            decision_service.log_transfers(
-                team_id=team_id,
-                season=req.season,
-                round_number=target_round,
-                recommended_transfers=payload,
-                actual_transfers=payload,
-                notes=f"Executed {len(res['out_ids'])} trade(s)" if not req.unlimited else "Executed Unlimited Overhaul",
-            )
-        except Exception as e:
-            # Transactional rollback: revert squad and state if decision log fails
-            if target_round == prev_team.round_number:
-                service.update_team(
-                    team_id=team_id,
-                    bank_tenths=prev_bank_tenths,
-                    transfers_remaining=prev_transfers_remaining,
-                )
-            service.set_squad(team_id, target_round, prev_squad, validate=False)
-            service.store.delete_transfers_by_ids(res["new_transfer_ids"])
-            if target_round < prev_team.round_number:
-                service.replay_transfers_forward(team_id, from_round=target_round, season=req.season)
-            raise HTTPException(
-                status_code=500,
-                detail=f"Required transfer decision audit log failed: {e}",
-            )
 
         return service.get_team(team_id).to_dict()
     except HTTPException:
         raise
+    except ReplayConflictError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": str(e),
+                "round_number": e.round_number,
+                "transfer_id": e.transfer_id,
+                "reason": e.reason,
+                "conflicting_transfers": e.conflicting_transfers,
+            },
+        )
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Required transfer decision audit log failed: {e}")
 
 
 class RevertRoundStartRequest(BaseModel):
@@ -436,10 +465,21 @@ def revert_round_start(
             "message": f"Successfully reverted team to Round {restored_team.round_number} start baseline.",
             "team": restored_team.to_dict(),
         }
+    except ReplayConflictError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": str(e),
+                "round_number": e.round_number,
+                "transfer_id": e.transfer_id,
+                "reason": e.reason,
+                "conflicting_transfers": e.conflicting_transfers,
+            },
+        )
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Required transfer decision audit log failed: {e}")
 

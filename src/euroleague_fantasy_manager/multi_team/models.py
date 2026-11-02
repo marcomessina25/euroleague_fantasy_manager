@@ -5,8 +5,36 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-import json
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
+
+from euroleague_fantasy_manager.models import Position, normalize_position
+
+
+@dataclass(frozen=True, slots=True)
+class AuditIntent:
+    """Specification of an audit record to write atomically with team state operations."""
+
+    notes: str = ""
+    decision_service: Any = None
+    decision_logger: Any = None
+    provenance: Any = None
+
+class ReplayConflictError(RuntimeError):
+    """Raised when replaying trades forward encounters a conflicting trade (e.g. out-player absent)."""
+
+    def __init__(
+        self,
+        round_number: int,
+        transfer_id: int | None,
+        reason: str,
+        conflicting_transfers: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self.round_number = round_number
+        self.transfer_id = transfer_id
+        self.reason = reason
+        self.conflicting_transfers = conflicting_transfers or []
+        super().__init__(f"Replay conflict in round {round_number} (trade {transfer_id}): {reason}")
+
 
 
 @dataclass
@@ -52,14 +80,22 @@ class TeamRosterUnit:
     is_coach: bool = False
     turn_number: int = 1
 
+    def __post_init__(self) -> None:
+        pos_enum = normalize_position(self.position)
+        self.position = pos_enum.short_code
+        if pos_enum == Position.HEAD_COACH:
+            self.is_coach = True
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> TeamRosterUnit:
+        if "position" not in data or data["position"] is None:
+            raise ValueError(f"Missing position in roster unit data: {data}")
         return cls(
             player_id=int(data["player_id"]),
-            position=str(data.get("position", "G")),
+            position=str(data["position"]),
             name=str(data.get("name", "")),
             team_code=str(data.get("team_code", "")),
             purchase_price_tenths=int(data.get("purchase_price_tenths", 100)),
@@ -142,6 +178,7 @@ class Team:
             "round_number": self.round_number,
             "turn_number": self.turn_number,
             "bank_tenths": self.bank_tenths,
+            "bank_credits": round(self.bank_tenths / 10.0, 1),
             "transfers_remaining": self.transfers_remaining,
             "squad": [unit.to_dict() for unit in self.squad],
             "settings": self.settings.to_dict(),

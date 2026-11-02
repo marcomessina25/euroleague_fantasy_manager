@@ -1,9 +1,7 @@
 """Unit tests for V0.8 basketball rotation, minutes volatility, and context models (W2)."""
 
-import pytest
 
 from euroleague_fantasy_manager.evaluation.baselines import (
-    canonical_model_name,
     predict_single_player_baseline,
 )
 from euroleague_fantasy_manager.evaluation.features import PointInTimeFeatureRow
@@ -21,56 +19,6 @@ from euroleague_fantasy_manager.prediction.rotation_context import (
 )
 
 
-@pytest.fixture
-def sample_feature_row() -> PointInTimeFeatureRow:
-    return PointInTimeFeatureRow(
-        player_id=101,
-        player_name="Nigel Hayes-Davis",
-        position="F",
-        season="E2024",
-        round_number=5,
-        decision_cutoff="2024-10-25T18:00:00Z",
-        team_id=1,
-        team_code="ULK",
-        opponent_team_id=2,
-        opponent_team_code="PAO",
-        home=True,
-        turn_number=1,
-        days_rest=3.0,
-        quotation_at_decision_tenths=145,
-        pre_round_status="available",
-        play_probability=0.98,
-        cold_start_source="in_season",
-        games_played=4,
-        games_missed=0,
-        starter_rate=1.0,
-        season_avg_fantasy_points=18.5,
-        last_1_fantasy_points=21.0,
-        last_3_avg=19.2,
-        last_5_avg=18.5,
-        last_10_avg=18.5,
-        ewma_fantasy_points=19.0,
-        season_avg_minutes=31.5,
-        last_3_minutes=32.0,
-        last_5_minutes=31.5,
-        minutes_trend=0.5,
-        team_strength=0.72,
-        opponent_strength=0.70,
-        usage=0.24,
-        rebound_rate=0.12,
-        assist_rate=0.10,
-        steal_rate=0.03,
-        block_rate=0.02,
-        turnover_rate=0.08,
-        foul_draw_rate=0.11,
-        ewma_minutes=31.8,
-        std_minutes_last5=2.5,
-        dnp_rate_last5=0.0,
-        ewma_fp_per_min=0.60,
-        season_fp_per_min=0.59,
-        pos_prior_fp_per_min=0.55,
-        is_double_round_week=False,
-    )
 
 
 def test_classify_rotation_tier():

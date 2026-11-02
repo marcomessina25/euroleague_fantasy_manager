@@ -12,6 +12,7 @@ class CalibrationModel:
     weights: tuple[float, float, float] = (1.0, 0.0, 0.0)
     pos_intercepts: dict[str, float] = field(default_factory=dict)
     sample_count: int = 0
+    fit_rounds: tuple[int, ...] = field(default_factory=tuple)
 
     def apply(
         self,
@@ -53,6 +54,7 @@ def fit_out_of_sample_calibrator(
     prior_slope: float = 1.0,
     ewma_predictions: Sequence[float] | None = None,
     season_predictions: Sequence[float] | None = None,
+    rounds: Sequence[int] | None = None,
 ) -> CalibrationModel:
     """Fit an out-of-sample calibrator strictly on historical rounds `r' < r` (or prior seasons).
 
@@ -72,6 +74,7 @@ def fit_out_of_sample_calibrator(
             weights=(0.50, 0.30, 0.20) if m == "multi_model" else (1.0, 0.0, 0.0),
             pos_intercepts={},
             sample_count=0,
+            fit_rounds=(),
         )
 
     preds = [float(past_predictions[i]) for i in range(n)]
@@ -84,6 +87,7 @@ def fit_out_of_sample_calibrator(
     # Empirical Bayes shrinkage weight (pseudocount = 120 player-games ~ 1 round)
     w_sample = n / (n + 120.0)
 
+    fit_r = tuple(int(r) for r in rounds[:n]) if rounds is not None else ()
     if m == "intercept":
         shrunk_intercept = w_sample * emp_bias + (1.0 - w_sample) * prior_intercept
         pos_adj = _fit_positional_offsets(preds, acts, positions, shrunk_intercept, 1.0)
@@ -93,6 +97,7 @@ def fit_out_of_sample_calibrator(
             slope=1.0,
             pos_intercepts=pos_adj,
             sample_count=n,
+            fit_rounds=fit_r,
         )
 
     if m == "multi_model" and ewma_predictions is not None and season_predictions is not None:
@@ -130,12 +135,14 @@ def fit_out_of_sample_calibrator(
     shrunk_intercept = w_sample * emp_intercept + (1.0 - w_sample) * prior_intercept
     pos_adj = _fit_positional_offsets(preds, acts, positions, shrunk_intercept, shrunk_slope)
 
+    fit_r = tuple(int(r) for r in rounds[:n]) if rounds is not None else ()
     return CalibrationModel(
         method="linear",
         intercept=round(shrunk_intercept, 4),
         slope=round(shrunk_slope, 4),
         pos_intercepts=pos_adj,
         sample_count=n,
+        fit_rounds=fit_r,
     )
 
 

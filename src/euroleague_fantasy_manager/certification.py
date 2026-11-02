@@ -23,12 +23,10 @@ from __future__ import annotations
 
 from contextlib import redirect_stdout
 from dataclasses import dataclass
-from datetime import datetime, timezone
 import io
 import json
 from pathlib import Path
 import socket
-import sqlite3
 import tempfile
 from typing import Any
 from unittest.mock import patch
@@ -38,37 +36,31 @@ from euroleague_fantasy_manager.cli import main as cli_main
 from euroleague_fantasy_manager.competition.ruleset import League, get_league_ruleset
 from euroleague_fantasy_manager.evaluation.dataset import build_historical_dataset
 from euroleague_fantasy_manager.evaluation.error_attribution import (
-    decompose_round_error,
     run_multi_model_benchmark,
 )
 from euroleague_fantasy_manager.evaluation.reproducibility import compute_dataset_hash
 from euroleague_fantasy_manager.models import Position
-from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit, TeamStateSnapshot
+from euroleague_fantasy_manager.multi_team.models import TeamStateSnapshot
 from euroleague_fantasy_manager.multi_team.store import TeamStore
 from euroleague_fantasy_manager.optimization.constraints import (
-    OptimizationConstraints,
     PlayerProjectionContract,
 )
 from euroleague_fantasy_manager.optimization.lineup import (
     FixedSquadLineupOptimizer,
     brute_force_exhaustive_lineup,
 )
-from euroleague_fantasy_manager.optimization.objective import RiskMode
 from euroleague_fantasy_manager.optimization.sequential_replay import SequentialDecisionSimulator
 from euroleague_fantasy_manager.prediction.learned_models import train_learned_pipeline_from_history
-from euroleague_fantasy_manager.prediction.registry import get_model_registry
 from euroleague_fantasy_manager.services.decision_service import DecisionService
 from euroleague_fantasy_manager.services.prediction_service import PredictionService
 from euroleague_fantasy_manager.services.team_service import TeamService
-from euroleague_fantasy_manager.storage import SnapshotStore, seed_historical_snapshots
+from euroleague_fantasy_manager.storage import seed_historical_snapshots
 from euroleague_fantasy_manager.tracking.models import (
-    DecisionProvenance,
-    DecisionType,
     LineupPayload,
     OutcomeStatus,
 )
 from euroleague_fantasy_manager.tracking.outcomes import OutcomeUpdater
-from euroleague_fantasy_manager.tracking.store import DecisionRecord, DecisionStore
+from euroleague_fantasy_manager.tracking.store import DecisionStore
 from euroleague_fantasy_manager.web.app import create_app
 from fastapi.testclient import TestClient
 

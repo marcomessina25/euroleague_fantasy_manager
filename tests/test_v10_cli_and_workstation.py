@@ -20,8 +20,7 @@ import subprocess
 import pytest
 from starlette.testclient import TestClient
 
-from euroleague_fantasy_manager.cli import build_parser, main
-from euroleague_fantasy_manager.competition.ruleset import League
+from euroleague_fantasy_manager.cli import main
 from euroleague_fantasy_manager.evaluation.dataset import build_historical_dataset
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit
@@ -92,14 +91,14 @@ def test_cli_json_and_exit_codes(tmp_path: Path, capsys: pytest.CaptureFixture[s
     assert ret == 0
     captured = capsys.readouterr()
     rep_data = json.loads(captured.out)
-    assert "snapshot_id" in rep_data or "league_id" in rep_data or "player_count" in rep_data
+    assert {"snapshot_id", "league_id", "round_number", "player_count", "fixture_count"}.issubset(rep_data.keys())
 
     # 6. Evaluation inspect with --json
     ret = main(["--db", str(db_path), "evaluation", "inspect", "--season", "2025", "--round", "1", "--json"])
     assert ret == 0
     captured = capsys.readouterr()
     eval_data = json.loads(captured.out)
-    assert "players" in eval_data or "features" in eval_data or "season" in eval_data
+    assert {"dataset_version", "season", "round", "decision_cutoff", "player_count", "players"}.issubset(eval_data.keys())
 
 
 def test_read_only_safety_guarantee(tmp_path: Path) -> None:
@@ -110,7 +109,7 @@ def test_read_only_safety_guarantee(tmp_path: Path) -> None:
     # Create reference team
     store = TeamStore(db_path)
     ts = TeamService(store=store)
-    team = ts.create_team(
+    _team = ts.create_team(
         team_id="ro_team",
         name="Readonly Squad",
         league="euroleague",
@@ -262,7 +261,7 @@ def test_critical_workstation_workflows_a_b_c_d(tmp_path: Path) -> None:
 def test_frontend_static_and_endpoint_smoke(tmp_path: Path) -> None:
     """12.4: Node.js JavaScript syntax verification and FastAPI template/API smoke tests."""
     # 1. Validate JavaScript syntax via Node.js
-    js_path = Path("src/euroleague_fantasy_manager/web/static/js/app.js")
+    js_path = Path(__file__).resolve().parents[1] / "src" / "euroleague_fantasy_manager" / "web" / "static" / "js" / "app.js"
     assert js_path.exists(), "app.js must exist"
 
     result = subprocess.run(
@@ -305,7 +304,7 @@ def test_frontend_static_and_endpoint_smoke(tmp_path: Path) -> None:
         for idx, p in enumerate(raw_squad)
     ]
 
-    t = ts.create_team(
+    _t = ts.create_team(
         team_id="web_team",
         name="Web Test Team",
         league="euroleague",

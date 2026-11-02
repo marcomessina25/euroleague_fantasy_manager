@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, confloat, conint
 
-from euroleague_fantasy_manager.competition.ruleset import League
-from euroleague_fantasy_manager.models import Position
+from euroleague_fantasy_manager.competition.ruleset import League, get_league_ruleset
+from euroleague_fantasy_manager.models import ModelUnavailableError, Position
 from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit
-from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
 from euroleague_fantasy_manager.optimization.ownership_strategy import (
     classify_ownership_archetype,
     compute_player_ownership_profile,
@@ -32,12 +32,10 @@ PLAYER_SORT_KEYS = {
 from euroleague_fantasy_manager.services.decision_service import DecisionService
 from euroleague_fantasy_manager.services.evaluation_service import EvaluationService
 from euroleague_fantasy_manager.services.optimization_service import (
-    LineupDecisionView,
     OptimizationService,
 )
 from euroleague_fantasy_manager.services.prediction_service import PredictionService
 from euroleague_fantasy_manager.services.scenario_service import (
-    ScenarioResult,
     ScenarioService,
 )
 from euroleague_fantasy_manager.services.team_service import TeamService
@@ -59,7 +57,7 @@ router = APIRouter(prefix="/api/workstation", tags=["workstation"])
 class OptimizeLineupRequest(BaseModel):
     team_id: str
     season: str = "2026/27"
-    round_number: int | None = None
+    round_number: int | None = Field(default=None, ge=1, le=50)
     risk_mode: str = "expected"
     option_value_mode: str = "captain_eligible"
 
@@ -67,26 +65,28 @@ class OptimizeLineupRequest(BaseModel):
 class OptimizeTransfersRequest(BaseModel):
     team_id: str
     season: str = "2026/27"
-    round_number: int | None = None
+    round_number: int | None = Field(default=None, ge=1, le=50)
     max_trades: int = MAX_TRADES_PER_ROUND
     unlimited: bool = False
     exhaustive: bool = False
     strategy_preset: str = "balanced_value"
     top_n: int = Field(default=30, ge=1, le=50)
+    max_evaluations: int = Field(default=20000, ge=100, le=50000)
+    time_budget_s: float = Field(default=10.0, ge=0.1, le=60.0)
 
 
 class MultiRoundRequest(BaseModel):
     team_id: str
     season: str = "2026/27"
     start_round: int | None = None
-    horizon: int = 3
-    gamma: float = 0.95
+    horizon: conint(ge=1, le=4) = 3
+    gamma: confloat(gt=0, le=1) = 0.95
 
 
 class SimulateTurnSubRequest(BaseModel):
     team_id: str
     season: str = "2026/27"
-    round_number: int | None = None
+    round_number: int | None = Field(default=None, ge=1, le=50)
     turn_1_scores: dict[str, float] = Field(default_factory=dict)
 
 
@@ -112,7 +112,7 @@ class UpdateScoresRequest(BaseModel):
 class LogDecisionRequest(BaseModel):
     team_id: str
     season: str = "2026/27"
-    round_number: int
+    round_number: int = Field(..., ge=1, le=50)
     turn_number: int = 1
     decision_type: str = "lineup"
     notes: str = ""
@@ -133,7 +133,8 @@ class SuggestInitialTeamRequest(BaseModel):
 def get_dashboard(
     team_id: str,
     season: str = "2026/27",
-    round_number: int | None = None,
+    round_number: int | None = Query(None, ge=1, le=50),
+    model_name: str = "price_prior_v1",
     team_service: TeamService = Depends(get_team_service),
     prediction_service: PredictionService = Depends(get_prediction_service),
     optimization_service: OptimizationService = Depends(get_optimization_service),
@@ -145,21 +146,42 @@ def get_dashboard(
         raise HTTPException(status_code=404, detail=f"Team '{team_id}' not found.")
 
     rnd = round_number or team.round_number
+    is_viewing_past_round = round_number is not None and rnd != team.round_number
+    squad_for_round = team_service.store.get_squad(team_id, rnd) if is_viewing_past_round else team.squad
+
+    if not squad_for_round:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "no_squad_for_round", "message": f"No squad found for team '{team_id}' in round {rnd}."},
+        )
+
+    contracts_for_rnd = optimization_service._resolve_squad_contracts(
+        squad_for_round, season, rnd, league=team.league or "euroleague"
+    )
     opt_lineup = optimization_service.optimize_lineup(
         team_id=team_id,
         season=season,
         round_number=rnd,
         risk_mode=team.settings.risk_mode,
         option_value_mode=team.settings.option_value_mode,
+        contracts_override=contracts_for_rnd,
     )
 
-    # store.get_team always loads the team's LIVE round squad, so a round differing
-    # from the live one must be loaded explicitly or the dashboard renders the wrong roster.
-    is_viewing_past_round = round_number is not None and rnd != team.round_number
-    squad_for_round = team_service.store.get_squad(team_id, rnd) if is_viewing_past_round else team.squad
-
     # Squad units with projections
-    proj_dict = prediction_service.get_projections_dict(season, rnd, league=team.league or "euroleague")
+    try:
+        proj_dict = prediction_service.get_projections_dict(season, rnd, model_name=model_name, league=team.league or "euroleague")
+    except ModelUnavailableError as e:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": str(e),
+                "model": e.model,
+                "reason": e.reason,
+                "suggested_fallback": "price_prior_v1",
+            },
+        )
+    except Exception:
+        proj_dict = {}
     squad_details = []
     for unit in squad_for_round:
         c = proj_dict.get(unit.player_id)
@@ -196,25 +218,28 @@ def get_dashboard(
     sixth_man_unit = next((u for u in squad_units if u.is_sixth_man), None)
     coach_unit = next((u for u in squad_units if u.is_coach or u.position == "HC"), None)
 
-    # If team roles have not been assigned yet (e.g. freshly imported or draft without role flags),
-    # sync with opt_lineup so the team gets its starting five, captain, 6th man, bench.
-    # round_number=rnd targets the round being viewed -- omitting it would silently rewrite
-    # the LIVE round's lineup while merely viewing a past round.
+    # P2.8 / WEB-1: GET must never write to database.
+    # If roles are not assigned yet, compute suggested roles in memory without persisting.
+    roles_assigned = True
     if len(starters_units) != 5 or not sixth_man_unit or not coach_unit:
-        team = team_service.update_lineup(
-            team_id=team_id,
-            starter_ids=[p["player_id"] for p in opt_lineup.starters],
-            captain_id=opt_lineup.captain_id,
-            sixth_man_id=opt_lineup.sixth_man_id,
-            bench_ids=[p["player_id"] for p in opt_lineup.bench],
-            coach_id=opt_lineup.coach_id,
-            round_number=rnd,
-        )
-        squad_units = team_service.store.get_squad(team_id, rnd) if is_viewing_past_round else team.squad
-        starters_units = [u for u in squad_units if u.is_starter]
-        bench_units = [u for u in squad_units if u.is_bench]
-        sixth_man_unit = next((u for u in squad_units if u.is_sixth_man), None)
-        coach_unit = next((u for u in squad_units if u.is_coach or u.position == "HC"), None)
+        roles_assigned = False
+        starter_pids = {p["player_id"] for p in opt_lineup.starters}
+        bench_pids = {p["player_id"] for p in opt_lineup.bench}
+        transient_units = []
+        for u in squad_units:
+            copy_u = TeamRosterUnit.from_dict(u.to_dict())
+            pid = copy_u.player_id
+            copy_u.is_starter = (pid in starter_pids)
+            copy_u.is_captain = (pid == opt_lineup.captain_id)
+            copy_u.is_sixth_man = (pid == opt_lineup.sixth_man_id)
+            copy_u.is_bench = (pid in bench_pids)
+            copy_u.is_coach = (pid == opt_lineup.coach_id or copy_u.position == "HC")
+            transient_units.append(copy_u)
+
+        starters_units = [u for u in transient_units if u.is_starter]
+        bench_units = [u for u in transient_units if u.is_bench]
+        sixth_man_unit = next((u for u in transient_units if u.is_sixth_man), None)
+        coach_unit = next((u for u in transient_units if u.is_coach or u.position == "HC"), None)
 
     def _fmt_lineup_unit(u: Any) -> dict[str, Any]:
         c = proj_dict.get(u.player_id)
@@ -344,6 +369,8 @@ def get_dashboard(
 
     return {
         "team": team.to_dict(),
+        "roles_assigned": roles_assigned,
+        "suggested_lineup": opt_lineup.to_dict(),
         "round_number": rnd,
         "bank_credits": round(team.bank_tenths / 10.0, 1),
         "squad_value_credits": round(team.total_squad_value_tenths / 10.0, 1),
@@ -357,10 +384,12 @@ def get_dashboard(
         "unplayed_count": unplayed_count,
         "any_played": any_played,
         "provenance": {
-            "prediction_model": "production_ridge_v03",
+            "prediction_model": next((c.model_version for c in proj_dict.values() if getattr(c, "model_version", None)), model_name),
+            "feature_version": next((c.feature_version for c in proj_dict.values() if getattr(c, "feature_version", None)), "1.0.0"),
             "optimizer_version": "0.5.0",
             "risk_mode": team.settings.risk_mode,
             "option_value_mode": team.settings.option_value_mode,
+            **getattr(next(iter(proj_dict.values()), None), "provenance", {}),
         },
     }
 
@@ -381,6 +410,16 @@ def optimize_lineup_endpoint(
         return res.to_dict()
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except ModelUnavailableError as e:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": str(e),
+                "model": e.model,
+                "reason": e.reason,
+                "suggested_fallback": "price_prior_v1",
+            },
+        )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -400,6 +439,8 @@ def optimize_transfers_endpoint(
             exhaustive=req.exhaustive,
             strategy_preset=req.strategy_preset,
             top_n=req.top_n,
+            max_evaluations=req.max_evaluations,
+            time_budget_s=req.time_budget_s,
         )
 
         recs = []
@@ -440,6 +481,9 @@ def optimize_transfers_endpoint(
             "best_recommendation": recs[0] if recs else None,
             "recommendations": recs,
             "evaluated_combinations": res.total_evaluated_packages,
+            "is_exhaustive": res.is_exhaustive,
+            "stopped_reason": res.stopped_reason,
+            "objective": res.objective,
         }
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -473,6 +517,7 @@ def simulate_intra_round_endpoint(
 
 
 @router.post("/apply/intra-round")
+@router.post("/intra-round/apply")
 def apply_intra_round_endpoint(
     req: SimulateIntraRoundRequest,
     optimization_service: OptimizationService = Depends(get_optimization_service),
@@ -481,10 +526,12 @@ def apply_intra_round_endpoint(
 ) -> dict[str, Any]:
     """Apply the optimal intra-round substitutions directly to the team lineup."""
     try:
+        current_team = team_service.get_team(req.team_id)
+        target_round = req.round_number if req.round_number is not None else current_team.round_number
         res = optimization_service.optimize_intra_round(
             team_id=req.team_id,
             season=req.season,
-            round_number=req.round_number,
+            round_number=target_round,
         )
         updated_team = team_service.update_lineup(
             team_id=req.team_id,
@@ -493,6 +540,7 @@ def apply_intra_round_endpoint(
             sixth_man_id=res.sixth_man_id,
             bench_ids=res.bench_ids,
             coach_id=res.coach_id,
+            round_number=target_round,
         )
 
         # Log decision
@@ -513,7 +561,7 @@ def apply_intra_round_endpoint(
             decision_service.log_turn_sub(
                 team_id=req.team_id,
                 season=req.season,
-                round_number=updated_team.round_number,
+                round_number=target_round,
                 turn_number=updated_team.turn_number,
                 recommended_turn_sub=payload,
                 actual_turn_sub=payload,
@@ -682,15 +730,15 @@ def update_scores_endpoint(
 def list_players_endpoint(
     response: Response,
     season: str = "2026/27",
-    round_number: int = 1,
+    round_number: int = Query(1, ge=1, le=50),
     position: str | None = None,
     search: str | None = None,
     min_price: float | None = None,
     max_price: float | None = None,
     league: League = Depends(parse_league),
     sort: str = "expected_fp",
-    offset: int = 0,
-    limit: int = 50,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
     prediction_service: PredictionService = Depends(get_prediction_service),
 ) -> list[dict[str, Any]]:
     """Player browser for Trade Studio with valuation metrics.
@@ -722,7 +770,8 @@ def list_players_endpoint(
     try:
         from euroleague_fantasy_manager.storage import SnapshotStore
         s_store = SnapshotStore(prediction_service.database_path)
-        p_list = s_store.load_latest_players(league_id=league.league_id if hasattr(league, "league_id") else None)
+        snap = s_store.get_snapshot_for_round(league_id=get_league_ruleset(league).league_id, round_number=round_number) or s_store.get_latest_summary(league_id=get_league_ruleset(league).league_id)
+        p_list = s_store.load_players_for_snapshot(snap.snapshot_id) if snap else []
         ownership_map = {p.id: p.popularity for p in p_list}
     except Exception:
         ownership_map = {}
@@ -749,7 +798,8 @@ def list_players_endpoint(
             continue
 
         val = valuations.get(c.player_id, {})
-        own_pct = float(ownership_map.get(c.player_id, 10.0))
+        raw_pop = ownership_map.get(c.player_id)
+        own_pct = float(raw_pop) if raw_pop is not None else 10.0
         arch, arch_badge = classify_ownership_archetype(own_pct, expected_fp=c.expected_fp)
         badges = []
         if arch_badge:
@@ -806,11 +856,16 @@ def get_player_details_endpoint(
     db_path = prediction_service.database_path
 
     # Projection contract & valuation
-    contract = prediction_service.get_player_projection(season, round_number, player_id, league=league.value)
+    try:
+        contract = prediction_service.get_player_projection(season, round_number, player_id, league=league.value)
+    except ModelUnavailableError:
+        contract = prediction_service.get_player_projection(
+            season, round_number, player_id, model_name="price_prior_v1", league=league.value
+        )
     valuations = prediction_service.get_player_valuations(season, round_number, league=league.value)
     val = valuations.get(player_id, {})
 
-    target_league_id = 11 if league == League.EUROCUP else 10
+    target_league_id = get_league_ruleset(league).league_id
 
     # Detailed snapshot database row scoped to target league
     player_row: dict[str, Any] = {}
@@ -867,7 +922,7 @@ def get_player_details_endpoint(
         "has_played": getattr(contract, "has_played", False) if contract else bool(player_row.get("has_played", False)),
         "actual_fp": round(getattr(contract, "actual_fp", 0.0), 2) if (contract and getattr(contract, "actual_fp", None) is not None) else (round(player_row.get("last_match_pts", 0.0), 2) if player_row.get("has_played") else None),
         "total_plus_tenths": player_row.get("total_plus_tenths", 0),
-        "total_plus_credits": round((player_row.get("total_plus_tenths", 0)) / 10.0, 1),
+        "total_plus_credits": round((player_row.get("total_plus_tenths") or 0) / 10.0, 1),
         "popularity": player_row.get("popularity", 0.0),
         "is_injured": bool(player_row.get("is_injured", False)),
         "is_on_fire": bool(player_row.get("is_on_fire", False)),
@@ -885,7 +940,7 @@ def get_player_details_endpoint(
 @router.get("/current-round")
 def get_current_round_endpoint(
     league: League = Depends(parse_league),
-    db_path: str = Depends(get_db_path),
+    db_path: Path = Depends(get_db_path),
 ) -> dict[str, Any]:
     """Return the active current round for the given league."""
     from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
@@ -955,12 +1010,14 @@ def player_intel_endpoint(
     try:
         from euroleague_fantasy_manager.storage import SnapshotStore
         s_store = SnapshotStore(prediction_service.database_path)
-        p_list = s_store.load_latest_players(league_id=league.league_id if hasattr(league, "league_id") else None)
+        snap = s_store.get_snapshot_for_round(league_id=get_league_ruleset(league).league_id, round_number=round_number) or s_store.get_latest_summary(league_id=get_league_ruleset(league).league_id)
+        p_list = s_store.load_players_for_snapshot(snap.snapshot_id) if snap else []
         ownership_map = {p.id: p.popularity for p in p_list}
     except Exception:
         ownership_map = {}
 
-    own_pct = float(ownership_map.get(player_id, 10.0))
+    raw_own = ownership_map.get(player_id)
+    own_pct = float(raw_own) if raw_own is not None else 10.0
     own_prof = compute_player_ownership_profile(
         player_id=player_id,
         player_name=contract.player_name,
@@ -1099,4 +1156,15 @@ def update_data_endpoint(
         "sync_failures": sync_failures,
     }
 
+
+@router.get("/rules")
+def get_workstation_rules(
+    league: str = "euroleague",
+    db_path: Path = Depends(get_db_path),
+) -> dict[str, Any]:
+    """Retrieve active resolved ruleset dictionary for the requested league."""
+    from euroleague_fantasy_manager.competition.ruleset import resolve_ruleset
+
+    ruleset = resolve_ruleset(league, db_path=db_path)
+    return ruleset.to_dict()
 

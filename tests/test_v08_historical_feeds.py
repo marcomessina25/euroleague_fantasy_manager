@@ -8,7 +8,6 @@ import pytest
 
 from euroleague_fantasy_manager.cli import main
 from euroleague_fantasy_manager.ingestion.historical_feeds import (
-    HistoricalBoxscoreRecord,
     HistoricalFeedsClient,
     HistoricalGameRecord,
     HistoricalStatsStore,

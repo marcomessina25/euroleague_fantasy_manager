@@ -1,0 +1,98 @@
+{
+  "league_id": 10,
+  "competition_code": "E",
+  "season_code": "E2026",
+  "config": {
+    "current_matchday": {
+      "id": 1,
+      "number": 1,
+      "num_rounds": 2
+    },
+    "teams": [
+      {
+        "id": 1,
+        "name": "Real Madrid",
+        "abbreviation": "RMB"
+      },
+      {
+        "id": 2,
+        "name": "FC Barcelona",
+        "abbreviation": "BAR"
+      }
+    ],
+    "game_modes_configs": [
+      {
+        "game_mode_id": 1,
+        "max_num_teams_per_user": 3,
+        "max_num_teams_per_head_to_head_tournament": 20,
+        "num_players_per_team": 11,
+        "num_starter_players": 5,
+        "num_bench_players": 5,
+        "num_coach_players": 1,
+        "max_num_same_team_players": 6,
+        "captain_multiplier": 2.0,
+        "cost_per_trade": 0
+      }
+    ]
+  },
+  "schedule": {
+    "rounds": [
+      {
+        "number": 1,
+        "matches": [
+          {
+            "id": 101,
+            "status": "scheduled",
+            "home_team": {
+              "id": 1,
+              "abbreviation": "RMB"
+            },
+            "away_team": {
+              "id": 2,
+              "abbreviation": "BAR"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "match_lineups": [
+    {
+      "id": 101,
+      "turn_number": 1,
+      "home_team": {
+        "id": 1,
+        "name": "Real Madrid",
+        "abbreviation": "RMB",
+        "lineups": [
+          {
+            "id": 101,
+            "first_name": "Facundo",
+            "last_name": "Campazzo",
+            "position": "Guard",
+            "quotation": 15.0,
+            "status": "starter",
+            "probability_of_playing": 1.0
+          }
+        ]
+      },
+      "away_team": {
+        "id": 2,
+        "name": "FC Barcelona",
+        "abbreviation": "BAR",
+        "lineups": [
+          {
+            "id": 201,
+            "first_name": "Nicolas",
+            "last_name": "Laprovittola",
+            "position": "Guard",
+            "quotation": 13.0,
+            "status": "starter",
+            "probability_of_playing": 1.0
+          }
+        ]
+      }
+    }
+  ],
+  "official_clubs": []
+}

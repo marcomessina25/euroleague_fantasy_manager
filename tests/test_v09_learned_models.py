@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import pytest
 import numpy as np
 
 from euroleague_fantasy_manager.evaluation.baselines import (
@@ -18,70 +17,13 @@ from euroleague_fantasy_manager.prediction.learned_models import (
     LEARNED_FEATURE_NAMES,
     LearnedAvailabilityModel,
     LearnedMinutesModel,
-    LearnedModelPipeline,
-    clear_learned_pipeline_cache,
-    extract_historical_training_data,
     extract_learned_features,
     get_default_learned_pipeline,
-    get_synthetic_test_learned_pipeline,
-    set_default_learned_pipeline,
-    train_learned_pipeline_from_history,
 )
 from euroleague_fantasy_manager.prediction.minutes import predict_expected_minutes_if_play
 from euroleague_fantasy_manager.prediction.registry import get_model_registry
 
 
-@pytest.fixture
-def sample_feature_row() -> PointInTimeFeatureRow:
-    """Fixture providing a standard point-in-time player feature row."""
-    return PointInTimeFeatureRow(
-        player_id=101,
-        player_name="Facundo Campazzo",
-        position="G",
-        season="E2024",
-        round_number=5,
-        decision_cutoff="2024-10-24T18:00:00Z",
-        team_id=1,
-        team_code="RMB",
-        opponent_team_id=2,
-        opponent_team_code="BAR",
-        home=True,
-        turn_number=1,
-        days_rest=3.0,
-        quotation_at_decision_tenths=145,
-        pre_round_status="available",
-        play_probability=0.95,
-        cold_start_source="prior_season",
-        games_played=4,
-        games_missed=0,
-        starter_rate=1.0,
-        season_avg_fantasy_points=18.5,
-        last_1_fantasy_points=22.0,
-        last_3_avg=19.3,
-        last_5_avg=18.5,
-        last_10_avg=18.5,
-        ewma_fantasy_points=19.1,
-        season_avg_minutes=26.4,
-        last_3_minutes=27.1,
-        last_5_minutes=26.4,
-        minutes_trend=0.7,
-        team_strength=0.78,
-        opponent_strength=0.72,
-        usage=0.24,
-        rebound_rate=0.08,
-        assist_rate=0.38,
-        steal_rate=0.04,
-        block_rate=0.01,
-        turnover_rate=0.12,
-        foul_draw_rate=0.16,
-        ewma_minutes=26.8,
-        std_minutes_last5=2.4,
-        dnp_rate_last5=0.0,
-        ewma_fp_per_min=0.71,
-        season_fp_per_min=0.70,
-        pos_prior_fp_per_min=0.55,
-        is_double_round_week=False,
-    )
 
 
 def test_w1_feature_extraction(sample_feature_row: PointInTimeFeatureRow) -> None:
@@ -193,9 +135,9 @@ def test_w1_learned_minutes_model_regression_and_explanation(sample_feature_row:
     assert expl["final_minutes"] == pred_min
 
 
-def test_w1_learned_pipeline_singleton() -> None:
+def test_w1_learned_pipeline_singleton(learned_dataset_db: Path) -> None:
     """Verify default singleton pipeline initializes deterministically."""
-    pipeline = get_default_learned_pipeline()
+    pipeline = get_default_learned_pipeline(database_path=learned_dataset_db)
     assert pipeline is not None
     assert pipeline.is_fitted
     assert pipeline.availability_model.is_fitted
@@ -275,72 +217,3 @@ def test_w1_walk_forward_evaluation_with_learned_model(tmp_path: Path) -> None:
     assert learned_summary["player_samples"] > 0
     assert learned_summary["mae"] > 0.0
     assert (reports_dir / "e2025_baseline_comparison.md").exists()
-
-
-def test_w1_production_historical_training_and_provenance() -> None:
-    """Verify production pipeline trains on real PIT historical data and records provenance."""
-    from euroleague_fantasy_manager.fixtures import DATABASE_PATH
-
-    clear_learned_pipeline_cache()
-    pipe = get_default_learned_pipeline()
-    assert pipe is not None
-    assert pipe.is_fitted
-    assert pipe.provenance.get("origin") == "production_historical"
-    assert pipe.provenance.get("sample_count", 0) > 0
-    assert pipe.provenance.get("model_version") == "0.9.0"
-    assert pipe.provenance.get("feature_schema") == "1.3.0"
-    assert "training_seasons" in pipe.provenance
-
-
-def test_w1_synthetic_test_model_explicit_distinction() -> None:
-    """Verify synthetic model is strictly identified as synthetic_test_model."""
-    synthetic_pipe = get_synthetic_test_learned_pipeline(random_state=42)
-    assert synthetic_pipe.is_fitted
-    assert synthetic_pipe.provenance.get("origin") == "synthetic_test_model"
-    assert synthetic_pipe.provenance.get("synthetic_samples") == 150
-
-
-def test_w1_unavailable_data_fallback_safety(tmp_path: Path, sample_feature_row: PointInTimeFeatureRow) -> None:
-    """Verify fallback pipeline gracefully routes to V0.8 contextual models when DB is absent."""
-    empty_db = tmp_path / "empty_db.sqlite3"
-    empty_pipe = train_learned_pipeline_from_history(database_path=empty_db)
-    assert not empty_pipe.is_fitted
-    assert empty_pipe.provenance.get("origin") == "unavailable_data_fallback"
-
-    # Prediction should gracefully fall back to V0.8 without crashing
-    avail = empty_pipe.availability_model.predict_play_probability(sample_feature_row)
-    assert 0.01 <= avail <= 0.995
-
-    mins = empty_pipe.minutes_model.predict_minutes(sample_feature_row)
-    assert 5.0 <= mins <= 37.5
-
-
-def test_w1_temporal_calibration_protocol() -> None:
-    """Verify availability model uses chronological temporal splits during calibration."""
-    model = LearnedAvailabilityModel(random_state=42)
-    # 60 samples with chronological order
-    rng = np.random.RandomState(42)
-    X = rng.uniform(0.0, 1.0, size=(60, len(LEARNED_FEATURE_NAMES)))
-    y = np.ones(60, dtype=int)
-    y[:10] = 0  # early DNPs
-    y[30:35] = 0
-
-    model.fit(X, y, temporal_split=True)
-    assert model.is_fitted
-
-
-def test_w1_explainability_counterfactual_bounds(sample_feature_row: PointInTimeFeatureRow) -> None:
-    """Verify explanation outputs are deterministically bounded counterfactuals."""
-    model = LearnedMinutesModel(random_state=42)
-    X = np.random.uniform(0.0, 1.0, size=(50, len(LEARNED_FEATURE_NAMES)))
-    y = np.random.uniform(12.0, 32.0, size=50)
-    model.fit(X, y)
-
-    expl = model.explain(sample_feature_row)
-    assert isinstance(expl["base_minutes"], float)
-    assert isinstance(expl["home_adj"], float)
-    assert isinstance(expl["drw_adj"], float)
-    assert isinstance(expl["spread_adj"], float)
-    assert isinstance(expl["final_minutes"], float)
-    # Explanation docstring must clarify counterfactual nature
-    assert "counterfactual" in LearnedMinutesModel.explain.__doc__.lower()

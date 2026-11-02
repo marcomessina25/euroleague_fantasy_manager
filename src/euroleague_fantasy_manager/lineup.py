@@ -342,7 +342,19 @@ def generate_lineup_report(
     eff_league_id = league_id if league_id is not None else getattr(state, "league_id", None)
     target_round = round_number if round_number is not None else (state.round_number or get_current_round(store, league_id=eff_league_id))
 
-    players_by_id = {p.id: p for p in store.load_latest_players(league_id=eff_league_id)}
+    snap = (
+        store.get_snapshot_for_round(
+            league_id=eff_league_id,
+            season_code=getattr(state, "season", None),
+            round_number=target_round,
+        )
+        if target_round is not None
+        else store.get_latest_summary(league_id=eff_league_id)
+    )
+    if snap is not None:
+        players_by_id = {p.id: p for p in store.load_players_for_snapshot(snap.snapshot_id)}
+    else:
+        players_by_id = {}
     projections = project_all_players(database_path=database_path, round_number=target_round, league_id=eff_league_id)
 
     squad_players: list[Player] = []

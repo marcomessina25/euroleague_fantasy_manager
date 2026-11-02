@@ -8,6 +8,7 @@ from pathlib import Path
 import sqlite3
 from typing import Any, Sequence
 
+from .db import connect_db
 from .models import Player, Position
 from .rules import EUROLEAGUE_LEAGUE_ID
 
@@ -28,6 +29,7 @@ class SnapshotSummary:
     fixture_count: int
     club_count: int = 0
     season_code_source: str = "config"
+    missing_fields: tuple[str, ...] = ()
 
 
 def _price_to_tenths(quotation: Any) -> int:
@@ -35,6 +37,20 @@ def _price_to_tenths(quotation: Any) -> int:
         return int(round(float(quotation) * 10))
     except (TypeError, ValueError):
         return 0
+
+
+@dataclass(frozen=True, slots=True)
+class SnapshotGameRules:
+    snapshot_id: int
+    game_mode_id: int
+    num_players_per_team: int | None
+    num_starter_players: int | None
+    num_bench_players: int | None
+    num_coach_players: int | None
+    max_num_same_team_players: int | None
+    captain_multiplier: float | None
+    cost_per_trade: int | None
+    raw_json: str
 
 
 class SnapshotStore:
@@ -46,9 +62,7 @@ class SnapshotStore:
         self._initialize_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.database_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return connect_db(self.database_path)
 
     def _get_schema_version(self, conn: sqlite3.Connection) -> int:
         conn.execute(
@@ -94,6 +108,77 @@ class SnapshotStore:
             conn.execute("ALTER TABLE snapshots ADD COLUMN season_code_source TEXT NOT NULL DEFAULT 'config'")
         logger.info("Migration complete: schema v3 index and columns added.")
 
+    def _migrate_to_v5_add_missing_fields_column(self, conn: sqlite3.Connection) -> None:
+        cols = [c[1] for c in conn.execute("PRAGMA table_info(snapshots)").fetchall()]
+        if "missing_fields" not in cols:
+            conn.execute("ALTER TABLE snapshots ADD COLUMN missing_fields TEXT DEFAULT '[]'")
+
+    def _migrate_to_v4_add_snapshot_game_rules(self, conn: sqlite3.Connection) -> None:
+        """Create snapshot_game_rules table and backfill from raw archive files."""
+        logger.info("Migrating schema to v4: creating snapshot_game_rules table...")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS snapshot_game_rules (
+                snapshot_id INTEGER PRIMARY KEY REFERENCES snapshots(id) ON DELETE CASCADE,
+                game_mode_id INTEGER NOT NULL,
+                num_players_per_team INTEGER, num_starter_players INTEGER, num_bench_players INTEGER,
+                num_coach_players INTEGER, max_num_same_team_players INTEGER,
+                captain_multiplier REAL, cost_per_trade INTEGER, raw_json TEXT NOT NULL
+            );
+            """
+        )
+        # Backfill from raw_archive_path if present
+        rows = conn.execute(
+            """
+            SELECT s.id, s.league_id, s.raw_archive_path
+            FROM snapshots s
+            WHERE s.id NOT IN (SELECT snapshot_id FROM snapshot_game_rules)
+            """
+        ).fetchall()
+        for row in rows:
+            snap_id = row[0]
+            lid = row[1]
+            raw_path_str = row[2]
+            if not raw_path_str:
+                continue
+            p = Path(raw_path_str)
+            if not p.is_file():
+                continue
+            try:
+                raw_payload = json.loads(p.read_text(encoding="utf-8"))
+                game_modes = raw_payload.get("config", {}).get("game_modes_configs", [])
+                for gm in game_modes:
+                    gm_id = gm.get("game_mode_id") or gm.get("id")
+                    if gm_id == 1:
+                        max_same = gm.get("max_num_same_team_players")
+                        if max_same is None and lid in (10, 11):
+                            max_same = 6
+                        conn.execute(
+                            """
+                            INSERT OR REPLACE INTO snapshot_game_rules (
+                                snapshot_id, game_mode_id, num_players_per_team, num_starter_players,
+                                num_bench_players, num_coach_players, max_num_same_team_players,
+                                captain_multiplier, cost_per_trade, raw_json
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                snap_id,
+                                int(gm_id),
+                                gm.get("num_players_per_team"),
+                                gm.get("num_starter_players"),
+                                gm.get("num_bench_players"),
+                                gm.get("num_coach_players"),
+                                max_same,
+                                float(gm["captain_multiplier"]) if gm.get("captain_multiplier") is not None else 2.0,
+                                gm.get("cost_per_trade", 0),
+                                json.dumps(gm, ensure_ascii=False),
+                            ),
+                        )
+                        break
+            except Exception as e:
+                logger.warning("Could not backfill snapshot_game_rules for snapshot %s: %s", snap_id, e)
+        logger.info("Migration complete: schema v4 snapshot_game_rules created and backfilled.")
+
     def _initialize_schema(self) -> None:
         with self._connect() as conn:
             current_version = self._get_schema_version(conn)
@@ -129,7 +214,8 @@ class SnapshotStore:
                         num_turns INTEGER NOT NULL DEFAULT 2,
                         raw_archive_path TEXT,
                         club_count INTEGER NOT NULL DEFAULT 0,
-                        season_code_source TEXT NOT NULL DEFAULT 'config'
+                        season_code_source TEXT NOT NULL DEFAULT 'config',
+                        missing_fields TEXT DEFAULT '[]'
                     );
 
                     CREATE INDEX IF NOT EXISTS idx_snapshots_league_id ON snapshots(league_id, id);
@@ -176,9 +262,9 @@ class SnapshotStore:
                         probability_of_playing REAL NOT NULL DEFAULT 1.0,
                         turn_number INTEGER NOT NULL DEFAULT 1,
                         last_match_pts REAL NOT NULL DEFAULT 0.0,
-                        avg_fantasy_pts REAL NOT NULL DEFAULT 0.0,
-                        total_plus_tenths INTEGER NOT NULL DEFAULT 0,
-                        popularity REAL NOT NULL DEFAULT 0.0,
+                        avg_fantasy_pts REAL,
+                        total_plus_tenths INTEGER,
+                        popularity REAL,
                         is_injured INTEGER NOT NULL DEFAULT 0,
                         is_on_fire INTEGER NOT NULL DEFAULT 0,
                         has_played INTEGER NOT NULL DEFAULT 0,
@@ -197,6 +283,14 @@ class SnapshotStore:
             if current_version < 3:
                 self._migrate_to_v3_add_snapshots_league_index(conn)
                 self._set_schema_version(conn, 3, "Added idx_snapshots_league_id on snapshots(league_id, id)")
+
+            if current_version < 4:
+                self._migrate_to_v4_add_snapshot_game_rules(conn)
+                self._set_schema_version(conn, 4, "Added snapshot_game_rules table and backfilled from raw archives")
+
+            if current_version < 5:
+                self._migrate_to_v5_add_missing_fields_column(conn)
+                self._set_schema_version(conn, 5, "Added missing_fields column to snapshots")
 
     def save_snapshot(
         self,
@@ -220,8 +314,8 @@ class SnapshotStore:
         season_code = str(payload.get("season_code", "E2026"))
         config = payload.get("config", {})
         cur_md = config.get("current_matchday", {})
-        matchday_id = int(cur_md.get("id", 0))
-        round_number = int(cur_md.get("number", 1))
+        matchday_id = int(cur_md.get("id", payload.get("round_number", 0)))
+        round_number = int(cur_md.get("number", payload.get("round_number", 1)))
         num_turns = int(cur_md.get("num_rounds", 2))
 
         teams_list = config.get("teams", [])
@@ -289,10 +383,12 @@ class SnapshotStore:
                     prob = float(p.get("probability_of_playing") if p.get("probability_of_playing") is not None else 1.0)
                     pts = float(p.get("pts") or 0.0)
                     raw_avg = p.get("avg_fantasy_pts")
-                    avg_pts = float(raw_avg) if raw_avg is not None else 0.0
+                    avg_pts = float(raw_avg) if (raw_avg is not None and str(raw_avg).strip() != "") else None
                     last_pts = pts if is_game_played else 0.0
-                    plus_tenths = _price_to_tenths(p.get("total_plus", 0))
-                    popularity = float(p.get("popularity") or 0.0)
+                    raw_plus = p.get("total_plus")
+                    plus_tenths = _price_to_tenths(raw_plus) if (raw_plus is not None and str(raw_plus).strip() != "") else None
+                    raw_pop = p.get("popularity")
+                    popularity = float(raw_pop) if (raw_pop is not None and str(raw_pop).strip() != "") else None
                     is_injured = 1 if (status.lower() in ("out", "injured") or p.get("is_injured")) else 0
                     is_on_fire = 1 if p.get("is_on_fire") else 0
                     has_played_val = 1 if is_game_played else 0
@@ -320,13 +416,94 @@ class SnapshotStore:
                         "has_played": has_played_val,
                     }
 
+        if not players_by_id and "players" in payload:
+            for p in payload["players"]:
+                pid = int(p["id"])
+                pos_val = p.get("position", 1)
+                if isinstance(pos_val, str):
+                    pos = Position.from_raw(pos_val)
+                    pos_int = int(pos)
+                    pos_code = pos.short_code
+                else:
+                    pos_int = int(pos_val)
+                    pos_code = str(p.get("position_code", "G"))
+                raw_avg2 = p.get("avg_fantasy_pts")
+                avg_pts2 = float(raw_avg2) if (raw_avg2 is not None and str(raw_avg2).strip() != "") else None
+                raw_plus2 = p.get("total_plus_tenths", p.get("total_plus"))
+                plus_tenths2 = int(raw_plus2) if (raw_plus2 is not None and str(raw_plus2).strip() != "") else None
+                raw_pop2 = p.get("popularity")
+                pop2 = float(raw_pop2) if (raw_pop2 is not None and str(raw_pop2).strip() != "") else None
+                players_by_id[pid] = {
+                    "id": pid,
+                    "first_name": str(p.get("first_name", "")),
+                    "last_name": str(p.get("last_name", "")),
+                    "name": str(p.get("name", "")),
+                    "position": pos_int,
+                    "position_code": pos_code,
+                    "team_id": int(p.get("team_id", 1)),
+                    "team_code": str(p.get("team_code", "")),
+                    "team_name": str(p.get("team_name", "")),
+                    "price_tenths": int(p.get("price_tenths", 0)),
+                    "status": str(p.get("status", "AVAILABLE")),
+                    "probability_of_playing": float(p.get("probability_of_playing", 1.0)),
+                    "turn_number": int(p.get("turn_number", 1)),
+                    "last_match_pts": float(p.get("last_match_pts", 0.0)),
+                    "avg_fantasy_pts": avg_pts2,
+                    "total_plus_tenths": plus_tenths2,
+                    "popularity": pop2,
+                    "is_injured": int(p.get("is_injured", 0)),
+                    "is_on_fire": int(p.get("is_on_fire", 0)),
+                    "has_played": int(p.get("has_played", 0)),
+                }
+
         season_code_source = str(payload.get("season_code_source", "config"))
         official_clubs = payload.get("official_clubs", [])
         club_count = len(official_clubs) if official_clubs else len(team_map)
 
+        missing_fields = list(payload.get("missing_fields", []))
+
         with self._connect() as conn:
+            # Fallback to historical_boxscores if avg_pts is None
+            for pid, pdata in players_by_id.items():
+                if pdata["avg_fantasy_pts"] is None:
+                    try:
+                        row = conn.execute(
+                            "SELECT AVG(fantasy_points) FROM historical_boxscores WHERE player_id = ?",
+                            (pid,),
+                        ).fetchone()
+                        if row and row[0] is not None:
+                            pdata["avg_fantasy_pts"] = round(float(row[0]), 2)
+                    except Exception:
+                        pass
+                if pdata["avg_fantasy_pts"] is None and "avg_fantasy_pts" not in missing_fields:
+                    missing_fields.append("avg_fantasy_pts")
+
+            missing_fields_json = json.dumps(sorted(set(missing_fields)))
             snap_cols = [c[1] for c in conn.execute("PRAGMA table_info(snapshots)").fetchall()]
-            if "club_count" in snap_cols and "season_code_source" in snap_cols:
+            if "missing_fields" in snap_cols:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO snapshots (
+                        created_at, league_id, competition_code, season_code,
+                        matchday_id, round_number, num_turns, raw_archive_path,
+                        club_count, season_code_source, missing_fields
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        timestamp,
+                        league_id,
+                        comp_code,
+                        season_code,
+                        matchday_id,
+                        round_number,
+                        num_turns,
+                        raw_archive_str,
+                        club_count,
+                        season_code_source,
+                        missing_fields_json,
+                    ),
+                )
+            elif "club_count" in snap_cols and "season_code_source" in snap_cols:
                 cursor = conn.execute(
                     """
                     INSERT INTO snapshots (
@@ -359,6 +536,37 @@ class SnapshotStore:
                     (timestamp, league_id, comp_code, season_code, matchday_id, round_number, num_turns, raw_archive_str),
                 )
             snapshot_id = int(cursor.lastrowid)
+
+            # P1.1: Persist official game-mode config (game_mode_id == 1)
+            game_modes = config.get("game_modes_configs", [])
+            for gm in game_modes:
+                gm_id = gm.get("game_mode_id") or gm.get("id")
+                if gm_id == 1:
+                    max_same = gm.get("max_num_same_team_players")
+                    if max_same is None and league_id in (10, 11):
+                        max_same = 6
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO snapshot_game_rules (
+                            snapshot_id, game_mode_id, num_players_per_team, num_starter_players,
+                            num_bench_players, num_coach_players, max_num_same_team_players,
+                            captain_multiplier, cost_per_trade, raw_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            snapshot_id,
+                            int(gm_id),
+                            gm.get("num_players_per_team"),
+                            gm.get("num_starter_players"),
+                            gm.get("num_bench_players"),
+                            gm.get("num_coach_players"),
+                            max_same,
+                            float(gm["captain_multiplier"]) if gm.get("captain_multiplier") is not None else 2.0,
+                            gm.get("cost_per_trade", 0),
+                            json.dumps(gm, ensure_ascii=False),
+                        ),
+                    )
+                    break
 
             for tid, (tname, tcode) in sorted(team_map.items()):
                 conn.execute(
@@ -428,7 +636,57 @@ class SnapshotStore:
             fixture_count=len(fixtures_rows),
             club_count=club_count,
             season_code_source=season_code_source,
+            missing_fields=tuple(sorted(set(missing_fields))),
         )
+
+    def load_game_rules(
+        self,
+        snapshot_id: int | None = None,
+        league_id: int | None = None,
+    ) -> SnapshotGameRules | None:
+        """Load snapshot game rules for a specific snapshot or the latest snapshot for a league."""
+        with self._connect() as conn:
+            if snapshot_id is not None:
+                row = conn.execute(
+                    """
+                    SELECT snapshot_id, game_mode_id, num_players_per_team, num_starter_players,
+                           num_bench_players, num_coach_players, max_num_same_team_players,
+                           captain_multiplier, cost_per_trade, raw_json
+                    FROM snapshot_game_rules
+                    WHERE snapshot_id = ?
+                    """,
+                    (snapshot_id,),
+                ).fetchone()
+            else:
+                query = """
+                    SELECT r.snapshot_id, r.game_mode_id, r.num_players_per_team, r.num_starter_players,
+                           r.num_bench_players, r.num_coach_players, r.max_num_same_team_players,
+                           r.captain_multiplier, r.cost_per_trade, r.raw_json
+                    FROM snapshot_game_rules r
+                    JOIN snapshots s ON s.id = r.snapshot_id
+                """
+                params: list[Any] = []
+                if league_id is not None:
+                    query += " WHERE s.league_id = ?"
+                    params.append(league_id)
+                query += " ORDER BY s.id DESC LIMIT 1"
+                row = conn.execute(query, params).fetchone()
+
+            if not row:
+                return None
+
+            return SnapshotGameRules(
+                snapshot_id=int(row[0]),
+                game_mode_id=int(row[1]),
+                num_players_per_team=row[2],
+                num_starter_players=row[3],
+                num_bench_players=row[4],
+                num_coach_players=row[5],
+                max_num_same_team_players=row[6],
+                captain_multiplier=row[7],
+                cost_per_trade=row[8],
+                raw_json=row[9],
+            )
 
     def get_latest_summary(self, league_id: int | None = None) -> SnapshotSummary | None:
         """Return metadata summary of the most recently stored snapshot (optionally scoped to league_id).
@@ -459,6 +717,8 @@ class SnapshotStore:
             row_keys = row.keys() if hasattr(row, "keys") else []
             club_count = int(row["club_count"]) if "club_count" in row_keys else team_count
             season_code_source = str(row["season_code_source"]) if "season_code_source" in row_keys else "config"
+            mf_raw = row["missing_fields"] if "missing_fields" in row_keys else None
+            missing_fields = tuple(json.loads(mf_raw)) if mf_raw else ()
             return SnapshotSummary(
                 snapshot_id=sid,
                 created_at=str(row["created_at"]),
@@ -472,6 +732,7 @@ class SnapshotStore:
                 fixture_count=fixture_count,
                 club_count=club_count,
                 season_code_source=season_code_source,
+                missing_fields=missing_fields,
             )
 
     @staticmethod
@@ -508,10 +769,10 @@ class SnapshotStore:
                     status=str(r["status"]),
                     probability_of_playing=float(r["probability_of_playing"]),
                     turn_number=int(r["turn_number"]),
-                    avg_fantasy_pts=float(r["avg_fantasy_pts"]),
-                    last_match_pts=float(r["last_match_pts"]),
-                    total_plus_tenths=int(r["total_plus_tenths"]),
-                    popularity=float(r["popularity"]),
+                    avg_fantasy_pts=float(r["avg_fantasy_pts"]) if r["avg_fantasy_pts"] is not None else None,
+                    last_match_pts=float(r["last_match_pts"]) if r["last_match_pts"] is not None else 0.0,
+                    total_plus_tenths=int(r["total_plus_tenths"]) if r["total_plus_tenths"] is not None else None,
+                    popularity=float(r["popularity"]) if r["popularity"] is not None else None,
                     is_injured=bool(r["is_injured"]),
                     is_on_fire=bool(r["is_on_fire"]),
                     has_played=bool(r["has_played"]) if "has_played" in r.keys() else False,
@@ -637,6 +898,8 @@ class SnapshotStore:
             row_keys = row.keys() if hasattr(row, "keys") else []
             club_count = int(row["club_count"]) if "club_count" in row_keys else team_count
             season_code_source = str(row["season_code_source"]) if "season_code_source" in row_keys else "config"
+            mf_raw = row["missing_fields"] if "missing_fields" in row_keys else None
+            missing_fields = tuple(json.loads(mf_raw)) if mf_raw else ()
             return SnapshotSummary(
                 snapshot_id=sid,
                 created_at=str(row["created_at"]),
@@ -650,6 +913,65 @@ class SnapshotStore:
                 fixture_count=fixture_count,
                 club_count=club_count,
                 season_code_source=season_code_source,
+                missing_fields=missing_fields,
+            )
+
+    def get_snapshot_for_round(
+        self,
+        league_id: int,
+        season_code: str | None = None,
+        round_number: int = 1,
+        decision_cutoff: str | None = None,
+    ) -> SnapshotSummary | None:
+        """Fetch the point-in-time historical snapshot for a round (round_number <= R).
+
+        Returns the newest snapshot with round_number <= R for league_id and season_code.
+        Where decision_cutoff is provided, also requires created_at <= decision_cutoff.
+        Returns None if no matching snapshot exists (never falls back to latest).
+        """
+        query = "SELECT * FROM snapshots WHERE league_id = ? AND round_number <= ?"
+        params: list[Any] = [int(league_id), int(round_number)]
+        if season_code is not None:
+            query += " AND season_code = ?"
+            params.append(season_code)
+        if decision_cutoff is not None:
+            query += " AND created_at <= ?"
+            params.append(decision_cutoff)
+        query += " ORDER BY round_number DESC, created_at DESC, id DESC LIMIT 1"
+
+        with self._connect() as conn:
+            row = conn.execute(query, tuple(params)).fetchone()
+            if not row:
+                return None
+            sid = int(row["id"])
+            team_count = int(conn.execute("SELECT COUNT(*) FROM teams WHERE snapshot_id = ?", (sid,)).fetchone()[0])
+            fixture_count = int(conn.execute("SELECT COUNT(*) FROM fixtures WHERE snapshot_id = ?", (sid,)).fetchone()[0])
+            coach_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM players WHERE snapshot_id = ? AND position = ?",
+                    (sid, int(Position.HEAD_COACH)),
+                ).fetchone()[0]
+            )
+            total_units = int(conn.execute("SELECT COUNT(*) FROM players WHERE snapshot_id = ?", (sid,)).fetchone()[0])
+            row_keys = row.keys() if hasattr(row, "keys") else []
+            club_count = int(row["club_count"]) if "club_count" in row_keys else team_count
+            season_code_source = str(row["season_code_source"]) if "season_code_source" in row_keys else "config"
+            mf_raw = row["missing_fields"] if "missing_fields" in row_keys else None
+            missing_fields = tuple(json.loads(mf_raw)) if mf_raw else ()
+            return SnapshotSummary(
+                snapshot_id=sid,
+                created_at=str(row["created_at"]),
+                league_id=int(row["league_id"]),
+                season_code=str(row["season_code"]),
+                round_number=int(row["round_number"]),
+                num_turns=int(row["num_turns"]),
+                team_count=team_count,
+                player_count=total_units - coach_count,
+                coach_count=coach_count,
+                fixture_count=fixture_count,
+                club_count=club_count,
+                season_code_source=season_code_source,
+                missing_fields=missing_fields,
             )
 
     def list_snapshots(
@@ -702,10 +1024,10 @@ class SnapshotStore:
                     status=str(r["status"]),
                     probability_of_playing=float(r["probability_of_playing"]),
                     turn_number=int(r["turn_number"]),
-                    avg_fantasy_pts=float(r["avg_fantasy_pts"]),
-                    last_match_pts=float(r["last_match_pts"]),
-                    total_plus_tenths=int(r["total_plus_tenths"]),
-                    popularity=float(r["popularity"]),
+                    avg_fantasy_pts=float(r["avg_fantasy_pts"]) if r["avg_fantasy_pts"] is not None else None,
+                    last_match_pts=float(r["last_match_pts"]) if r["last_match_pts"] is not None else 0.0,
+                    total_plus_tenths=int(r["total_plus_tenths"]) if r["total_plus_tenths"] is not None else None,
+                    popularity=float(r["popularity"]) if r["popularity"] is not None else None,
                     is_injured=bool(r["is_injured"]),
                     is_on_fire=bool(r["is_on_fire"]),
                     has_played=bool(r["has_played"]) if "has_played" in r.keys() else False,
@@ -804,14 +1126,14 @@ def seed_historical_snapshots(
         {"id": 4001, "team_id": 4, "first_name": "Scottie", "last_name": "Wilbekin", "position": "Guard", "quotation": 12.5, "pts": 13.5},
         {"id": 4002, "team_id": 4, "first_name": "Marko", "last_name": "Guduric", "position": "Guard", "quotation": 11.5, "pts": 12.0},
         {"id": 4003, "team_id": 4, "first_name": "Nigel", "last_name": "Hayes-Davis", "position": "Forward", "quotation": 15.5, "pts": 18.0},
-        {"id": 4004, "team_id": 4, "first_name": "Tarik", "last_name": "Biberovic", "position": "Forward", "quotation": 8.5, "pts": 9.0},
+        {"id": 4004, "team_id": 4, "first_name": "Tarik", "last_name": "Biberovic", "position": "Forward", "quotation": 6.5, "pts": 9.0},
         {"id": 4091, "team_id": 4, "first_name": "Saras", "last_name": "Jasikevicius", "position": "Head Coach", "quotation": 8.5, "pts": 10.0},
         {"id": 5001, "team_id": 5, "first_name": "Mike", "last_name": "James", "position": "Guard", "quotation": 17.0, "pts": 21.5},
         {"id": 5002, "team_id": 5, "first_name": "Elie", "last_name": "Okobo", "position": "Guard", "quotation": 12.5, "pts": 14.0},
         {"id": 5003, "team_id": 5, "first_name": "Alpha", "last_name": "Diallo", "position": "Forward", "quotation": 13.0, "pts": 15.0},
-        {"id": 5004, "team_id": 5, "first_name": "Donatas", "last_name": "Motiejunas", "position": "Center", "quotation": 10.5, "pts": 11.5},
+        {"id": 5004, "team_id": 5, "first_name": "Donatas", "last_name": "Motiejunas", "position": "Center", "quotation": 8.0, "pts": 11.5},
         {"id": 5091, "team_id": 5, "first_name": "Sasa", "last_name": "Obradovic", "position": "Head Coach", "quotation": 8.0, "pts": 9.0},
-        {"id": 6001, "team_id": 6, "first_name": "Martin", "last_name": "Hermannsson", "position": "Guard", "quotation": 8.5, "pts": 9.5},
+        {"id": 6001, "team_id": 6, "first_name": "Martin", "last_name": "Hermannsson", "position": "Guard", "quotation": 6.5, "pts": 9.5},
         {"id": 6002, "team_id": 6, "first_name": "Gabriele", "last_name": "Procida", "position": "Forward", "quotation": 7.5, "pts": 8.5},
         {"id": 6003, "team_id": 6, "first_name": "Louis", "last_name": "Olinde", "position": "Forward", "quotation": 7.0, "pts": 7.5},
         {"id": 6004, "team_id": 6, "first_name": "Trevion", "last_name": "Williams", "position": "Center", "quotation": 9.5, "pts": 11.0},

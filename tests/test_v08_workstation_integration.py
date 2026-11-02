@@ -8,7 +8,6 @@ from euroleague_fantasy_manager.multi_team.models import Team, TeamRosterUnit, T
 from euroleague_fantasy_manager.multi_team.store import TeamStore
 from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
 from euroleague_fantasy_manager.web.app import create_app
-from euroleague_fantasy_manager.web.deps import set_db_path
 
 
 def _make_contracts() -> list[PlayerProjectionContract]:
@@ -87,7 +86,6 @@ def _make_contracts() -> list[PlayerProjectionContract]:
 @pytest.fixture
 def test_client(tmp_path) -> TestClient:
     db_path = tmp_path / "test_gui.sqlite3"
-    set_db_path(db_path)
 
     # Initialize app and store a sample team
     team_store = TeamStore(db_path)

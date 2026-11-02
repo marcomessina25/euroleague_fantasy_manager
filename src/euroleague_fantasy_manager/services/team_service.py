@@ -4,29 +4,29 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
+from typing import Iterator
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from euroleague_fantasy_manager.competition.ruleset import League
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.optimization.constraints import (
     PlayerProjectionContract,
-    validate_squad_constraints,
 )
 from euroleague_fantasy_manager.rules import (
     MAX_TRADES_PER_ROUND,
     SQUAD_QUOTAS,
     SQUAD_SIZE,
-    UNLIMITED_TRADE_ROUNDS,
 )
 from euroleague_fantasy_manager.multi_team.models import (
+    AuditIntent,
     PointInTimeTeamState,
     Team,
     TeamRosterUnit,
     TeamSettings,
 )
 from euroleague_fantasy_manager.multi_team.store import (
-    MAX_TEAMS,
     TeamStore,
 )
 
@@ -38,6 +38,11 @@ class TeamService:
 
     def __init__(self, store: TeamStore | None = None, db_path: str | Path = "data/euroleague.sqlite3") -> None:
         self.store = store or TeamStore(db_path=db_path)
+        self.db_path = getattr(self.store, "db_path", Path(db_path))
+
+    def transaction(self, conn: sqlite3.Connection | None = None) -> Iterator[sqlite3.Connection]:
+        """Forward transaction context to the underlying store."""
+        return self.store.transaction(conn)
 
     def create_team(
         self,
@@ -51,6 +56,7 @@ class TeamService:
         bank_tenths: int = 0,
         settings: TeamSettings | dict[str, Any] | None = None,
         squad: Sequence[TeamRosterUnit] | None = None,
+        conn: sqlite3.Connection | None = None,
     ) -> Team:
         """Create a new isolated team profile (max 6)."""
         league = League.from_str(league).value
@@ -58,6 +64,9 @@ class TeamService:
             raise ValueError(f"round_number must be at least 1; got {round_number}.")
         if bank_tenths < 0:
             raise ValueError("Bank credits cannot be negative.")
+        import re
+        if not re.match(r"^[A-Za-z0-9_-]{1,40}$", team_id):
+            raise ValueError(f"Invalid team_id '{team_id}'; must match ^[A-Za-z0-9_-]{{1,40}}$")
         existing = self.store.get_team(team_id)
         if existing:
             raise ValueError(f"Team with ID '{team_id}' already exists.")
@@ -70,7 +79,7 @@ class TeamService:
             parsed_settings = TeamSettings()
 
         if squad:
-            self._validate_club_quota(squad, league=league)
+            self._validate_roster(squad, league=league)
 
         team = Team(
             team_id=team_id,
@@ -85,22 +94,24 @@ class TeamService:
             squad=list(squad or []),
             settings=parsed_settings,
         )
-        created = self.store.create_team(team)
-        if created.squad:
-            self.store.save_round_checkpoint(
-                team_id=team_id,
-                round_number=round_number,
-                season=season,
-                bank_tenths=bank_tenths,
-                transfers_remaining=4,
-                squad=created.squad,
-                overwrite=True,
-            )
-        return created
+        with self.store.transaction(conn) as c:
+            created = self.store.create_team(team, conn=c)
+            if created.squad:
+                self.store.save_round_checkpoint(
+                    team_id=team_id,
+                    round_number=round_number,
+                    season=season,
+                    bank_tenths=bank_tenths,
+                    transfers_remaining=4,
+                    squad=created.squad,
+                    overwrite=True,
+                    conn=c,
+                )
+            return created
 
-    def get_team(self, team_id: str) -> Team:
+    def get_team(self, team_id: str, conn: sqlite3.Connection | None = None) -> Team:
         """Retrieve team by ID, raising KeyError if not found."""
-        team = self.store.get_team(team_id)
+        team = self.store.get_team(team_id, conn=conn)
         if not team:
             raise KeyError(f"Team '{team_id}' not found.")
         return team
@@ -121,7 +132,7 @@ class TeamService:
             return team
 
         snap_store = SnapshotStore(db_path)
-        ruleset = get_league_ruleset(League.from_str(team.league))
+        ruleset = get_league_ruleset(League.from_str(team.league), db_path=self.db_path)
         summary = snap_store.get_latest_summary(league_id=ruleset.league_id)
         if summary is None or summary.round_number <= team.round_number:
             return team
@@ -139,8 +150,27 @@ class TeamService:
         # Validate before any write so a rejected roll-forward leaves the team untouched
         if curr_units:
             self._validate_roster(curr_units, league=team.league)
-        self.update_team(team_id, transfers_remaining=MAX_TRADES_PER_ROUND)
-        return self.set_squad(team_id, live_round, curr_units, validate=False, advance_team_round=True)
+
+        with self.store.transaction() as c:
+            for r in range(team.round_number + 1, live_round + 1):
+                advance = (r == live_round)
+                self.store.save_squad(team_id, r, curr_units, conn=c)
+                self.store.save_round_checkpoint(
+                    team_id=team_id,
+                    round_number=r,
+                    season=team.season,
+                    bank_tenths=team.bank_tenths,
+                    transfers_remaining=MAX_TRADES_PER_ROUND,
+                    squad=curr_units,
+                    overwrite=True,
+                    conn=c,
+                )
+                if advance:
+                    team.round_number = live_round
+                    team.squad = list(curr_units)
+                    team.transfers_remaining = MAX_TRADES_PER_ROUND
+                    team = self.store.update_team(team, conn=c)
+        return team
 
     def sync_all_teams_to_live_round(self, league: Any = None) -> tuple[list[Team], dict[str, str]]:
         """Roll forward every managed team (optionally of one league) behind the latest snapshot.
@@ -174,9 +204,11 @@ class TeamService:
         bank_tenths: int | None = None,
         transfers_remaining: int | None = None,
         settings: TeamSettings | dict[str, Any] | None = None,
+        updated_at: str | None = None,
+        conn: sqlite3.Connection | None = None,
     ) -> Team:
         """Update metadata, bank, or settings of an existing team."""
-        team = self.get_team(team_id)
+        team = self.get_team(team_id, conn=conn)
         if name is not None:
             team.name = name
         if round_number is not None:
@@ -192,7 +224,9 @@ class TeamService:
                 team.settings = TeamSettings.from_dict(settings)
             else:
                 team.settings = settings
-        return self.store.update_team(team)
+        if updated_at is not None:
+            team.updated_at = updated_at
+        return self.store.update_team(team, conn=conn)
 
     def delete_team(self, team_id: str) -> bool:
         """Delete an existing team."""
@@ -213,6 +247,7 @@ class TeamService:
         roster_units: Sequence[TeamRosterUnit],
         validate: bool = True,
         advance_team_round: bool = True,
+        conn: sqlite3.Connection | None = None,
     ) -> Team:
         """Persist a team's 11-player squad for a round.
 
@@ -220,11 +255,11 @@ class TeamService:
         live round pointer, which is what backfilling a past round requires
         (V0.7 W5).
         """
-        team = self.get_team(team_id)
+        team = self.get_team(team_id, conn=conn)
         if validate and roster_units:
             self._validate_roster(roster_units, league=getattr(team, "league", "euroleague"))
 
-        self.store.save_squad(team_id, round_number, roster_units)
+        self.store.save_squad(team_id, round_number, roster_units, conn=conn)
         if roster_units and advance_team_round:
             # A backfill (advance_team_round=False) must not fabricate a "round-start"
             # checkpoint from today's live bank/transfers state; the round may legitimately
@@ -238,17 +273,19 @@ class TeamService:
                 transfers_remaining=team.transfers_remaining,
                 squad=roster_units,
                 overwrite=False,
+                conn=conn,
             )
         if advance_team_round:
             team.round_number = round_number
             team.squad = list(roster_units)
-            return self.store.update_team(team)
+            return self.store.update_team(team, conn=conn)
         return team
 
     def update_team_squad(
         self,
         team_id: str,
         squad: Sequence[TeamRosterUnit],
+        validate: bool = True,
     ) -> Team:
         """Convenience method to update squad for the team's current round."""
         team = self.get_team(team_id)
@@ -256,8 +293,48 @@ class TeamService:
             team_id=team_id,
             round_number=team.round_number,
             roster_units=squad,
-            validate=False,
+            validate=validate,
         )
+
+    def import_squad(
+        self,
+        team_id: str,
+        round_number: int,
+        bank_tenths: int,
+        roster_units: Sequence[TeamRosterUnit],
+        season: str | None = None,
+    ) -> Team:
+        """Import an 11-unit squad atomically after full validation."""
+        if round_number < 1:
+            raise ValueError(f"--round must be at least 1; got {round_number}.")
+        if bank_tenths < 0:
+            raise ValueError(f"Bank credits cannot be negative; got {bank_tenths}.")
+
+        team = self.get_team(team_id)
+        self._validate_roster(roster_units, league=team.league)
+
+        from euroleague_fantasy_manager.competition.ruleset import resolve_ruleset
+        ruleset = resolve_ruleset(team.league, db_path=self.db_path)
+
+        with self.store.transaction() as c:
+            self.store.save_squad(team_id, round_number, roster_units, conn=c)
+            self.store.save_round_checkpoint(
+                team_id=team_id,
+                round_number=round_number,
+                season=season or team.season,
+                bank_tenths=bank_tenths,
+                transfers_remaining=ruleset.max_trades_per_round,
+                squad=roster_units,
+                overwrite=True,
+                conn=c,
+            )
+            if round_number >= team.round_number:
+                team.round_number = round_number
+            team.bank_tenths = bank_tenths
+            team.squad = list(roster_units)
+            team.transfers_remaining = ruleset.max_trades_per_round
+            team = self.store.update_team(team, conn=c)
+        return team
 
     def update_lineup(
         self,
@@ -367,6 +444,72 @@ class TeamService:
             rounds.append(team.round_number)
         return sorted(rounds)
 
+
+    def adjust_bank(
+        self,
+        team_id: str,
+        delta_tenths: int,
+        reason: str = "Manual bank adjustment",
+        conn: sqlite3.Connection | None = None,
+        audit: AuditIntent | None = None,
+    ) -> Team:
+        """Adjust bank for a team's live round, updating both team row and live round checkpoint atomically."""
+        with self.store.transaction(conn) as c:
+            team = self.get_team(team_id, conn=c)
+            new_bank = team.bank_tenths + delta_tenths
+            if new_bank < 0:
+                raise ValueError(f"Bank cannot be negative (current: {team.bank_tenths}, delta: {delta_tenths})")
+            team.bank_tenths = new_bank
+            self.store.update_team(team, conn=c)
+            try:
+                chk = self.store.get_round_checkpoint(team_id, team.round_number, team.season, conn=c)
+                new_chk_bank = chk["bank_tenths"] + delta_tenths
+                self.store.save_round_checkpoint(
+                    team_id=team_id,
+                    round_number=team.round_number,
+                    season=team.season,
+                    bank_tenths=new_chk_bank,
+                    transfers_remaining=chk["transfers_remaining"],
+                    squad=chk["squad"],
+                    overwrite=True,
+                    conn=c,
+                )
+            except ValueError:
+                pass
+
+            audit_logger = (
+                getattr(audit, "decision_logger", None)
+                or getattr(audit, "decision_service", None)
+                or getattr(self, "decision_service", None)
+            )
+            if audit_logger is not None:
+                from euroleague_fantasy_manager.tracking.models import (
+                    DecisionProvenance,
+                    DecisionRecord,
+                    DecisionType,
+                )
+                from datetime import datetime, timezone
+                now_str = datetime.now(timezone.utc).isoformat()
+                d_type = getattr(DecisionType, "TRANSFERS", DecisionType.TRANSFERS)
+                prov = getattr(audit, "provenance", None) or DecisionProvenance()
+                dec_store = getattr(audit_logger, "store", audit_logger)
+                dec_store.log_decision(
+                    DecisionRecord(
+                        decision_id=f"bank_adj_{team_id}_{now_str}",
+                        team_id=team_id,
+                        season=team.season,
+                        round_number=team.round_number,
+                        turn_number=team.turn_number,
+                        decision_type=d_type,
+                        created_at=now_str,
+                        provenance=prov,
+                        notes=f"Adjusted bank by {delta_tenths} tenths: {reason}",
+                        league=getattr(team, "league", "euroleague"),
+                    ),
+                    conn=c,
+                )
+            return self.get_team(team_id, conn=c)
+
     def import_from_config(
         self,
         team_id: str,
@@ -440,9 +583,29 @@ class TeamService:
                 squad=units,
             )
         else:
-            team = self.set_squad(team_id, round_number, units, validate=False)
-            team.bank_tenths = bank
-            team = self.store.update_team(team)
+            with self.store.transaction() as c:
+                advance = round_number >= existing.round_number
+                team = self.set_squad(
+                    team_id,
+                    round_number,
+                    units,
+                    validate=False,
+                    advance_team_round=advance,
+                    conn=c,
+                )
+                team.bank_tenths = bank
+                self.store.save_round_checkpoint(
+                    team_id=team_id,
+                    round_number=round_number,
+                    season=season,
+                    bank_tenths=bank,
+                    transfers_remaining=existing.transfers_remaining,
+                    squad=units,
+                    overwrite=True,
+                    conn=c,
+                )
+                if advance:
+                    team = self.store.update_team(team, conn=c)
 
         return team
 
@@ -457,20 +620,11 @@ class TeamService:
                 f"Roster must have exactly {SQUAD_SIZE} units, got {len(units)}."
             )
 
+        from euroleague_fantasy_manager.models import normalize_position
         counts = {"G": 0, "F": 0, "C": 0, "HC": 0}
         for u in units:
-            raw = str(u.position).upper()
-            if "GUARD" in raw or raw == "G" or raw == "1":
-                pos = "G"
-            elif "FORWARD" in raw or raw == "F" or raw == "2":
-                pos = "F"
-            elif "CENTER" in raw or raw == "C" or raw == "3":
-                pos = "C"
-            elif "COACH" in raw or raw == "HC" or raw == "4":
-                pos = "HC"
-            else:
-                pos = "G"
-            counts[pos] += 1
+            pos_enum = normalize_position(u.position)
+            counts[pos_enum.short_code] += 1
 
         for pos, req in SQUAD_QUOTAS.items():
             key = pos.short_code if hasattr(pos, "short_code") else str(pos)
@@ -478,6 +632,12 @@ class TeamService:
                 pos_display = pos.name if hasattr(pos, "name") else str(pos)
                 raise ValueError(
                     f"Invalid squad: requires {req} {pos_display}s, found {counts.get(key, 0)}."
+                )
+
+        for u in units:
+            if not getattr(u, "team_code", None) or not str(u.team_code).strip():
+                raise ValueError(
+                    f"Roster unit {getattr(u, 'player_id', getattr(u, 'name', 'unknown'))} has an empty team_code."
                 )
 
         self._validate_club_quota(units, league=league)
@@ -488,39 +648,40 @@ class TeamService:
         league: str = "euroleague",
     ) -> None:
         """Enforce the competition-specific max court players per club."""
-        from collections import Counter
-        from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset
-        ruleset = get_league_ruleset(league)
-        court_clubs = [
-            u.team_code
-            for u in units
-            if str(u.position).upper() not in ("HC", "HEAD_COACH", "4") and u.team_code
-        ]
-        if court_clubs:
-            club_counts = Counter(court_clubs)
-            if not ruleset.is_club_quota_legal(club_counts):
-                max_allowed = ruleset.max_court_players_per_club
-                violating = [f"{c}: {n}" for c, n in club_counts.items() if n > max_allowed]
+        for u in units:
+            tc = getattr(u, "team_code", None)
+            if not tc or not str(tc).strip():
                 raise ValueError(
-                    f"Squad violates club quota for {ruleset.name} (max {max_allowed} per club): {', '.join(violating)}"
+                    f"Roster unit {getattr(u, 'player_id', getattr(u, 'name', 'unknown'))} has an empty team_code."
                 )
+        from euroleague_fantasy_manager.competition.ruleset import resolve_ruleset
+        from euroleague_fantasy_manager.optimization.constraints import club_counts
+        ruleset = resolve_ruleset(league, db_path=self.db_path)
+        counts = club_counts(units, ruleset)
+        if not ruleset.is_club_quota_legal(counts):
+            max_allowed = ruleset.max_court_players_per_club
+            violating = [f"{c}: {n}" for c, n in counts.items() if n > max_allowed]
+            raise ValueError(
+                f"Squad violates club quota for {ruleset.name} (max {max_allowed} per club): {', '.join(violating)}"
+            )
 
     def revert_to_round_start(
         self,
         team_id: str,
-        season: str = "2026/27",
+        season: str | None = None,
         round_number: int | None = None,
     ) -> Team:
         """Revert team squad, bank, and transfers remaining back to round start baseline."""
         team = self.get_team(team_id)
+        s_code = season or team.season
         rnd = round_number or team.round_number
         res = self.store.revert_to_round_start(
             team_id=team_id,
-            season=season,
+            season=s_code,
             round_number=rnd,
         )
         if rnd < team.round_number:
-            self.replay_transfers_forward(team_id, from_round=rnd, season=season)
+            self.replay_transfers_forward(team_id, from_round=rnd, season=s_code)
             return self.get_team(team_id)
         return res
 
@@ -529,29 +690,69 @@ class TeamService:
         team_id: str,
         round_number: int,
         season: str | None = None,
+        conn: sqlite3.Connection | None = None,
     ) -> PointInTimeTeamState:
         """Reconstruct point-in-time financial, availability, and squad state at a round boundary (F2)."""
         team = self.get_team(team_id)
         eff_season = season or team.season
 
-        # 1. Base squad at this round
-        squad = self.store.get_squad(team_id, round_number)
-        if not squad:
-            chk = self.store.get_latest_checkpoint_before_round(team_id, round_number, eff_season)
-            squad = [TeamRosterUnit.from_dict(u.to_dict()) for u in chk["squad"]] if chk else [TeamRosterUnit.from_dict(u.to_dict()) for u in team.squad]
-
-        # 2. Checkpoint baseline for this round
+        # 1. Base squad and baseline bank at this round
+        squad = self.store.get_squad(team_id, round_number, conn=conn)
+        chk = None
         try:
-            chk = self.store.get_round_checkpoint(team_id, round_number, eff_season)
+            chk = self.store.get_round_checkpoint(team_id, round_number, eff_season, conn=conn)
             start_bank = chk["bank_tenths"]
             start_rem = chk["transfers_remaining"]
         except ValueError:
-            chk = self.store.get_latest_checkpoint_before_round(team_id, round_number, eff_season)
-            start_bank = chk["bank_tenths"] if chk else team.bank_tenths
-            start_rem = chk["transfers_remaining"] if chk else MAX_TRADES_PER_ROUND
+            start_bank = None
+            start_rem = MAX_TRADES_PER_ROUND
+
+        if not squad or start_bank is None:
+            prev_chk = self.store.get_latest_checkpoint_before_round(team_id, round_number, eff_season, conn=conn)
+            if prev_chk:
+                pr = prev_chk["round_number"]
+                pr_trades = self.store.get_transfers(team_id, eff_season, round_number=pr, conn=conn)
+                if not squad:
+                    # Check if end-of-round squad was stored for pr
+                    pr_stored = self.store.get_squad(team_id, pr, conn=conn)
+                    if pr_stored:
+                        squad = [TeamRosterUnit.from_dict(u.to_dict()) for u in pr_stored]
+                    else:
+                        cur = [TeamRosterUnit.from_dict(u.to_dict()) for u in prev_chk["squad"]]
+                        for t in pr_trades:
+                            out_id = t["player_out_id"]
+                            in_id = t["player_in_id"]
+                            in_pos = t.get("player_in_position")
+                            in_tc = t.get("player_in_team_code")
+                            out_u = next((u for u in cur if u.player_id == out_id), None)
+                            if out_u:
+                                new_u = TeamRosterUnit(
+                                    player_id=in_id,
+                                    position=in_pos or out_u.position,
+                                    name=t.get("player_in_name") or f"Player {in_id}",
+                                    team_code=in_tc or out_u.team_code,
+                                    purchase_price_tenths=t.get("price_in_tenths", 0),
+                                    current_price_tenths=t.get("price_in_tenths", 0),
+                                    is_starter=out_u.is_starter,
+                                    is_captain=out_u.is_captain,
+                                    is_sixth_man=out_u.is_sixth_man,
+                                    is_bench=out_u.is_bench,
+                                    is_coach=(in_pos == "HC" or out_u.is_coach),
+                                    turn_number=out_u.turn_number,
+                                )
+                                cur = [u if u.player_id != out_id else new_u for u in cur]
+                        squad = cur
+                if start_bank is None:
+                    net_pr = sum(t["price_out_tenths"] - t["price_in_tenths"] for t in pr_trades)
+                    start_bank = prev_chk["bank_tenths"] + net_pr
+            else:
+                if not squad:
+                    squad = [TeamRosterUnit.from_dict(u.to_dict()) for u in team.squad]
+                if start_bank is None:
+                    start_bank = team.bank_tenths
 
         # 3. Apply any transfers executed within this round
-        transfers = self.store.get_transfers(team_id, eff_season, round_number=round_number)
+        transfers = self.store.get_transfers(team_id, eff_season, round_number=round_number, conn=conn)
         net_trade_value = sum(t["price_out_tenths"] - t["price_in_tenths"] for t in transfers)
         current_bank = start_bank + net_trade_value
         current_rem = max(0, start_rem - len(transfers))
@@ -601,63 +802,131 @@ class TeamService:
             player_availabilities=player_availabilities,
         )
 
-    def replay_transfers_forward(self, team_id: str, from_round: int, season: str) -> None:
+    def replay_transfers_forward(
+        self,
+        team_id: str,
+        from_round: int,
+        season: str | None = None,
+        discard_conflicting: bool = False,
+        conn: sqlite3.Connection | None = None,
+        audit: AuditIntent | None = None,
+    ) -> None:
         """Propagate squad and bank changes forward from a past round edit up to live round (§3.2)."""
-        team = self.get_team(team_id)
+        team = self.get_team(team_id, conn=conn)
+        s_code = season or team.season
         live_round = team.round_number
         if from_round >= live_round:
             return
 
+        from euroleague_fantasy_manager.competition.ruleset import resolve_ruleset
+        ruleset = resolve_ruleset(getattr(team, "league", "euroleague"), db_path=self.db_path)
+
         for r in range(from_round + 1, live_round + 1):
-            prev_pit = self.reconstruct_point_in_time_state(team_id, r - 1, season=season)
+            prev_pit = self.reconstruct_point_in_time_state(team_id, r - 1, season=s_code, conn=conn)
             incoming_squad = [TeamRosterUnit.from_dict(u.to_dict()) for u in prev_pit.squad]
             incoming_bank = prev_pit.bank_tenths
+
+            is_unlim_round = ruleset.is_unlimited_trade_round(r)
 
             # Overwrite round r's start checkpoint with incoming state
             self.store.save_round_checkpoint(
                 team_id=team_id,
                 round_number=r,
-                season=season,
+                season=s_code,
                 bank_tenths=incoming_bank,
-                transfers_remaining=MAX_TRADES_PER_ROUND,
+                transfers_remaining=ruleset.max_trades_per_round,
                 squad=incoming_squad,
                 overwrite=True,
+                conn=conn,
             )
 
             # Replay any recorded trades in round r
-            r_transfers = self.store.get_transfers(team_id, season, round_number=r)
+            r_transfers = self.store.get_transfers(team_id, s_code, round_number=r, conn=conn)
             cur_squad = list(incoming_squad)
             cur_bank = incoming_bank
+            applied_trades_count = 0
             for t in r_transfers:
                 out_id = t["player_out_id"]
                 in_id = t["player_in_id"]
                 out_unit = next((u for u in cur_squad if u.player_id == out_id), None)
-                if out_unit:
-                    new_unit = TeamRosterUnit(
-                        player_id=in_id,
-                        position=out_unit.position,
-                        name=t.get("player_in_name") or f"Player {in_id}",
-                        team_code=out_unit.team_code,
-                        purchase_price_tenths=t.get("price_in_tenths", 0),
-                        current_price_tenths=t.get("price_in_tenths", 0),
-                        is_starter=out_unit.is_starter,
-                        is_captain=out_unit.is_captain,
-                        is_sixth_man=out_unit.is_sixth_man,
-                        is_bench=out_unit.is_bench,
-                        is_coach=out_unit.is_coach,
-                        turn_number=out_unit.turn_number,
-                    )
-                    cur_squad = [u if u.player_id != out_id else new_unit for u in cur_squad]
-                    cur_bank += t["price_out_tenths"] - t["price_in_tenths"]
+                if not out_unit:
+                    if not discard_conflicting:
+                        from euroleague_fantasy_manager.multi_team.models import ReplayConflictError
+                        raise ReplayConflictError(
+                            round_number=r,
+                            transfer_id=t.get("id"),
+                            reason=f"Player {out_id} ({t.get('player_out_name', '')}) is not in squad to sell.",
+                            conflicting_transfers=[t],
+                        )
+                    else:
+                        if t.get("id"):
+                            self.store.delete_transfers_by_ids([t["id"]], conn=conn)
+                        audit_logger = (
+                            getattr(audit, "decision_logger", None)
+                            or getattr(audit, "decision_service", None)
+                            or getattr(self, "decision_service", None)
+                        )
+                        if audit_logger is not None:
+                            from euroleague_fantasy_manager.tracking.models import (
+                                DecisionProvenance,
+                                DecisionRecord,
+                                DecisionType,
+                            )
+                            from datetime import datetime, timezone
+                            now_str = datetime.now(timezone.utc).isoformat()
+                            d_type = getattr(DecisionType, "TRANSFERS", DecisionType.TRANSFERS)
+                            prov = getattr(audit, "provenance", None) or DecisionProvenance()
+                            dec_store = getattr(audit_logger, "store", audit_logger)
+                            dec_store.log_decision(
+                                DecisionRecord(
+                                    decision_id=f"discard_trade_{t.get('id')}_{now_str}",
+                                    team_id=team_id,
+                                    season=season,
+                                    round_number=r,
+                                    turn_number=1,
+                                    decision_type=d_type,
+                                    created_at=now_str,
+                                    provenance=prov,
+                                    notes=f"Discarded conflicting trade {t.get('id')} in round {r}: player {out_id} not in squad",
+                                    league=getattr(team, "league", "euroleague"),
+                                ),
+                                conn=conn,
+                            )
+                        continue
 
-            cur_rem_trades = max(0, MAX_TRADES_PER_ROUND - len(r_transfers))
-            self.store.save_squad(team_id, r, cur_squad)
+                in_pos = t.get("player_in_position") or out_unit.position
+                in_tc = t.get("player_in_team_code") or out_unit.team_code
+                new_unit = TeamRosterUnit(
+                    player_id=in_id,
+                    position=in_pos,
+                    name=t.get("player_in_name") or f"Player {in_id}",
+                    team_code=in_tc,
+                    purchase_price_tenths=t.get("price_in_tenths", 0),
+                    current_price_tenths=t.get("price_in_tenths", 0),
+                    is_starter=out_unit.is_starter,
+                    is_captain=out_unit.is_captain,
+                    is_sixth_man=out_unit.is_sixth_man,
+                    is_bench=out_unit.is_bench,
+                    is_coach=(in_pos == "HC" or out_unit.is_coach),
+                    turn_number=out_unit.turn_number,
+                )
+                cur_squad = [u if u.player_id != out_id else new_unit for u in cur_squad]
+                cur_bank += t["price_out_tenths"] - t["price_in_tenths"]
+                if not t.get("is_unlimited_round") and not is_unlim_round:
+                    applied_trades_count += 1
+
+            cur_rem_trades = (
+                ruleset.max_trades_per_round
+                if is_unlim_round
+                else max(0, ruleset.max_trades_per_round - applied_trades_count)
+            )
+            self.store.save_squad(team_id, r, cur_squad, conn=conn)
 
             if r == live_round:
                 team.bank_tenths = cur_bank
                 team.transfers_remaining = cur_rem_trades
                 team.squad = cur_squad
-                self.store.update_team(team)
+                self.store.update_team(team, conn=conn)
 
     def execute_transfers(
         self,
@@ -665,32 +934,48 @@ class TeamService:
         transfers_out_ids: Sequence[int],
         transfers_in_ids: Sequence[int],
         round_number: int | None = None,
-        season: str = "2026/27",
+        season: str | None = None,
         unlimited: bool = False,
+        discard_conflicting: bool = False,
         market_projections: Mapping[int, Any] | None = None,
         lineup_optimizer: Any | None = None,
+        audit: AuditIntent | None = None,
+        conn: sqlite3.Connection | None = None,
     ) -> dict[str, Any]:
         """Execute one or more transfers for a live or past round with forward replay (§3.2)."""
         team = self.get_team(team_id)
+        season = season or team.season
         target_round = round_number if round_number is not None else team.round_number
         if target_round > team.round_number:
             raise ValueError(
                 f"Cannot execute transfers for future round {target_round} (live round is {team.round_number})."
             )
 
-        pit = self.reconstruct_point_in_time_state(team_id, target_round, season=season)
+        pit = self.reconstruct_point_in_time_state(team_id, target_round, season=season, conn=conn)
         base_squad = pit.squad
         base_bank_tenths = pit.bank_tenths
         base_transfers_remaining = pit.transfers_remaining
 
-        out_ids = set(transfers_out_ids)
-        in_ids = list(transfers_in_ids)
-        ordered_out = list(dict.fromkeys(transfers_out_ids))
+        out_list = list(transfers_out_ids)
+        in_list = list(transfers_in_ids)
+        out_ids = set(out_list)
+        ordered_out = list(dict.fromkeys(out_list))
 
-        if len(out_ids) != len(in_ids):
+        if len(out_list) != len(out_ids):
+            raise ValueError("Transfers out must be unique.")
+        if len(in_list) != len(set(in_list)):
+            raise ValueError("Transfers in must be unique.")
+        if len(out_list) != len(in_list):
             raise ValueError("Number of players sold must match number of players bought.")
 
-        is_unlimited = unlimited or (target_round in UNLIMITED_TRADE_ROUNDS)
+        from euroleague_fantasy_manager.competition.ruleset import resolve_ruleset
+        ruleset = resolve_ruleset(getattr(team, "league", "euroleague"), db_path=self.db_path)
+        is_unlimited_window = ruleset.is_unlimited_trade_round(target_round)
+        if unlimited and not is_unlimited_window:
+            raise ValueError(
+                f"Round {target_round} is not an unlimited trade round in {ruleset.name}."
+            )
+        is_unlimited = is_unlimited_window
         if not is_unlimited and len(out_ids) > base_transfers_remaining:
             raise ValueError(
                 f"Requested {len(out_ids)} trades, but only {base_transfers_remaining} transfers remaining."
@@ -698,13 +983,18 @@ class TeamService:
 
         current_pids = {u.player_id for u in base_squad}
         if not out_ids.issubset(current_pids):
-            missing = out_ids - current_pids
+            missing = sorted(out_ids - current_pids)
             raise ValueError(f"Players {missing} are not in current squad.")
+
+        remaining_pids = {u.player_id for u in base_squad if u.player_id not in out_ids}
+        already_in = [pid for pid in in_list if pid in remaining_pids]
+        if already_in:
+            raise ValueError(f"Cannot buy player(s) {already_in} already in squad.")
 
         sell_value_tenths = sum(u.current_price_tenths for u in base_squad if u.player_id in out_ids)
 
         new_contracts: list[Any] = []
-        for pid in in_ids:
+        for pid in in_list:
             if market_projections and pid in market_projections:
                 new_contracts.append(market_projections[pid])
             else:
@@ -773,41 +1063,96 @@ class TeamService:
             assigned_units = self._assign_squad_roles(base_squad, kept_units, recruits_units)
 
         out_by_id = {u.player_id: u for u in base_squad}
-        new_transfer_ids = self.store.record_transfers(
-            team_id=team_id,
-            round_number=target_round,
-            season=season,
-            moves=[
-                {
-                    "player_out_id": out_pid,
-                    "player_out_name": getattr(out_by_id.get(out_pid), "name", ""),
-                    "player_in_id": contract.player_id,
-                    "player_in_name": contract.player_name,
-                    "price_out_tenths": getattr(out_by_id.get(out_pid), "current_price_tenths", 0),
-                    "price_in_tenths": contract.price_tenths,
-                }
-                for out_pid, contract in zip(ordered_out, new_contracts)
-            ],
-        )
-
-        self.store.save_squad(team_id, target_round, assigned_units)
-
-        if target_round == team.round_number:
-            rem_trades = base_transfers_remaining if is_unlimited else max(0, base_transfers_remaining - len(out_ids))
-            self.update_team(
+        with self.store.transaction(conn) as c:
+            new_transfer_ids = self.store.record_transfers(
                 team_id=team_id,
-                bank_tenths=new_bank_tenths,
-                transfers_remaining=rem_trades,
+                round_number=target_round,
+                season=season,
+                moves=[
+                    {
+                        "player_out_id": out_pid,
+                        "player_out_name": getattr(out_by_id.get(out_pid), "name", ""),
+                        "player_out_position": getattr(out_by_id.get(out_pid), "position", ""),
+                        "player_out_team_code": getattr(out_by_id.get(out_pid), "team_code", ""),
+                        "player_in_id": contract.player_id,
+                        "player_in_name": contract.player_name,
+                        "player_in_position": (
+                            contract.position.short_code
+                            if hasattr(contract.position, "short_code")
+                            else str(contract.position)
+                        ),
+                        "player_in_team_code": contract.team_code,
+                        "price_out_tenths": getattr(out_by_id.get(out_pid), "current_price_tenths", 0),
+                        "price_in_tenths": contract.price_tenths,
+                        "is_unlimited_round": 1 if is_unlimited else 0,
+                    }
+                    for out_pid, contract in zip(ordered_out, new_contracts)
+                ],
+                conn=c,
             )
-        else:
-            self.replay_transfers_forward(team_id, from_round=target_round, season=season)
+
+            self.store.save_squad(team_id, target_round, assigned_units, conn=c)
+
+            if target_round == team.round_number:
+                rem_trades = base_transfers_remaining if is_unlimited else max(0, base_transfers_remaining - len(out_ids))
+                team.bank_tenths = new_bank_tenths
+                team.transfers_remaining = rem_trades
+                team.squad = assigned_units
+                self.store.update_team(team, conn=c)
+            else:
+                self.replay_transfers_forward(team_id, from_round=target_round, season=season, discard_conflicting=discard_conflicting, conn=c, audit=audit)
+
+            # Atomic audit log write
+            if audit is not None:
+                from euroleague_fantasy_manager.tracking.models import TransferPayload
+                audit_logger = (
+                    getattr(audit, "decision_logger", None)
+                    or getattr(audit, "decision_service", None)
+                    or getattr(self, "decision_service", None)
+                )
+                if audit_logger is not None:
+                    payload = TransferPayload(
+                        out_player_ids=tuple(out_ids),
+                        in_player_ids=tuple(in_list),
+                        num_trades=len(in_list),
+                        net_transfer_value=0.0,
+                        bank_tenths_before=base_bank_tenths,
+                        bank_tenths_after=new_bank_tenths,
+                    )
+                    default_notes = f"Executed {len(out_ids)} trade(s)" if not is_unlimited else "Executed Unlimited Overhaul"
+                    notes = audit.notes or default_notes
+                    league_val = getattr(team, "league", "euroleague")
+                    if hasattr(audit_logger, "log_transfers"):
+                        audit_logger.log_transfers(
+                            team_id=team_id,
+                            season=season,
+                            round_number=target_round,
+                            recommended_transfers=payload,
+                            actual_transfers=payload,
+                            provenance=audit.provenance,
+                            notes=notes,
+                            league=league_val,
+                            conn=c,
+                        )
+                    elif hasattr(audit_logger, "log_transfer_decision"):
+                        audit_logger.log_transfer_decision(
+                            team_id=team_id,
+                            season=season,
+                            round_number=target_round,
+                            recommended_transfers=payload,
+                            actual_transfers=payload,
+                            provenance=audit.provenance,
+                            notes=notes,
+                            league=league_val,
+                            conn=c,
+                        )
 
         return {
             "team": self.get_team(team_id),
             "target_round": target_round,
             "new_transfer_ids": new_transfer_ids,
             "out_ids": list(out_ids),
-            "in_ids": in_ids,
+            "in_ids": in_list,
             "base_bank_tenths": base_bank_tenths,
             "new_bank_tenths": new_bank_tenths,
         }
@@ -855,40 +1200,47 @@ class TeamService:
         season: str,
         league: str = "euroleague",
     ) -> PlayerProjectionContract:
-        """Resolve a minimal projection contract from database snapshots or defaults."""
-        try:
-            from euroleague_fantasy_manager.storage import SnapshotStore
-            snap_store = SnapshotStore(self.store.db_path)
-            snap = snap_store.get_snapshot_by_round(season, round_number, league=league)
-            if snap:
-                players = snap_store.load_players_for_snapshot(snap["snapshot_id"])
-                p_row = next((p for p in players if p["player_id"] == player_id), None)
-                if p_row:
-                    pos_str = str(p_row.get("position", "G")).upper()
-                    if "COACH" in pos_str or pos_str == "HC":
-                        pos = Position.HEAD_COACH
-                    elif "C" in pos_str:
-                        pos = Position.CENTER
-                    elif "F" in pos_str:
-                        pos = Position.FORWARD
-                    else:
-                        pos = Position.GUARD
-                    return PlayerProjectionContract(
-                        player_id=player_id,
-                        player_name=p_row.get("name") or f"Player {player_id}",
-                        position=pos,
-                        team_code=p_row.get("team_code") or "",
-                        price_tenths=int(p_row.get("price_tenths", 100)),
-                        turn_number=int(p_row.get("turn_number", 1)),
-                    )
-        except Exception:
-            pass
+        """Resolve a minimal projection contract from database snapshots.
 
-        return PlayerProjectionContract(
-            player_id=player_id,
-            player_name=f"Player {player_id}",
-            position=Position.GUARD,
-            team_code="",
-            price_tenths=100,
-            turn_number=1,
+        Raises UnknownPlayerError if the player cannot be resolved.
+        """
+        from euroleague_fantasy_manager.competition.ruleset import get_league_ruleset, League
+        from euroleague_fantasy_manager.models import normalize_position, UnknownPlayerError
+        from euroleague_fantasy_manager.storage import SnapshotStore
+
+        db_path = getattr(self.store, "db_path", None)
+        if db_path is None:
+            raise UnknownPlayerError(player_id, f"No snapshot database available to resolve player {player_id}.")
+
+        snap_store = SnapshotStore(db_path)
+        ruleset = get_league_ruleset(League.from_str(league), db_path=self.db_path)
+        snap = snap_store.get_snapshot_by_round(
+            round_number=round_number,
+            season_code=season,
+            league_id=ruleset.league_id,
+        )
+        if snap is None:
+            snap = snap_store.get_snapshot_by_round(
+                round_number=round_number,
+                league_id=ruleset.league_id,
+            ) or snap_store.get_latest_summary(league_id=ruleset.league_id)
+
+        if snap is not None:
+            players = snap_store.load_players_for_snapshot(snap.snapshot_id)
+            p_row = next((p for p in players if p.id == player_id), None)
+            if p_row is not None:
+                pos = normalize_position(p_row.position)
+                return PlayerProjectionContract(
+                    player_id=player_id,
+                    player_name=p_row.name or f"Player {player_id}",
+                    position=pos,
+                    team_id=p_row.team_id,
+                    team_code=p_row.team_code or "",
+                    price_tenths=int(p_row.price_tenths),
+                    turn_number=int(p_row.turn_number),
+                )
+
+        raise UnknownPlayerError(
+            player_id,
+            f"Player {player_id} not found in database snapshot for round {round_number}.",
         )

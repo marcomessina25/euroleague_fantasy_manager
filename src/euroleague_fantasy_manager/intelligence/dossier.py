@@ -8,11 +8,10 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 import uuid
 
-from ..competition.ruleset import League, get_league_ruleset
-from ..models import Position
+from ..competition.ruleset import get_league_ruleset
 from ..optimization.constraints import PlayerProjectionContract
 from ..rules import MAX_TRADES_PER_ROUND
 from ..services.optimization_service import OptimizationService

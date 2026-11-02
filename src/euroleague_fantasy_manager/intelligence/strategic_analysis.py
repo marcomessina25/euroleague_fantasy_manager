@@ -10,11 +10,11 @@ Works 100% offline with zero LLM dependence.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from .dossier import DossierSquadUnit, ManagerDossier
+from .dossier import ManagerDossier
 
 
 @dataclass(frozen=True, slots=True)

@@ -10,8 +10,6 @@ from fastapi.testclient import TestClient
 
 from euroleague_fantasy_manager.competition import (
     CompetitionRuleset,
-    EuroCupRuleset,
-    EuroLeagueRuleset,
     League,
     get_league_ruleset,
 )
@@ -21,16 +19,13 @@ from euroleague_fantasy_manager.intelligence.copilot import (
     generate_copilot_advice,
 )
 from euroleague_fantasy_manager.intelligence.dossier import (
-    ManagerDossier,
     generate_manager_dossier,
 )
 from euroleague_fantasy_manager.intelligence.providers import (
     BaseLLMProvider,
-    HeuristicProvider,
     ProviderError,
     ProviderRequest,
     ProviderResponse,
-    list_available_providers,
 )
 from euroleague_fantasy_manager.intelligence.strategic_analysis import (
     StrategicAnalysisResult,
@@ -171,7 +166,7 @@ def test_six_team_capacity_and_league_persistence(team_service: TeamService, tea
 
     # Isolation check: mutating team 1 squad does not leak to team 2
     u = [TeamRosterUnit(player_id=999, name="Test Unit", position="G", team_code="TST", current_price_tenths=100, is_starter=True)]
-    team_service.update_team_squad("team_1", u)
+    team_service.update_team_squad("team_1", u, validate=False)
     assert len(team_store.get_team("team_1").squad) == 1
     assert len(team_store.get_team("team_2").squad) == 0
 

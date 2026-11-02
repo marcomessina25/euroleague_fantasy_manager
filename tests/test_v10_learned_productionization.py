@@ -10,19 +10,15 @@ Verifies:
 from __future__ import annotations
 
 from pathlib import Path
-import pytest
 
 from euroleague_fantasy_manager.evaluation.features import PointInTimeFeatureRow
-from euroleague_fantasy_manager.fixtures import DATABASE_PATH
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
 from euroleague_fantasy_manager.prediction.learned_models import (
     LEARNED_FEATURE_NAMES,
     LearnedAvailabilityModel,
     LearnedMinutesModel,
-    LearnedModelPipeline,
     clear_learned_pipeline_cache,
-    extract_historical_training_data,
     get_default_learned_pipeline,
     get_synthetic_test_learned_pipeline,
     train_learned_pipeline_from_history,
@@ -30,57 +26,6 @@ from euroleague_fantasy_manager.prediction.learned_models import (
 from euroleague_fantasy_manager.prediction.registry import get_model_registry
 
 
-@pytest.fixture
-def sample_feature_row() -> PointInTimeFeatureRow:
-    """Standardized feature row for testing model inference and explanations."""
-    return PointInTimeFeatureRow(
-        player_id=101,
-        player_name="Facundo Campazzo",
-        position="G",
-        season="E2025",
-        round_number=3,
-        decision_cutoff="2025-10-18T18:00:00Z",
-        team_id=1,
-        team_code="RMB",
-        opponent_team_id=2,
-        opponent_team_code="PAO",
-        home=True,
-        turn_number=1,
-        days_rest=3.0,
-        quotation_at_decision_tenths=150,
-        pre_round_status="available",
-        play_probability=0.98,
-        cold_start_source="current_season",
-        games_played=2,
-        games_missed=0,
-        starter_rate=1.0,
-        season_avg_fantasy_points=18.5,
-        last_1_fantasy_points=19.0,
-        last_3_avg=18.5,
-        last_5_avg=18.5,
-        last_10_avg=18.5,
-        ewma_fantasy_points=18.6,
-        season_avg_minutes=27.5,
-        last_3_minutes=27.5,
-        last_5_minutes=27.5,
-        minutes_trend=0.5,
-        team_strength=0.75,
-        opponent_strength=0.72,
-        usage=0.22,
-        rebound_rate=0.08,
-        assist_rate=0.35,
-        steal_rate=0.03,
-        block_rate=0.01,
-        turnover_rate=0.12,
-        foul_draw_rate=0.18,
-        ewma_minutes=27.4,
-        std_minutes_last5=1.2,
-        dnp_rate_last5=0.0,
-        ewma_fp_per_min=0.68,
-        season_fp_per_min=0.67,
-        pos_prior_fp_per_min=0.54,
-        is_double_round_week=False,
-    )
 
 
 # ============================================================================
@@ -88,10 +33,10 @@ def sample_feature_row() -> PointInTimeFeatureRow:
 # ============================================================================
 
 
-def test_production_historical_training_and_provenance() -> None:
+def test_production_historical_training_and_provenance(learned_dataset_db: Path) -> None:
     """Verify production pipeline trains on real PIT historical data and records provenance."""
     clear_learned_pipeline_cache()
-    pipe = get_default_learned_pipeline()
+    pipe = get_default_learned_pipeline(database_path=learned_dataset_db)
     assert pipe is not None
     assert pipe.is_fitted
     assert pipe.provenance.get("origin") == "production_historical"
@@ -129,36 +74,50 @@ def test_unavailable_data_fallback_safety(tmp_path: Path, sample_feature_row: Po
 
 
 def test_temporal_calibration_protocol() -> None:
-    """Verify availability model uses chronological temporal splits during calibration."""
+    """Verify availability model and calibrators strictly use past rounds < evaluated_round."""
     import numpy as np
+    from euroleague_fantasy_manager.prediction.calibration import fit_out_of_sample_calibrator
 
+    # 1. Availability temporal split
     model = LearnedAvailabilityModel(random_state=42)
     rng = np.random.RandomState(42)
     X = rng.uniform(0.0, 1.0, size=(60, len(LEARNED_FEATURE_NAMES)))
     y = np.ones(60, dtype=int)
     y[:10] = 0
     y[30:35] = 0
-
     model.fit(X, y, temporal_split=True)
     assert model.is_fitted
 
+    # 2. Assert every calibration-fit row has round < evaluated_round
+    calibrator = fit_out_of_sample_calibrator(
+        past_predictions=[12.0, 15.0, 18.0],
+        past_actuals=[10.0, 16.0, 17.0],
+        rounds=[1, 2, 2],
+    )
+    evaluated_round = 3
+    assert len(calibrator.fit_rounds) == 3
+    assert all(r < evaluated_round for r in calibrator.fit_rounds)
+
 
 def test_explainability_counterfactual_bounds(sample_feature_row: PointInTimeFeatureRow) -> None:
-    """Verify explanation outputs are deterministically bounded counterfactuals."""
+    """Verify explanation outputs are deterministically bounded counterfactuals with monotone properties."""
     import numpy as np
 
+    rng = np.random.RandomState(42)
     model = LearnedMinutesModel(random_state=42)
-    X = np.random.uniform(0.0, 1.0, size=(50, len(LEARNED_FEATURE_NAMES)))
-    y = np.random.uniform(12.0, 32.0, size=50)
+    X = rng.uniform(0.0, 1.0, size=(50, len(LEARNED_FEATURE_NAMES)))
+    y = rng.uniform(12.0, 32.0, size=50)
     model.fit(X, y)
 
     expl = model.explain(sample_feature_row)
-    assert isinstance(expl["base_minutes"], float)
-    assert isinstance(expl["home_adj"], float)
-    assert isinstance(expl["drw_adj"], float)
-    assert isinstance(expl["spread_adj"], float)
-    assert isinstance(expl["final_minutes"], float)
+    assert 0.0 <= expl["final_minutes"] <= 40.0
     assert "counterfactual" in LearnedMinutesModel.explain.__doc__.lower()
+
+    # Monotone check: home game gives non-negative home adjustment
+    from dataclasses import replace
+    home_row = replace(sample_feature_row, home=True)
+    away_row = replace(sample_feature_row, home=False)
+    assert model.explain(home_row)["home_adj"] >= model.explain(away_row)["home_adj"]
 
 
 # ============================================================================

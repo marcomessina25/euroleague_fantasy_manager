@@ -12,15 +12,8 @@ Covers workstreams W1 through W6 and every bug item from docs/specs/v065.md:
 from __future__ import annotations
 
 import importlib.metadata
-import io
-import json
 from pathlib import Path
-import re
-import sqlite3
-import sys
 from typing import Any
-from unittest.mock import patch
-import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -32,20 +25,13 @@ from euroleague_fantasy_manager.cli import (
     resolve_command_league_with_source,
 )
 from euroleague_fantasy_manager.competition import (
-    CompetitionRuleset,
     League,
-    get_league_ruleset,
 )
 from euroleague_fantasy_manager.expected_points import (
-    PlayerProjection,
     project_all_players,
 )
 from euroleague_fantasy_manager.import_squad import import_squad_from_file
 from euroleague_fantasy_manager.intelligence.dossier import (
-    DossierLineup,
-    DossierProvenance,
-    DossierSquadUnit,
-    ManagerDossier,
     generate_manager_dossier,
 )
 from euroleague_fantasy_manager.intelligence.providers import (
@@ -60,8 +46,6 @@ from euroleague_fantasy_manager.intelligence.providers import (
 )
 from euroleague_fantasy_manager.models import Player, Position
 from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit
-from euroleague_fantasy_manager.multi_team.store import TeamStore
-from euroleague_fantasy_manager.optimization.constraints import PlayerProjectionContract
 from euroleague_fantasy_manager.optimization.intra_round import (
     IntraRoundPlayerUnit,
     IntraRoundSubstitutionOptimizer,
@@ -70,7 +54,6 @@ from euroleague_fantasy_manager.rules import EUROCUP_LEAGUE_ID, EUROLEAGUE_LEAGU
 from euroleague_fantasy_manager.services.optimization_service import OptimizationService
 from euroleague_fantasy_manager.services.prediction_service import PredictionService
 from euroleague_fantasy_manager.services.team_service import TeamService
-from euroleague_fantasy_manager.squad_report import generate_squad_report
 from euroleague_fantasy_manager.squad_state import CurrentSquadState
 from euroleague_fantasy_manager.storage import SnapshotStore
 from euroleague_fantasy_manager.transfers import TradeMove, validate_trades
@@ -255,7 +238,7 @@ def test_w2_eurocup_ingestion_and_schema_v3(tmp_path: Path):
     with store._connect() as conn:
         row = conn.execute("SELECT competition_code FROM snapshots WHERE id = ?", (summary.snapshot_id,)).fetchone()
         assert row["competition_code"] == "U"
-        assert store._get_schema_version(conn) == 3
+        assert store._get_schema_version(conn) >= 3
         # Check index idx_snapshots_league_id exists
         indices = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_snapshots_league_id'"
@@ -337,7 +320,7 @@ def test_w4_edge_002_departed_player_handling(tmp_path: Path):
     store.save_snapshot(make_test_snapshot_payload(league_id=EUROLEAGUE_LEAGUE_ID))
 
     ts = TeamService(db_path=db_path)
-    team = ts.create_team(team_id="dep1", name="Departed Team", season="2026/27", round_number=1)
+    _team = ts.create_team(team_id="dep1", name="Departed Team", season="2026/27", round_number=1)
 
     # Squad includes player 999 who does NOT exist in snapshot
     roster = [
@@ -367,7 +350,7 @@ def test_w4_edge_003_replaced_head_coach(tmp_path: Path):
     store.save_snapshot(make_test_snapshot_payload(league_id=EUROLEAGUE_LEAGUE_ID, coach_id=402))
 
     ts = TeamService(db_path=db_path)
-    team = ts.create_team(team_id="c_team", name="Coach Team", season="2026/27", round_number=1)
+    _team = ts.create_team(team_id="c_team", name="Coach Team", season="2026/27", round_number=1)
     roster = [
         TeamRosterUnit(player_id=101, name="G1", position="G", is_starter=True),
         TeamRosterUnit(player_id=401, name="Old Coach", position="HC", is_coach=True),
@@ -492,7 +475,7 @@ def test_w4_edge_006_round_rollover_uses_team_round(tmp_path: Path):
     store.save_snapshot(make_test_snapshot_payload(league_id=EUROLEAGUE_LEAGUE_ID))
 
     ts = TeamService(db_path=db_path)
-    team = ts.create_team(team_id="mid_round", name="Mid Round Team", season="2026/27", round_number=1)
+    _team = ts.create_team(team_id="mid_round", name="Mid Round Team", season="2026/27", round_number=1)
     units = [
         TeamRosterUnit(player_id=101, name="G1", position="G", is_starter=True, is_captain=True),
         TeamRosterUnit(player_id=102, name="G2", position="G", is_starter=True),
@@ -502,7 +485,7 @@ def test_w4_edge_006_round_rollover_uses_team_round(tmp_path: Path):
         TeamRosterUnit(player_id=103, name="G3", position="G", is_sixth_man=True),
         TeamRosterUnit(player_id=401, name="Coach", position="HC", is_coach=True),
     ]
-    ts.update_team_squad("mid_round", units)
+    ts.update_team_squad("mid_round", units, validate=False)
 
     dossier = generate_manager_dossier(team_id="mid_round", database_path=db_path)
     assert dossier.round_number == 1
@@ -565,7 +548,7 @@ def test_w5_api_player_detail_league_scoping(tmp_path: Path):
 
 def test_w5_static_app_js_escaping_guard():
     """Ensure app.js uses escapeHtml helper for dynamic template interpolation."""
-    js_path = Path("src/euroleague_fantasy_manager/web/static/js/app.js")
+    js_path = Path(__file__).resolve().parents[1] / "src" / "euroleague_fantasy_manager" / "web" / "static" / "js" / "app.js"
     assert js_path.exists(), "app.js must exist"
 
     content = js_path.read_text(encoding="utf-8")
@@ -590,7 +573,7 @@ def test_w6_dossier_content_hash_invariance_and_sensitivity(tmp_path: Path):
     store.save_snapshot(make_test_snapshot_payload(league_id=EUROLEAGUE_LEAGUE_ID))
 
     ts = TeamService(db_path=db_path)
-    team = ts.create_team(team_id="h_team", name="Hash Team", season="2026/27", round_number=1)
+    _team = ts.create_team(team_id="h_team", name="Hash Team", season="2026/27", round_number=1)
     units = [
         TeamRosterUnit(player_id=101, name="G1", position="G", is_starter=True, is_captain=True),
         TeamRosterUnit(player_id=102, name="G2", position="G", is_starter=True),
@@ -600,7 +583,7 @@ def test_w6_dossier_content_hash_invariance_and_sensitivity(tmp_path: Path):
         TeamRosterUnit(player_id=103, name="G3", position="G", is_sixth_man=True),
         TeamRosterUnit(player_id=401, name="Coach", position="HC", is_coach=True),
     ]
-    ts.update_team_squad("h_team", units)
+    ts.update_team_squad("h_team", units, validate=False)
 
     dossier1 = generate_manager_dossier(team_id="h_team", database_path=db_path)
     dossier2 = generate_manager_dossier(team_id="h_team", database_path=db_path)

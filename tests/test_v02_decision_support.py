@@ -8,7 +8,6 @@ from euroleague_fantasy_manager.cli import main as cli_main
 from euroleague_fantasy_manager.expected_points import (
     PlayerProjection,
     expected_coach_pdk,
-    project_all_players,
 )
 from euroleague_fantasy_manager.fixtures import (
     analyze_squad_fixtures,
@@ -537,7 +536,7 @@ def test_suggest_trades_sanity_checks_hc_quota_unlimited_no_improvement_and_bund
     assert no_imp_rep["suggestions_count"] == 0
     assert no_imp_rep["suggestions"] == []
 
-    # 4. Superficially attractive individual transfers that become illegal as a 2-player bundle due to MAX_PLAYERS_PER_TEAM (6):
+    # 4. Superficially attractive individual transfers that become illegal as a 2-player bundle due to club quota (from resolve_ruleset):
     # Add 3 more PAO players to the snapshot so PAO has 5 players in the squad + 2 elite PAO targets outside the squad.
     club_cap_db = tmp_path / "club_cap.sqlite3"
     club_cap_squad = tmp_path / "club_cap_squad.json"
@@ -671,7 +670,7 @@ def test_suggest_trades_sanity_checks_hc_quota_unlimited_no_improvement_and_bund
     assert 202 in single_in_ids
 
     # However, in a 2-trade bundle, acquiring BOTH 201 and 202 (without trading out an existing PAO player)
-    # would put 7 PAO court players on the squad (> MAX_PLAYERS_PER_TEAM=6) and MUST NOT be recommended:
+    # would put 7 PAO court players on the squad (> resolve_ruleset('euroleague').max_court_players_per_club) and MUST NOT be recommended:
     rep_double = suggest_trades(
         squad_path=club_cap_squad,
         database_path=club_cap_db,

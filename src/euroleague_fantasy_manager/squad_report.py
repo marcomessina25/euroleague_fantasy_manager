@@ -5,8 +5,9 @@ from pathlib import Path
 from typing import Any
 
 from .fixtures import DATABASE_PATH, DEFAULT_SQUAD_PATH, PROJECT_ROOT, get_current_round
-from .models import Player
-from .rules import MAX_PLAYERS_PER_TEAM, SQUAD_QUOTAS, UNLIMITED_TRADE_ROUNDS, validate_squad
+from .models import Player, Position
+from .rules import SQUAD_QUOTAS, validate_squad
+from .competition.ruleset import resolve_ruleset
 from .squad_state import load_current_squad
 from .storage import SnapshotStore
 from .transfers import selling_price_tenths
@@ -34,7 +35,25 @@ def generate_squad_report(
     state = load_current_squad(squad_path)
     store = SnapshotStore(database_path)
     eff_league_id = league_id if league_id is not None else getattr(state, "league_id", None)
-    all_players = store.load_latest_players(league_id=eff_league_id)
+    active_round = round_number if round_number is not None else (state.round_number or get_current_round(store, league_id=eff_league_id))
+    snap = None
+    if active_round is not None:
+        snap = store.get_snapshot_for_round(
+            league_id=eff_league_id,
+            season_code=getattr(state, "season", None),
+            round_number=active_round,
+        )
+        if snap is None:
+            snap = store.get_snapshot_for_round(
+                league_id=eff_league_id,
+                round_number=active_round,
+            )
+    else:
+        snap = store.get_latest_summary(league_id=eff_league_id)
+    if snap is not None:
+        all_players = store.load_players_for_snapshot(snap.snapshot_id)
+    else:
+        all_players = []
     if not all_players:
         raise RuntimeError("No players found in snapshot database. Run `elf update` first.")
 
@@ -48,10 +67,40 @@ def generate_squad_report(
     team_counts: dict[str, int] = {}
     position_counts: dict[str, int] = {"G": 0, "F": 0, "C": 0, "HC": 0}
 
+    raw_squad_data: dict[str, Any] = {}
+    if squad_path.exists():
+        try:
+            raw_squad_data = json.loads(squad_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    raw_positions = raw_squad_data.get("positions", raw_squad_data.get("player_positions", {}))
+
     for pid in state.player_ids:
         p = players_by_id.get(pid)
         if p is None:
-            # BUG-EDGE-002: unit missing / left competition -> keep unit, project 0, flag unavailable
+            # SQR-1 / BUG-EDGE-002: unit missing / left competition -> keep unit, project 0, flag unavailable
+            resolved_pos = None
+            if str(pid) in raw_positions or pid in raw_positions:
+                pos_val = raw_positions.get(str(pid)) or raw_positions.get(pid)
+                if pos_val:
+                    try:
+                        resolved_pos = Position.from_raw(pos_val)
+                    except Exception:
+                        pass
+            if resolved_pos is None:
+                try:
+                    with store._connect() as conn:
+                        row = conn.execute(
+                            "SELECT position FROM snapshot_players WHERE player_id = ? ORDER BY id DESC LIMIT 1",
+                            (pid,),
+                        ).fetchone()
+                        if row and row[0]:
+                            resolved_pos = Position.from_raw(row[0])
+                except Exception:
+                    pass
+            if resolved_pos is None:
+                resolved_pos = Position.GUARD
+
             buy_tenths = state.purchase_prices_tenths.get(pid, 50)
             cur_tenths = buy_tenths
             sell_tenths = buy_tenths
@@ -61,7 +110,7 @@ def generate_squad_report(
                 first_name="Departed",
                 last_name=f"Unit {pid}",
                 name=f"Unit {pid} (Departed)",
-                position=Position.GUARD,
+                position=resolved_pos,
                 team_id=0,
                 team_code="OUT",
                 team_name="Unavailable",
@@ -108,11 +157,12 @@ def generate_squad_report(
             }
         )
 
-    validation = validate_squad(squad_models, budget_tenths=None)
+    ruleset = resolve_ruleset(eff_league_id, db_path=database_path)
+    validation = validate_squad(squad_models, ruleset=ruleset, budget_tenths=None)
     total_capital_gain_tenths = total_selling_tenths - total_purchase_tenths
     total_team_value_tenths = state.bank_tenths + total_selling_tenths
-    active_round = round_number if round_number is not None else (state.round_number or get_current_round(store))
-    next_windows = [w for w in sorted(UNLIMITED_TRADE_ROUNDS) if w >= active_round]
+    # active_round resolved above
+    next_windows = [w for w in sorted(ruleset.unlimited_trade_rounds) if w >= active_round]
 
     report: dict[str, Any] = {
         "season": state.season,
@@ -145,7 +195,7 @@ def generate_squad_report(
             "positions": position_counts,
             "required_positions": {k.short_code: v for k, v in SQUAD_QUOTAS.items()},
             "teams": team_counts,
-            "max_players_per_team": MAX_PLAYERS_PER_TEAM,
+            "max_players_per_team": ruleset.max_court_players_per_club,
         },
         "units": units_detail,
     }

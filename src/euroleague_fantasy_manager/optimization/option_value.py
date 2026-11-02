@@ -4,11 +4,19 @@ from collections import Counter
 import math
 from typing import Mapping, Sequence
 
-from ..fixtures import normal_cdf, normal_pdf
 from ..models import Position
 from ..rules import CAPTAIN_MULTIPLIER, LEGAL_COURT_FORMATIONS
 from .constraints import PlayerProjectionContract
 
+
+def normal_cdf(x: float) -> float:
+    """Standard normal cumulative distribution function Phi(x)."""
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def normal_pdf(x: float) -> float:
+    """Standard normal probability density function phi(x)."""
+    return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
 
 def gaussian_call_option(mu_backup: float, mu_primary: float, sigma_primary: float) -> float:
     """Compute E[max(0, mu_backup - S_primary)] where S_primary ~ N(mu_primary, sigma_primary^2).

@@ -1,3 +1,4 @@
+import importlib.metadata
 """Hermetic V0.2.5 unit, point-in-time leakage, and walk-forward evaluation tests."""
 
 import json
@@ -11,8 +12,6 @@ from euroleague_fantasy_manager.evaluation import (
     build_features,
     build_historical_dataset,
     build_round_feature_table,
-    compute_point_and_ranking_metrics,
-    inspect_historical_round,
     normalize_availability_status,
     predict_round_baselines,
     reconstruct_coach_fantasy_points,
@@ -237,7 +236,7 @@ def test_walk_forward_evaluation_metrics_provenance_and_cli(tmp_path: Path, caps
         database_path=db_path,
         reports_dir=reports_dir,
     )
-    assert __version__ in ("0.2.5", "0.3.0", "0.4.0", "0.4.5", "0.5.0", "0.6.5", "0.7.0", "0.8.0", "0.9.0", "1.0.0", "1.0.1")
+    assert __version__ == importlib.metadata.version("euroleague-fantasy-manager")
     assert len(eval_res["models"]) == 4
     assert eval_res["models"][0]["active_player_samples"] > 0
     assert "E2025" in eval_res["price_coverage_by_season"]

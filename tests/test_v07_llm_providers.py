@@ -13,6 +13,7 @@ HTTP client.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -101,15 +102,15 @@ def test_auto_mode_falls_back_to_heuristic_with_no_keys_configured() -> None:
 
 def test_auto_mode_selects_first_configured_provider_in_priority_order(monkeypatch: pytest.MonkeyPatch) -> None:
     # Nothing configured yet -> heuristic.
-    assert get_provider("auto").name == "heuristic"
+    assert get_provider("auto", consent_remote=True).name == "heuristic"
 
     # Only OpenRouter configured -> openrouter, even though it is last priority.
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test-key-1234567890")
-    assert get_provider("auto").name == "openrouter"
+    assert get_provider("auto", consent_remote=True).name == "openrouter"
 
     # Gemini outranks OpenRouter once both are configured.
     monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
-    assert get_provider("auto").name == "gemini"
+    assert get_provider("auto", consent_remote=True).name == "gemini"
 
 
 def test_auto_mode_never_forwards_a_gui_supplied_key_to_the_wrong_provider(
@@ -118,7 +119,7 @@ def test_auto_mode_never_forwards_a_gui_supplied_key_to_the_wrong_provider(
     """A user pasting an OpenRouter key while "auto" is selected must not leak it to Gemini."""
     monkeypatch.setenv("GEMINI_API_KEY", "env-gemini-key")
 
-    provider = get_provider("auto", api_key="sk-or-v1-USERSECRET")
+    provider = get_provider("auto", api_key="sk-or-v1-USERSECRET", consent_remote=True)
 
     assert provider.name == "gemini"
     assert provider.api_key == "env-gemini-key"
@@ -203,7 +204,7 @@ def test_copilot_advise_forwards_api_key_and_model_to_provider_factory(client: T
     rec = _RecordingProvider()
     calls: dict[str, object] = {}
 
-    def fake_get_provider(name: str, api_key: str | None = None, model: str | None = None) -> BaseLLMProvider:
+    def fake_get_provider(name: str, api_key: str | None = None, model: str | None = None, **kwargs: Any) -> BaseLLMProvider:
         calls["name"] = name
         calls["api_key"] = api_key
         calls["model"] = model

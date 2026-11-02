@@ -23,7 +23,7 @@ from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.model_selection import TimeSeriesSplit
 
 from ..evaluation.features import PointInTimeFeatureRow
-from ..fixtures import DATABASE_PATH
+from .. import paths
 
 logger = logging.getLogger(__name__)
 
@@ -327,7 +327,7 @@ class LearnedModelPipeline:
 
 
 def extract_historical_training_data(
-    database_path: Path = DATABASE_PATH,
+    database_path: Path | None = None,
     seasons: Sequence[str] | None = None,
     max_season: str | None = None,
     max_round: int | None = None,
@@ -341,7 +341,7 @@ def extract_historical_training_data(
     from ..evaluation.dataset import normalize_season_code
     from ..evaluation.features import build_round_feature_table
 
-    db_path = Path(database_path)
+    db_path = Path(database_path) if database_path is not None else paths.database_path()
     if not db_path.exists():
         return [], [], [], {"seasons": [], "sample_count": 0, "error": "database_not_found"}
 
@@ -414,7 +414,7 @@ def extract_historical_training_data(
 
 
 def train_learned_pipeline_from_history(
-    database_path: Path = DATABASE_PATH,
+    database_path: Path | None = None,
     seasons: Sequence[str] | None = None,
     max_season: str | None = None,
     max_round: int | None = None,
@@ -424,8 +424,9 @@ def train_learned_pipeline_from_history(
 
     Returns an unfitted fallback pipeline if no historical data is found.
     """
+    resolved_db = Path(database_path) if database_path is not None else paths.database_path()
     X, y_play, y_min, meta = extract_historical_training_data(
-        database_path=database_path,
+        database_path=resolved_db,
         seasons=seasons,
         max_season=max_season,
         max_round=max_round,
@@ -438,7 +439,7 @@ def train_learned_pipeline_from_history(
         pipe.provenance = {
             "origin": "unavailable_data_fallback",
             "reason": "no_historical_data",
-            "database_path": str(database_path),
+            "database_path": str(resolved_db),
         }
         return pipe
 
@@ -449,7 +450,7 @@ def train_learned_pipeline_from_history(
         provenance_metadata={
             "origin": "production_historical",
             "training_seasons": meta.get("seasons", []),
-            "database_path": str(database_path),
+            "database_path": str(resolved_db),
         },
     )
     return pipe
@@ -540,6 +541,14 @@ def get_synthetic_test_learned_pipeline(random_state: int = 42) -> LearnedModelP
 
 
 _DEFAULT_LEARNED_PIPELINE: LearnedModelPipeline | None = None
+_LEARNED_PIPELINE_CACHE: dict[tuple[Path, str], LearnedModelPipeline] = {}
+
+
+def reset_default_learned_pipeline() -> None:
+    """Clear cached default pipeline singleton and dictionary."""
+    global _DEFAULT_LEARNED_PIPELINE, _LEARNED_PIPELINE_CACHE
+    _DEFAULT_LEARNED_PIPELINE = None
+    _LEARNED_PIPELINE_CACHE.clear()
 
 
 def set_default_learned_pipeline(pipeline: LearnedModelPipeline | None) -> None:
@@ -550,37 +559,46 @@ def set_default_learned_pipeline(pipeline: LearnedModelPipeline | None) -> None:
 
 def clear_learned_pipeline_cache() -> None:
     """Clear cached default pipeline singleton."""
-    global _DEFAULT_LEARNED_PIPELINE
-    _DEFAULT_LEARNED_PIPELINE = None
+    reset_default_learned_pipeline()
 
 
-def get_default_learned_pipeline() -> LearnedModelPipeline:
+def get_default_learned_pipeline(
+    database_path: Path | None = None,
+    league: Any = "euroleague",
+) -> LearnedModelPipeline:
     """Return the default learned pipeline.
 
     Production path:
-    Trains or loads strictly from historical point-in-time evaluation data (DATABASE_PATH).
+    Trains or loads strictly from historical point-in-time evaluation data.
     If historical data is missing or empty, returns an explicit fallback pipeline marked with
     `origin='unavailable_data_fallback'`, which automatically routes predictions to V0.8
     contextual fallbacks (fp_context_v08) without silently masquerading synthetic data as production.
     """
-    global _DEFAULT_LEARNED_PIPELINE
-    if _DEFAULT_LEARNED_PIPELINE is None:
-        if DATABASE_PATH.exists():
-            pipe = train_learned_pipeline_from_history(database_path=DATABASE_PATH)
-            if pipe.is_fitted:
-                _DEFAULT_LEARNED_PIPELINE = pipe
-                return _DEFAULT_LEARNED_PIPELINE
+    global _DEFAULT_LEARNED_PIPELINE, _LEARNED_PIPELINE_CACHE
+    resolved_db = Path(database_path) if database_path is not None else paths.database_path()
+    key = (resolved_db.resolve(), str(league))
+    if key in _LEARNED_PIPELINE_CACHE:
+        return _LEARNED_PIPELINE_CACHE[key]
 
-        logger.warning(
-            "Historical training data unavailable at %s; returning unavailable_data_fallback pipeline. "
-            "To use synthetic test fixtures, explicitly invoke get_synthetic_test_learned_pipeline().",
-            DATABASE_PATH,
-        )
-        avail_m = LearnedAvailabilityModel(random_state=42)
-        min_m = LearnedMinutesModel(random_state=42)
-        _DEFAULT_LEARNED_PIPELINE = LearnedModelPipeline(
-            availability_model=avail_m,
-            minutes_model=min_m,
-            provenance={"origin": "unavailable_data_fallback", "database_path": str(DATABASE_PATH)},
-        )
-    return _DEFAULT_LEARNED_PIPELINE
+    if resolved_db.exists():
+        pipe = train_learned_pipeline_from_history(database_path=resolved_db)
+        if pipe.is_fitted:
+            _LEARNED_PIPELINE_CACHE[key] = pipe
+            _DEFAULT_LEARNED_PIPELINE = pipe
+            return pipe
+
+    logger.warning(
+        "Historical training data unavailable at %s; returning unavailable_data_fallback pipeline. "
+        "To use synthetic test fixtures, explicitly invoke get_synthetic_test_learned_pipeline().",
+        resolved_db,
+    )
+    avail_m = LearnedAvailabilityModel(random_state=42)
+    min_m = LearnedMinutesModel(random_state=42)
+    pipe = LearnedModelPipeline(
+        availability_model=avail_m,
+        minutes_model=min_m,
+        provenance={"origin": "unavailable_data_fallback", "database_path": str(resolved_db)},
+    )
+    _LEARNED_PIPELINE_CACHE[key] = pipe
+    _DEFAULT_LEARNED_PIPELINE = pipe
+    return pipe

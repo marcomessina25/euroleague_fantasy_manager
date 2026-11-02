@@ -19,8 +19,8 @@ from .evaluation import (
 )
 from .evaluation.baselines import canonical_model_name, predict_single_player_baseline
 from .fixtures import analyze_squad_fixtures, analyze_team_fixtures
+from . import paths
 from .import_squad import (
-    DATABASE_PATH,
     DEFAULT_PLAYERS_PATH,
     DEFAULT_SQUAD_PATH,
     PROJECT_ROOT,
@@ -33,12 +33,11 @@ from .optimization import (
     FixedSquadLineupOptimizer,
     HistoricalDecisionBacktester,
     MultiRoundOptimizer,
-    OptimizationConstraints,
     PlayerProjectionContract,
     RiskMode,
     TransferOptimizer,
 )
-from .rules import EUROCUP_LEAGUE_ID, EUROLEAGUE_LEAGUE_ID
+from .rules import EUROLEAGUE_LEAGUE_ID
 from .squad_report import generate_squad_report
 from .squad_state import load_current_squad
 from .storage import SnapshotStore
@@ -48,10 +47,7 @@ from .tracking import (
     DecisionLogger,
     DecisionOutcome,
     DecisionProvenance,
-    DecisionRecord,
     DecisionStore,
-    DecisionType,
-    OutcomeStatus,
     OutcomeUpdater,
     export_closed_loop_csv,
     format_decision_detail,
@@ -61,6 +57,16 @@ from .transfers import parse_trade_specs, validate_trades
 
 
 RAW_ARCHIVE_DIRECTORY = PROJECT_ROOT / "data" / "raw"
+
+
+def _is_production_db(db_path: Path) -> bool:
+    if db_path.resolve() == paths.database_path().resolve():
+        return True
+    try:
+        from .storage import SnapshotStore
+        return SnapshotStore(db_path).get_latest_summary() is not None
+    except Exception:
+        return False
 
 
 def _resolve_league(league_arg: str | League | None) -> tuple[int, str, str]:
@@ -129,6 +135,25 @@ def resolve_command_league(
     return league
 
 
+def _resolve_eval_db(args: argparse.Namespace) -> Path:
+    if getattr(args, "eval_db", None) is not None:
+        return args.eval_db
+    default_prod = paths.database_path().resolve()
+    if getattr(args, "db", None) is not None and Path(args.db).resolve() != default_prod:
+        return Path(args.db)
+    return paths.elf_home() / "data" / "eval.sqlite3"
+
+
+def _resolve_cli_team_id(pos_id: str | None, flag_id: str | None, required: bool = True) -> str | None:
+    """Normalize target team ID resolution, rejecting conflicting values."""
+    if pos_id and flag_id and pos_id != flag_id:
+        raise ValueError(f"Conflicting team IDs provided: positional '{pos_id}' vs --id '{flag_id}'.")
+    resolved = pos_id or flag_id
+    if required and not resolved:
+        raise ValueError("Team ID required.")
+    return resolved
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="elf",
@@ -137,7 +162,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--db",
         type=Path,
-        default=DATABASE_PATH,
+        default=None,
         help="Path to local SQLite snapshot database (default: data/euroleague.sqlite3).",
     )
     parser.add_argument(
@@ -453,6 +478,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="EWMA decay parameter alpha in (0, 1] (default: 0.25).",
     )
     predict_parser.add_argument(
+        "--eval-db",
+        type=Path,
+        default=None,
+        help="Database path for evaluation tables (default: data/eval.sqlite3).",
+    )
+    predict_parser.add_argument(
+        "--allow-synthetic",
+        action="store_true",
+        default=False,
+        help="Allow generating synthetic evaluation data into the production database.",
+    )
+    predict_parser.add_argument(
         "--json",
         action="store_true",
         help="Output JSON predictions instead of formatted table.",
@@ -506,6 +543,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.25,
         help="EWMA decay parameter alpha in (0, 1] (default: 0.25).",
+    )
+    evaluate_parser.add_argument(
+        "--eval-db",
+        type=Path,
+        default=None,
+        help="Database path for evaluation tables (default: data/eval.sqlite3).",
+    )
+    evaluate_parser.add_argument(
+        "--allow-synthetic",
+        action="store_true",
+        default=False,
+        help="Allow generating synthetic evaluation data into the production database.",
     )
     evaluate_parser.add_argument(
         "--json",
@@ -562,6 +611,18 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--risk-mode", type=str, default="expected", choices=["expected", "conservative", "aggressive"], help="Risk mode (default: expected).")
         p.add_argument("--risk-lambda", type=float, default=0.15, help="Risk lambda (default: 0.15).")
         p.add_argument("--alpha", type=float, default=0.25, help="EWMA alpha for features (default: 0.25).")
+        p.add_argument(
+            "--eval-db",
+            type=Path,
+            default=None,
+            help="Database path for evaluation tables (default: data/eval.sqlite3).",
+        )
+        p.add_argument(
+            "--allow-synthetic",
+            action="store_true",
+            default=False,
+            help="Allow generating synthetic evaluation data into the production database.",
+        )
         p.add_argument("--json", action="store_true", help="Output JSON summary.")
         return p
 
@@ -672,14 +733,17 @@ def build_parser() -> argparse.ArgumentParser:
     t_import_squad.add_argument("--file", type=Path, default=DEFAULT_PLAYERS_PATH, help="Path to players.txt.")
 
     t_show = team_sub.add_parser("show", help="Show team details and squad.")
+    t_show.add_argument("pos_id", nargs="?", default=None, help="Team ID (default: active team).")
     t_show.add_argument("--id", type=str, default=None, help="Team ID (default: active team).")
     t_show.add_argument("--json", action="store_true", help="Output JSON payload.")
 
     t_select = team_sub.add_parser("select", help="Set active team.")
-    t_select.add_argument("--id", required=True, type=str, help="Team ID to activate.")
+    t_select.add_argument("pos_id", nargs="?", default=None, help="Team ID to activate.")
+    t_select.add_argument("--id", required=False, default=None, type=str, help="Team ID to activate.")
 
     t_del = team_sub.add_parser("delete", help="Delete a team.")
-    t_del.add_argument("--id", required=True, type=str, help="Team ID to delete.")
+    t_del.add_argument("pos_id", nargs="?", default=None, help="Team ID to delete.")
+    t_del.add_argument("--id", required=False, default=None, type=str, help="Team ID to delete.")
 
     t_set_lineup = team_sub.add_parser("set-lineup", help="Set team lineup for a specific round (§3.3).")
     t_set_lineup.add_argument("--team", type=str, default=None, help="Target team ID (default: active team).")
@@ -768,12 +832,21 @@ def build_parser() -> argparse.ArgumentParser:
     cert_parser = subparsers.add_parser("certify-v1", help="Run automated V1.0 release certification suite.")
     cert_parser.add_argument("--json", action="store_true", help="Output JSON certification report.")
 
+    doctor_parser = subparsers.add_parser(
+        "doctor",
+        help="Inspect database health and list unresolved migration/backfill records.",
+    )
+    doctor_parser.add_argument("--database", type=Path, default=None, help="Database path override.")
+    doctor_parser.add_argument("--json", action="store_true", help="Output JSON report.")
+
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if getattr(args, 'db', None) is None:
+        args.db = paths.database_path()
     store = SnapshotStore(args.db)
 
     league_commands = {
@@ -812,9 +885,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             competition_code=ruleset.competition_code,
             season_code=getattr(args, "season_code", None),
         )
-        summary = store.save_snapshot(payload, raw_directory=RAW_ARCHIVE_DIRECTORY)
+        summary = store.save_snapshot(payload, raw_directory=paths.raw_archive_dir(args.db))
         from .multi_team.store import TeamStore
+        from .services.prediction_service import PredictionService
         from .services.team_service import TeamService
+        PredictionService(database_path=store.database_path).clear_cache()
         synced, sync_failures = TeamService(TeamStore(store.database_path)).sync_all_teams_to_live_round(resolved_league)
         if synced:
             print(f"Synced {len(synced)} team(s) to round {summary.round_number}.", file=sys.stderr)
@@ -856,7 +931,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
         players_by_id = {p.id: p for p in players_list}
         moves = parse_trade_specs(args.trade, players_by_id, by_name=args.by_name)
-        report = validate_trades(state, moves, players_by_id, unlimited_window=args.unlimited)
+        from .competition.ruleset import resolve_ruleset
+        ruleset = resolve_ruleset(resolved_league, db_path=args.db)
+        report = validate_trades(state, moves, players_by_id, unlimited_window=args.unlimited, ruleset=ruleset)
         print(json.dumps(asdict(report), indent=2))
         return 0 if report.is_valid else 2
 
@@ -966,14 +1043,33 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "predict":
         norm_season = normalize_season_code(args.season)
-        store_eval = EvaluationDatasetStore(args.db)
+        eval_db = _resolve_eval_db(args)
+        if _is_production_db(eval_db) and not getattr(args, "allow_synthetic", False):
+            try:
+                import sqlite3
+                with sqlite3.connect(eval_db) as conn:
+                    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='eval_rounds'").fetchone():
+                        print(
+                            "Refusing to auto-generate synthetic data into production database. Use --eval-db or pass --allow-synthetic.",
+                            file=sys.stderr,
+                        )
+                        return 2
+            except Exception:
+                pass
+        store_eval = EvaluationDatasetStore(eval_db)
         if norm_season not in store_eval.list_seasons():
-            build_historical_dataset(database_path=args.db, seasons=[norm_season])
+            if _is_production_db(eval_db) and not getattr(args, "allow_synthetic", False):
+                print(
+                    "Refusing to auto-generate synthetic data into production database. Use --eval-db or pass --allow-synthetic.",
+                    file=sys.stderr,
+                )
+                return 2
+            build_historical_dataset(database_path=eval_db, seasons=[norm_season])
         cutoff = store_eval.get_round_decision_cutoff(norm_season, args.round)
         feature_table = build_round_feature_table(
             season=norm_season,
             round_number=args.round,
-            database_path=args.db,
+            database_path=eval_db,
             decision_cutoff=cutoff,
             ewma_alpha=args.alpha,
         )
@@ -1016,12 +1112,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             model_list = [m.strip() for m in str(args.models).split(",") if m.strip()]
         target_seasons = args.seasons if args.seasons else args.season
+        eval_db = _resolve_eval_db(args)
+        store_eval = EvaluationDatasetStore(eval_db)
+        t_seasons = [normalize_season_code(s) for s in (args.seasons if args.seasons else [args.season])]
+        missing_seasons = [s for s in t_seasons if s not in store_eval.list_seasons()]
+        if missing_seasons:
+            if _is_production_db(eval_db) and not getattr(args, "allow_synthetic", False):
+                print(
+                    "Refusing to auto-generate synthetic data into production database. Use --eval-db or pass --allow-synthetic.",
+                    file=sys.stderr,
+                )
+                return 2
+            build_historical_dataset(database_path=eval_db, seasons=missing_seasons)
         eval_report = run_walk_forward_evaluation(
             season=target_seasons,
             rounds=args.rounds,
             models=model_list,
             ewma_alpha=args.alpha,
-            database_path=args.db,
+            database_path=eval_db,
             calibration_method=args.calibration,
         )
         if args.json:
@@ -1079,7 +1187,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ewma_alpha=args.alpha,
             )
             squad_contracts, bank_tenths = _resolve_squad(args.squad, contracts)
-            tx_opt = TransferOptimizer()
+            from .competition.ruleset import resolve_ruleset
+            from .optimization.constraints import OptimizationConstraints
+            norm_league = getattr(args, "league", "euroleague")
+            ruleset = resolve_ruleset(norm_league, db_path=args.db)
+            tx_opt = TransferOptimizer(constraints=OptimizationConstraints.from_ruleset(ruleset))
             res = tx_opt.optimize_transfers(
                 current_squad=squad_contracts,
                 market=list(contracts.values()),
@@ -1110,7 +1222,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 proj_by_r[r_num] = list(c_map.values())
 
             initial_contracts, initial_bank = _resolve_squad(args.squad, {p.player_id: p for p in proj_by_r[args.start_round]})
+            from .competition.ruleset import resolve_ruleset
+            from .optimization.constraints import OptimizationConstraints
+            norm_league = getattr(args, "league", "euroleague")
+            ruleset = resolve_ruleset(norm_league, db_path=args.db)
             mr_opt = MultiRoundOptimizer(
+                constraints=OptimizationConstraints.from_ruleset(ruleset),
                 discount_factor=args.discount,
                 max_trades_per_round=args.max_trades,
             )
@@ -1128,9 +1245,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         if args.opt_command == "backtest":
-            store_eval = EvaluationDatasetStore(args.db)
+            eval_db = _resolve_eval_db(args)
+            store_eval = EvaluationDatasetStore(eval_db)
             if norm_season not in store_eval.list_seasons():
-                build_historical_dataset(database_path=args.db, seasons=[norm_season])
+                if _is_production_db(eval_db) and not getattr(args, "allow_synthetic", False):
+                    print(
+                        "Refusing to auto-generate synthetic data into production database. Use --eval-db or pass --allow-synthetic.",
+                        file=sys.stderr,
+                    )
+                    return 2
+                build_historical_dataset(database_path=eval_db, seasons=[norm_season])
             avail_rounds = store_eval.list_season_rounds(norm_season)
             rounds_to_eval = parse_rounds_spec(args.rounds, avail_rounds)
             rounds_data: dict[int, tuple[list[PlayerProjectionContract], dict[int, float]]] = {}
@@ -1139,7 +1263,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     season=norm_season,
                     round_number=r_num,
                     model_name=canon_model,
-                    database_path=args.db,
+                    database_path=eval_db,
                     ewma_alpha=args.alpha,
                 )
                 # Resolve squad for round r_num
@@ -1442,28 +1566,35 @@ def main(argv: Sequence[str] | None = None) -> int:
                 norm_league = League.from_str(target_team.league)
                 pids = _resolve_players_file_ids(args.file, args.db, norm_league)
                 units = _build_cli_roster(args.db, ts, target_team.season, args.round, norm_league, pids)
+                bank_t = int(round(args.credits * 10))
+                ts.import_squad(
+                    team_id=target_id,
+                    round_number=args.round,
+                    bank_tenths=bank_t,
+                    roster_units=units,
+                )
+                print(f"Successfully imported {len(units)} units into team '{target_id}' for round {args.round} (Bank: {args.credits:.1f} cr).")
+                return 0
             except ValueError as e:
                 print(f"Error: {e}")
                 return 1
 
-            bank_t = int(round(args.credits * 10))
-            ts.update_team(target_id, round_number=args.round, bank_tenths=bank_t)
-            ts.set_squad(target_id, round_number=args.round, roster_units=units, validate=True, advance_team_round=True)
-            print(f"Successfully imported {len(units)} units into team '{target_id}' for round {args.round} (Bank: {args.credits:.1f} cr).")
-            return 0
-
         if args.team_command == "show":
-            target_id = args.id
+            try:
+                target_id = _resolve_cli_team_id(getattr(args, "pos_id", None), getattr(args, "id", None), required=False)
+            except ValueError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                return 1
             if not target_id:
                 act = ts.get_active_team()
                 if not act:
-                    print("No active team found.")
+                    print("No active team found.", file=sys.stderr)
                     return 1
                 target_id = act.team_id
             try:
                 team = ts.get_team(target_id)
             except KeyError:
-                print(f"Team '{target_id}' not found.")
+                print(f"Team '{target_id}' not found.", file=sys.stderr)
                 return 1
             if getattr(args, "json", False):
                 print(json.dumps(team.to_dict(), indent=2, ensure_ascii=False))
@@ -1485,20 +1616,30 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if args.team_command == "select":
             try:
-                ts.set_active_team(args.id)
-                print(f"Active team set to '{args.id}'")
+                target_id = _resolve_cli_team_id(getattr(args, "pos_id", None), getattr(args, "id", None), required=True)
+            except ValueError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                return 1
+            try:
+                ts.set_active_team(target_id)
+                print(f"Active team set to '{target_id}'")
                 return 0
             except KeyError:
-                print(f"Team '{args.id}' not found.")
+                print(f"Team '{target_id}' not found.", file=sys.stderr)
                 return 1
 
         if args.team_command == "delete":
-            deleted = ts.delete_team(args.id)
+            try:
+                target_id = _resolve_cli_team_id(getattr(args, "pos_id", None), getattr(args, "id", None), required=True)
+            except ValueError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                return 1
+            deleted = ts.delete_team(target_id)
             if deleted:
-                print(f"Deleted team '{args.id}'")
-            else:
-                print(f"Team '{args.id}' not found.")
-            return 0
+                print(f"Deleted team '{target_id}'")
+                return 0
+            print(f"Team '{target_id}' not found.")
+            return 1
 
         if args.team_command == "set-lineup":
             target_id = args.team
@@ -1707,6 +1848,28 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("=" * 60)
         return 0
 
+    if args.command == "doctor":
+        from .multi_team.migrations import inspect_database_health
+        target_db = args.database or args.db or paths.database_path()
+        report = inspect_database_health(target_db)
+        if getattr(args, "json", False):
+            print(json.dumps(report, indent=2))
+        else:
+            print("=== EuroLeague Fantasy Manager Doctor ===")
+            print(f"Database: {report.get('database_path')}")
+            print(f"Status:   {report.get('status', 'unknown').upper()}")
+            print(f"Scanned:  {report.get('scanned', 0)}")
+            print(f"Updated:  {report.get('backfilled', 0)}")
+            print(f"Unresolved rows: {report.get('unresolved_count', 0)}")
+            if report.get("unresolved_records"):
+                print("\nUnresolved transfer records:")
+                for rec in report["unresolved_records"]:
+                    print(
+                        f"  - Trade ID {rec.get('id')}: Team {rec.get('team_id')} Round {rec.get('round_number')} "
+                        f"(Sold {rec.get('player_out_id')}, Bought {rec.get('player_in_id')})"
+                    )
+        return 0 if report.get("status") != "error" else 1
+
     if args.command == "certify-v1":
         from .certification import run_v1_certification
 
@@ -1850,10 +2013,14 @@ def _build_cli_roster(
     if missing:
         raise ValueError(f"Player IDs {missing} not in {league.value} pool for round {round_number}.")
     contracts = [p_map[pid] for pid in player_ids]
+    from .competition.ruleset import resolve_ruleset
+    from .optimization.constraints import OptimizationConstraints
+    ruleset = resolve_ruleset(league, db_path=db_path)
+    c_cfg = OptimizationConstraints.from_ruleset(ruleset)
     if round_number == 1:
-        val = validate_squad_constraints(contracts, budget_tenths=1000)
+        val = validate_squad_constraints(contracts, budget_tenths=1000, constraints=c_cfg)
     else:
-        val = validate_squad_constraints(contracts, check_budget=False)
+        val = validate_squad_constraints(contracts, check_budget=False, constraints=c_cfg)
     if not val.is_valid:
         raise ValueError(f"Invalid squad: {'; '.join(val.errors)}")
 
@@ -2014,3 +2181,19 @@ def _format_multi_round_console(
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def __getattr__(name: str) -> Any:
+    if name == "RAW_ARCHIVE_DIRECTORY":
+        import warnings
+        warnings.warn("RAW_ARCHIVE_DIRECTORY is deprecated, use paths.raw_archive_dir()", DeprecationWarning, stacklevel=2)
+        return paths.raw_archive_dir()
+    if name == "PROJECT_ROOT":
+        import warnings
+        warnings.warn("PROJECT_ROOT is deprecated, use paths.elf_home()", DeprecationWarning, stacklevel=2)
+        return paths.elf_home()
+    if name == "DATABASE_PATH":
+        import warnings
+        warnings.warn("DATABASE_PATH is deprecated, use paths.database_path()", DeprecationWarning, stacklevel=2)
+        return paths.database_path()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

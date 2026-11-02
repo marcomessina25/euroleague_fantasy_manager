@@ -14,6 +14,18 @@ function escapeHtml(str) {
     .replace(/'/g, "&#039;");
 }
 
+async function loadRules(league) {
+  try {
+    const l = league || activeTeamLeague();
+    const res = await fetch(`/api/workstation/rules?league=${encodeURIComponent(l)}`);
+    if (res.ok) {
+      state.rules = await res.json();
+    }
+  } catch (e) {
+    console.error("Failed to load rules:", e);
+  }
+}
+
 let state = {
   activeTeamId: "team_1",
   teams: [],
@@ -28,13 +40,29 @@ let state = {
   activeTab: "dashboard",
   transfersOut: [],
   transfersIn: [],
+  rules: null,
 };
 
 // Initialize
+async function loadVersion() {
+  try {
+    const res = await fetch("/api/version");
+    if (res.ok) {
+      const data = await res.json();
+      const el = document.querySelector(".badge-version");
+      if (el && data.version) el.textContent = `v${data.version}`;
+    }
+  } catch (e) {
+    console.warn("Failed to load version", e);
+  }
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
+  loadVersion();
   captureIntelligenceDefaults();
   initNav();
   await loadTeams();
+  await loadRules(activeTeamLeague());
   await loadDashboard();
 });
 
@@ -87,7 +115,7 @@ async function loadTeams() {
           season: state.season,
           round_number: 1,
           turn_number: 1,
-          bank_tenths: 100,
+          bank_tenths: 1000,
         }),
       });
       const t1 = await createRes.json();
@@ -159,11 +187,13 @@ async function loadTeams() {
 
 async function deleteTeam(teamId) {
   try {
-    const res = await fetch(`/api/teams/${teamId}`, { method: "DELETE" });
+    const res = await fetch(`/api/teams/${encodeURIComponent(teamId)}`, { method: "DELETE" });
     if (res.ok) {
+      resetTransientTeamState();
       state.activeTeamId = null;
       await loadTeams();
-      await loadDashboard();
+      await loadRules(activeTeamLeague());
+  await loadDashboard();
       resetIntelligenceView();
       if (state.activeTab === "intelligence") loadIntelligenceView();
     } else {
@@ -177,9 +207,11 @@ async function deleteTeam(teamId) {
 
 async function switchTeam(teamId) {
   const changed = teamId !== state.activeTeamId;
+  resetTransientTeamState();
   state.activeTeamId = teamId;
-  await fetch(`/api/teams/${teamId}/active`, { method: "POST" });
+  await fetch(`/api/teams/${encodeURIComponent(teamId)}/active`, { method: "POST" });
   await loadTeams();
+  await loadRules(activeTeamLeague());
   await loadDashboard();
   updateCompetitionToggleUI();
   if (changed) resetIntelligenceView();
@@ -224,7 +256,7 @@ async function switchCompetition(league) {
           season: state.season,
           round_number: 1,
           turn_number: 1,
-          bank_tenths: 100,
+          bank_tenths: 1000,
         }),
       });
       if (res.ok) {
@@ -265,7 +297,7 @@ async function submitRenameTeam() {
   if (!newName) return;
 
   try {
-    const res = await fetch(`/api/teams/${teamId}`, {
+    const res = await fetch(`/api/teams/${encodeURIComponent(teamId)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: newName }),
@@ -273,7 +305,8 @@ async function submitRenameTeam() {
     if (res.ok) {
       closeRenameModal();
       await loadTeams();
-      await loadDashboard();
+      await loadRules(activeTeamLeague());
+  await loadDashboard();
     } else {
       const err = await res.json();
       alert("Failed to rename team: " + (err.detail || "Server error"));
@@ -331,12 +364,27 @@ async function loadLineupRounds() {
 }
 
 async function loadDashboard() {
+  if (!state.activeTeamId) return;
+  const requestedTeamId = state.activeTeamId;
+  const mySeq = ++dashboardSeq;
+
+  if (dashboardAbortController) {
+    dashboardAbortController.abort();
+  }
+  dashboardAbortController = new AbortController();
+
   try {
-    let url = `/api/workstation/dashboard?team_id=${state.activeTeamId}&season=${state.season}`;
+    let url = `/api/workstation/dashboard?team_id=${encodeURIComponent(requestedTeamId)}&season=${state.season}`;
     if (state.viewRoundNumber !== null) url += `&round_number=${state.viewRoundNumber}`;
-    const res = await fetch(url);
-    if (!res.ok) return;
+    const res = await fetch(url, { signal: dashboardAbortController.signal });
+    if (!res.ok) {
+      if (mySeq !== dashboardSeq || state.activeTeamId !== requestedTeamId) return;
+      const err = await res.json().catch(() => ({}));
+      renderDashboardError(err);
+      return;
+    }
     const data = await res.json();
+    if (mySeq !== dashboardSeq || state.activeTeamId !== requestedTeamId) return;
     state.dashboard = data;
     state.roundNumber = data.round_number;
     await loadLineupRounds();
@@ -448,10 +496,10 @@ function createPlayerCard(player, lineup, roleType = "starter") {
   if (!isCoach) {
     actionHtml = `
       <div class="card-action-bar">
-        <button class="card-action-btn ${isCap ? "active-cap" : ""}" title="${isCap ? "Current Captain" : "Make Captain"}" onclick="event.stopPropagation(); setCaptain(${player.player_id})">
+        <button class="card-action-btn ${isCap ? "active-cap" : ""}" title="${isCap ? "Current Captain" : "Make Captain"}" data-action="set-captain" data-player-id="${player.player_id}">
           👑 ${isCap ? "Cap" : "Cap"}
         </button>
-        <button class="card-action-btn ${isSubSource ? "active-cap" : ""}" title="Substitute Player" onclick="event.stopPropagation(); toggleSubMode(${player.player_id})">
+        <button class="card-action-btn ${isSubSource ? "active-cap" : ""}" title="Substitute Player" data-action="toggle-sub-mode" data-player-id="${player.player_id}">
           ⇄ Sub
         </button>
       </div>
@@ -616,7 +664,7 @@ async function setCaptain(playerId) {
   const coachId = l.coach ? l.coach.player_id : (l.coach_id || 0);
 
   try {
-    const res = await fetch(`/api/teams/${state.activeTeamId}/lineup`, {
+    const res = await fetch(`/api/teams/${encodeURIComponent(state.activeTeamId)}/lineup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -629,7 +677,8 @@ async function setCaptain(playerId) {
       }),
     });
     if (res.ok) {
-      await loadDashboard();
+      await loadRules(activeTeamLeague());
+  await loadDashboard();
     } else {
       const err = await res.json();
       alert("Failed to update captain: " + (err.detail || "Server error"));
@@ -727,7 +776,7 @@ async function executeDirectSwap(sourceId, targetId) {
   }
 
   try {
-    const res = await fetch(`/api/teams/${state.activeTeamId}/lineup`, {
+    const res = await fetch(`/api/teams/${encodeURIComponent(state.activeTeamId)}/lineup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -742,7 +791,8 @@ async function executeDirectSwap(sourceId, targetId) {
 
     if (res.ok) {
       cancelSubstitution();
-      await loadDashboard();
+      await loadRules(activeTeamLeague());
+  await loadDashboard();
     } else {
       const err = await res.json();
       alert("Substitution failed: " + (err.detail || "Server validation error"));
@@ -754,10 +804,6 @@ async function executeDirectSwap(sourceId, targetId) {
   }
 }
 
-function closeSubModal() {
-  const modal = document.getElementById("sub-modal");
-  if (modal) modal.style.display = "none";
-}
 
 // Player Statistics Details Modal
 let currentModalPlayerId = null;
@@ -841,7 +887,7 @@ function renderBadgeChip(badgeText, playerId) {
   else if (b.includes("Foul")) cls += " badge-foul";
   else cls += " badge-blue";
 
-  const clickAttr = playerId ? `onclick="event.stopPropagation(); openPlayerIntelModal(${playerId})"` : "";
+  const clickAttr = playerId ? `data-action="open-player-intel" data-player-id="${playerId}"` : "";
   return `<span class="${cls}" style="font-size:0.7rem; padding:0.1rem 0.35rem; cursor:pointer;" title="${escapeHtml(b)}" ${clickAttr}>${escapeHtml(b)}</span>`;
 }
 
@@ -997,7 +1043,7 @@ async function triggerOptimizeLineup() {
   if (res.ok) {
     const lineup = await res.json();
     // Persist optimized lineup to team
-    await fetch(`/api/teams/${state.activeTeamId}/lineup`, {
+    await fetch(`/api/teams/${encodeURIComponent(state.activeTeamId)}/lineup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1009,7 +1055,8 @@ async function triggerOptimizeLineup() {
         ...lineupRoundPayload(),
       }),
     });
-    await loadDashboard();
+    await loadRules(activeTeamLeague());
+  await loadDashboard();
     const undoBtn = document.getElementById("btn-undo-optimizer");
     if (undoBtn && previousLineupSnapshot) {
       undoBtn.style.display = "inline-block";
@@ -1020,7 +1067,7 @@ async function triggerOptimizeLineup() {
 async function undoLineupOptimization() {
   if (!previousLineupSnapshot || !state.activeTeamId) return;
   try {
-    const res = await fetch(`/api/teams/${state.activeTeamId}/lineup`, {
+    const res = await fetch(`/api/teams/${encodeURIComponent(state.activeTeamId)}/lineup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...previousLineupSnapshot, ...lineupRoundPayload() }),
@@ -1029,7 +1076,8 @@ async function undoLineupOptimization() {
       previousLineupSnapshot = null;
       const undoBtn = document.getElementById("btn-undo-optimizer");
       if (undoBtn) undoBtn.style.display = "none";
-      await loadDashboard();
+      await loadRules(activeTeamLeague());
+  await loadDashboard();
     } else {
       const err = await res.json();
       alert("Failed to undo lineup optimization: " + (err.detail || "Server error"));
@@ -1087,7 +1135,7 @@ function renderIntraRoundSquadTable(lineup) {
 
     tr.innerHTML = `
       <td>
-        <strong style="cursor:pointer;" onclick="openPlayerModal(${p.player_id})">${escapeHtml(p.name)}</strong>
+        <strong style="cursor:pointer;" data-action="open-player-modal" data-player-id="${p.player_id}">${escapeHtml(p.name)}</strong>
         <span class="player-pos-badge" style="margin-left:0.3rem;">${pos}</span>
       </td>
       <td>${roleBadge}</td>
@@ -1188,7 +1236,7 @@ function renderIntraSubResults(data) {
   if (!isOptimalNow) {
     actionBtnHtml = `
       <div style="margin-top:1rem; display:flex; justify-content:flex-end;">
-        <button class="btn btn-primary" onclick="applyIntraRoundSubstitutions()" id="btn-apply-intra-sub">
+        <button class="btn btn-primary" data-action="apply-intra-sub" id="btn-apply-intra-sub">
           ✓ Apply Optimal Substitutions & Log Decision
         </button>
       </div>
@@ -1245,7 +1293,8 @@ async function applyIntraRoundSubstitutions() {
       alert("Optimal substitutions applied successfully and logged in decision history!");
       const container = document.getElementById("intra-sub-results");
       if (container) container.style.display = "none";
-      await loadDashboard();
+      await loadRules(activeTeamLeague());
+  await loadDashboard();
     } else {
       const err = await res.json();
       alert("Failed to apply substitutions: " + (err.detail || "Server error"));
@@ -1268,7 +1317,7 @@ async function confirmRevertRoundStart() {
   }
 
   try {
-    const res = await fetch(`/api/teams/${state.activeTeamId}/revert-round-start`, {
+    const res = await fetch(`/api/teams/${encodeURIComponent(state.activeTeamId)}/revert-round-start`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ season: state.season, round_number: state.roundNumber }),
@@ -1277,7 +1326,8 @@ async function confirmRevertRoundStart() {
     if (res.ok) {
       alert(`Team successfully reverted to Round ${state.roundNumber} baseline!`);
       await loadTeams();
-      await loadDashboard();
+      await loadRules(activeTeamLeague());
+  await loadDashboard();
       if (state.activeTab === "trade-studio") {
         await loadTradeStudio();
       }
@@ -1298,6 +1348,7 @@ let tradeStudioState = {
   currentSquad: [],
   transfersOut: [],
   transfersIn: [],
+  rules: null,
   unlimited: false,
 };
 
@@ -1305,7 +1356,7 @@ async function loadTradeStudio() {
   if (!state.activeTeamId) return;
 
   try {
-    const res = await fetch(`/api/teams/${state.activeTeamId}`);
+    const res = await fetch(`/api/teams/${encodeURIComponent(state.activeTeamId)}`);
     if (!res.ok) return;
     const team = await res.json();
 
@@ -1355,7 +1406,7 @@ function renderTradeStudioSquad() {
 
     tr.innerHTML = `
       <td>
-        <strong style="cursor:pointer;" onclick="openPlayerModal(${unit.player_id})">${escapeHtml(unit.name)}</strong>
+        <strong style="cursor:pointer;" data-action="open-player-modal" data-player-id="${unit.player_id}">${escapeHtml(unit.name)}</strong>
         <span style="color:var(--text-muted); font-size:0.75rem;">(${escapeHtml(unit.team_code || "UNK")})</span>
       </td>
       <td><span class="player-pos-badge">${pos}</span></td>
@@ -1364,7 +1415,7 @@ function renderTradeStudioSquad() {
       <td>
         <button class="btn ${isOut ? "btn-secondary" : "btn-primary"}"
                 style="padding:0.2rem 0.5rem; font-size:0.75rem; ${isOut ? "border-color:var(--accent-red); color:var(--accent-red);" : ""}"
-                onclick="toggleTradeOut(${unit.player_id}, '${escapeHtml(unit.name).replace(/'/g, "\\'")}', ${unit.current_price_tenths / 10.0})">
+                data-action="toggle-trade-out" data-player-id="${unit.player_id}" data-player-name="${escapeHtml(unit.name)}" data-player-credits="${unit.current_price_tenths / 10.0}">
           ${isOut ? "✓ Selected (Out)" : "✕ Sell"}
         </button>
       </td>
@@ -1455,7 +1506,7 @@ function updateTradeStudioUI() {
       outContainer.innerHTML = `<span style="color:var(--text-muted); font-size:0.8rem; font-style:italic;">None selected</span>`;
     } else {
       outContainer.innerHTML = tradeStudioState.transfersOut.map(
-        (p) => `<span class="trade-chip out">${escapeHtml(p.name)} (${p.credits} cr) <span class="trade-chip-remove" onclick="removeTradeOut(${p.id})">✕</span></span>`
+        (p) => `<span class="trade-chip out">${escapeHtml(p.name)} (${p.credits} cr) <span class="trade-chip-remove" data-action="remove-trade-out" data-player-id="${p.id}">✕</span></span>`
       ).join(" ");
     }
   }
@@ -1466,7 +1517,7 @@ function updateTradeStudioUI() {
       inContainer.innerHTML = `<span style="color:var(--text-muted); font-size:0.8rem; font-style:italic;">None selected</span>`;
     } else {
       inContainer.innerHTML = tradeStudioState.transfersIn.map(
-        (p) => `<span class="trade-chip in">${escapeHtml(p.name)} (${p.credits} cr) <span class="trade-chip-remove" onclick="removeTradeIn(${p.id})">✕</span></span>`
+        (p) => `<span class="trade-chip in">${escapeHtml(p.name)} (${p.credits} cr) <span class="trade-chip-remove" data-action="remove-trade-in" data-player-id="${p.id}">✕</span></span>`
       ).join(" ");
     }
   }
@@ -1523,7 +1574,7 @@ async function triggerSuggestTransfers() {
         season: state.season,
         round_number: state.roundNumber,
         max_trades: tradeStudioState.unlimited
-          ? MAX_TRADES_PER_ROUND
+          ? 11
           : Math.min(MAX_TRADES_PER_ROUND, tradeStudioState.transfersRemaining || 1),
         unlimited: tradeStudioState.unlimited,
         strategy_preset: strategyPreset,
@@ -1536,6 +1587,7 @@ async function triggerSuggestTransfers() {
       const recs = (data.recommendations && data.recommendations.length > 0)
         ? data.recommendations
         : (data.best_recommendation ? [data.best_recommendation] : []);
+      tradeStudioState.currentRecommendations = recs;
 
       if (recs.length === 0 || !recs[0].transfers_out_details || recs[0].transfers_out_details.length === 0) {
         if (banner) {
@@ -1574,7 +1626,7 @@ async function triggerSuggestTransfers() {
                 </div>
               </div>
               <div>
-                <button class="btn ${isOptimal ? "btn-primary" : "btn-secondary"}" style="padding:0.35rem 0.8rem; font-size:0.8rem;" onclick="applySuggestedTrade(${outsJson}, ${insJson})">
+                <button class="btn ${isOptimal ? "btn-primary" : "btn-secondary"}" style="padding:0.35rem 0.8rem; font-size:0.8rem;" data-action="apply-suggested-trade-package" data-rec-idx="${idx}">
                   Apply to Studio
                 </button>
               </div>
@@ -1608,7 +1660,7 @@ async function submitExecuteTransfers() {
   if (btn) btn.disabled = true;
 
   try {
-    const res = await fetch(`/api/teams/${state.activeTeamId}/transfers`, {
+    const res = await fetch(`/api/teams/${encodeURIComponent(state.activeTeamId)}/transfers`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1625,7 +1677,8 @@ async function submitExecuteTransfers() {
       tradeStudioState.transfersIn = [];
       const banner = document.getElementById("trade-rec-banner");
       if (banner) banner.style.display = "none";
-      await loadDashboard();
+      await loadRules(activeTeamLeague());
+  await loadDashboard();
       await loadTradeStudio();
     } else {
       const err = await res.json();
@@ -1694,9 +1747,9 @@ async function loadPlayerPool(opts) {
         if (inSquad) {
           actionBtn = `<span style="font-size:0.75rem; color:var(--text-muted); font-style:italic;">In Squad</span>`;
         } else if (isIn) {
-          actionBtn = `<button class="btn btn-secondary" style="padding:0.2rem 0.5rem; font-size:0.75rem; color:var(--accent-green); border-color:var(--accent-green);" onclick="removeTradeIn(${p.player_id})">✓ In (Remove)</button>`;
+          actionBtn = `<button class="btn btn-secondary" style="padding:0.2rem 0.5rem; font-size:0.75rem; color:var(--accent-green); border-color:var(--accent-green);" data-action="remove-trade-in" data-player-id="${p.player_id}">✓ In (Remove)</button>`;
         } else {
-          actionBtn = `<button class="btn btn-primary" style="padding:0.2rem 0.5rem; font-size:0.75rem;" onclick="addTradeIn(${p.player_id}, '${escapeHtml(p.name).replace(/'/g, "\\'")}', ${p.credits})">+ Buy</button>`;
+          actionBtn = `<button class="btn btn-primary" style="padding:0.2rem 0.5rem; font-size:0.75rem;" data-action="add-trade-in" data-player-id="${p.player_id}" data-player-name="${escapeHtml(p.name)}" data-player-credits="${p.credits}">+ Buy</button>`;
         }
 
         let badgesHtml = "";
@@ -1707,7 +1760,7 @@ async function loadPlayerPool(opts) {
         tr.innerHTML = `
           <td>
             <div style="display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap;">
-              <strong style="cursor:pointer;" onclick="openPlayerIntelModal(${p.player_id})" title="Click to view basketball intelligence">${escapeHtml(p.name)}</strong>
+              <strong style="cursor:pointer;" data-action="open-player-intel" data-player-id="${p.player_id}" title="Click to view basketball intelligence">${escapeHtml(p.name)}</strong>
               <span style="color:var(--text-muted); font-size:0.75rem;">(${escapeHtml(p.team_code || "UNK")})</span>
               ${badgesHtml}
             </div>
@@ -1909,6 +1962,7 @@ function teamBuilderBankCredits() {
 
 async function loadTeamBuilderPool() {
   const league = teamBuilderLeague();
+  await loadRules(league);
   const round = teamBuilderRound();
   const poolIndicator = document.getElementById("tb-pool-count");
 
@@ -1937,7 +1991,7 @@ async function loadTeamBuilderPool() {
     const count = teamBuilderState.allPlayers.length;
     if (count === 0) {
       const label = league === "eurocup" ? "EuroCup" : "EuroLeague";
-      poolIndicator.innerHTML = `0 players available — <a href="#" onclick="triggerUpdateData('${league === "eurocup" ? "eurocup" : "euroleague"}'); return false;">download ${label} data</a>`;
+      poolIndicator.innerHTML = `0 players available — <a href="#" data-action="trigger-update-data" data-league="${league === "eurocup" ? "eurocup" : "euroleague"}">download ${label} data</a>`;
     } else {
       poolIndicator.textContent = `${count} players available (Round ${round})`;
     }
@@ -2246,8 +2300,9 @@ function updateTeamBuilderUI() {
   if (posCounts.C !== 2) errors.push(`Needs 2 Centers (current: ${posCounts.C})`);
   if (posCounts.HC !== 1) errors.push(`Needs 1 Head Coach (current: ${posCounts.HC})`);
 
+  const maxPerClub = (state.rules && state.rules.max_court_players_per_club) || 6;
   for (const [club, count] of Object.entries(clubCounts)) {
-    if (count > 6) errors.push(`Max 6 court players per club (${club}: ${count})`);
+    if (count > maxPerClub) errors.push(`Max ${maxPerClub} court players per club (${club}: ${count})`);
   }
 
   const msgEl = document.getElementById("tb-validation-msg");
@@ -2283,7 +2338,7 @@ function updateTeamBuilderUI() {
       <td style="color:var(--accent-orange); font-weight:700;">${p.expected_fp} FP</td>
       <td><span class="badge ${p.is_locked ? "badge-blue" : "badge-green"}">${p.is_locked ? "🔒 Locked" : "⚡ Suggested"}</span></td>
       <td>
-        <button class="btn btn-secondary" style="padding:0.2rem 0.5rem; font-size:0.75rem; color:var(--accent-red);" onclick="removePlayerFromTeamBuilder(${p.player_id})">✕ Remove</button>
+        <button class="btn btn-secondary" style="padding:0.2rem 0.5rem; font-size:0.75rem; color:var(--accent-red);" data-action="remove-team-builder-player" data-player-id="${p.player_id}">✕ Remove</button>
       </td>
     `;
     tbody.appendChild(tr);
@@ -2329,7 +2384,8 @@ async function submitCreateTeam() {
       state.activeTeamId = createdTeam.team_id;
       closeTeamBuilderModal();
       await loadTeams();
-      await loadDashboard();
+      await loadRules(activeTeamLeague());
+  await loadDashboard();
       resetIntelligenceView();
       if (state.activeTab === "intelligence") loadIntelligenceView();
     } else {
@@ -2376,7 +2432,8 @@ async function triggerUpdateData(league) {
         msg += '\n\nCould not roll forward team(s):\n' + failures.map(([id, e]) => `- ${id}: ${e}`).join('\n');
       }
       alert(msg);
-      await loadDashboard();
+      await loadRules(activeTeamLeague());
+  await loadDashboard();
       if (state.activeTab === 'trade-studio') {
         await loadPlayerPool();
       }
@@ -2501,6 +2558,8 @@ function populateProvidersDropdown(providers) {
   });
   if (previous && providers.some((p) => p.provider_name === previous)) {
     sel.value = previous;
+  } else {
+    sel.value = "heuristic";
   }
   populateCopilotModelDropdown();
   restoreCopilotApiKey();
@@ -2561,8 +2620,23 @@ function onCopilotModelChanged() {
 function restoreCopilotApiKey() {
   const providerSel = document.getElementById("copilot-provider");
   const keyInput = document.getElementById("copilot-api-key");
+  const rememberCb = document.getElementById("copilot-remember-key");
+  const warn = document.getElementById("copilot-remember-warning");
   if (!providerSel || !keyInput) return;
-  keyInput.value = localStorage.getItem(`elf_copilot_api_key_${providerSel.value}`) || "";
+
+  const keyName = `elf_copilot_api_key_${providerSel.value}`;
+  const localVal = localStorage.getItem(keyName);
+  const sessionVal = sessionStorage.getItem(keyName);
+
+  if (localVal) {
+    keyInput.value = localVal;
+    if (rememberCb) rememberCb.checked = true;
+    if (warn) warn.style.display = "block";
+  } else {
+    keyInput.value = sessionVal || "";
+    if (rememberCb) rememberCb.checked = false;
+    if (warn) warn.style.display = "none";
+  }
   const hint = document.getElementById("copilot-key-hint");
   if (hint) hint.style.display = "none";
 }
@@ -2570,8 +2644,18 @@ function restoreCopilotApiKey() {
 function onCopilotApiKeyInput() {
   const providerSel = document.getElementById("copilot-provider");
   const keyInput = document.getElementById("copilot-api-key");
+  const rememberCb = document.getElementById("copilot-remember-key");
   if (!providerSel || !keyInput) return;
-  localStorage.setItem(`elf_copilot_api_key_${providerSel.value}`, keyInput.value);
+
+  const keyName = `elf_copilot_api_key_${providerSel.value}`;
+  const val = keyInput.value;
+  sessionStorage.setItem(keyName, val);
+
+  if (rememberCb && rememberCb.checked) {
+    localStorage.setItem(keyName, val);
+  } else {
+    localStorage.removeItem(keyName);
+  }
 }
 
 function toggleCopilotApiKeyVisibility() {
@@ -2699,6 +2783,25 @@ async function triggerCopilotAdvise() {
     keyHint.style.display = "block";
   }
 
+  let consentRemote = sessionStorage.getItem("elf_remote_llm_consent") === "true";
+  if (provider !== "heuristic" && provider !== "local") {
+    if (!consentRemote) {
+      const consentMsg =
+        `Warning: You have selected a remote LLM provider (${provider.toUpperCase()}).\n\n` +
+        `This will transmit the following fantasy team data to the third-party service:\n` +
+        `• Fantasy Team Name\n` +
+        `• Squad Lineup (Starters, Bench, Captain, Sixth Man)\n` +
+        `• Player Projections & Valuations\n\n` +
+        `Do you acknowledge and consent to sending this fantasy team data for this session?`;
+      if (typeof window !== "undefined" && typeof window.confirm === "function" && window.confirm(consentMsg)) {
+        sessionStorage.setItem("elf_remote_llm_consent", "true");
+        consentRemote = true;
+      } else {
+        return;
+      }
+    }
+  }
+
   if (btn) btn.disabled = true;
   if (spinner) spinner.style.display = "inline";
   if (icon) icon.style.display = "none";
@@ -2716,6 +2819,7 @@ async function triggerCopilotAdvise() {
         tier: tier,
         model: model,
         api_key: apiKey,
+        consent_remote: consentRemote,
       }),
     });
 
@@ -2815,4 +2919,104 @@ function copyCopilotAdvice() {
   }).catch((err) => {
     console.error("Failed to copy advice:", err);
   });
+}
+
+
+function onCopilotRememberKeyChange() {
+  const cb = document.getElementById("copilot-remember-key");
+  const warn = document.getElementById("copilot-remember-warning");
+  if (warn) warn.style.display = (cb && cb.checked) ? "block" : "none";
+  onCopilotApiKeyInput();
+}
+
+// Delegated click handler for data-action elements (eliminates inline JS handlers)
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-action]");
+  if (!el) return;
+  const action = el.dataset.action;
+  if (!action) return;
+
+  if (action === "set-captain") {
+    e.stopPropagation();
+    setCaptain(Number(el.dataset.playerId));
+  } else if (action === "toggle-sub-mode") {
+    e.stopPropagation();
+    toggleSubMode(Number(el.dataset.playerId));
+  } else if (action === "open-player-intel") {
+    e.stopPropagation();
+    openPlayerIntelModal(Number(el.dataset.playerId));
+  } else if (action === "open-player-modal") {
+    e.stopPropagation();
+    openPlayerModal(Number(el.dataset.playerId));
+  } else if (action === "apply-intra-sub") {
+    applyIntraRoundSubstitutions();
+  } else if (action === "toggle-trade-out") {
+    toggleTradeOut(Number(el.dataset.playerId), el.dataset.playerName, Number(el.dataset.playerCredits));
+  } else if (action === "remove-trade-out") {
+    removeTradeOut(Number(el.dataset.playerId));
+  } else if (action === "remove-trade-in") {
+    removeTradeIn(Number(el.dataset.playerId));
+  } else if (action === "apply-suggested-trade-package") {
+    const idx = Number(el.dataset.recIdx);
+    if (tradeStudioState.currentRecommendations && tradeStudioState.currentRecommendations[idx]) {
+      const rec = tradeStudioState.currentRecommendations[idx];
+      applySuggestedTrade(rec.transfers_out_details, rec.transfers_in_details);
+    }
+  } else if (action === "add-trade-in") {
+    addTradeIn(Number(el.dataset.playerId), el.dataset.playerName, Number(el.dataset.playerCredits));
+  } else if (action === "trigger-update-data") {
+    e.preventDefault();
+    triggerUpdateData(el.dataset.league);
+  } else if (action === "remove-team-builder-player") {
+    removePlayerFromTeamBuilder(Number(el.dataset.playerId));
+  }
+});
+
+
+// --- P5.3 State isolation, Request tokens & race mitigation ---
+let dashboardSeq = 0;
+let dashboardAbortController = null;
+let intelSeq = 0;
+let intelAbortController = null;
+let playerPoolSeq = 0;
+let playerPoolAbortController = null;
+let copilotSeq = 0;
+let copilotAbortController = null;
+let playerPoolDebounceTimer = null;
+
+function resetTransientTeamState() {
+  state.viewRoundNumber = null;
+  tradeStudioState.transfersOut = [];
+  tradeStudioState.transfersIn = [];
+  tradeStudioState.unlimited = false;
+  const unlimToggle = document.getElementById("trade-unlimited-toggle");
+  if (unlimToggle) unlimToggle.checked = false;
+  resetCopilotPanel();
+  clearCourtPlaceholder();
+}
+
+function clearCourtPlaceholder() {
+  const container = document.getElementById("court-starters");
+  if (container) {
+    container.innerHTML = '<div style="display:flex; justify-content:center; align-items:center; height:200px; color:var(--text-muted); font-size:1rem;">Loading squad...</div>';
+  }
+  const benchContainer = document.getElementById("court-bench");
+  if (benchContainer) benchContainer.innerHTML = "";
+}
+
+function resetCopilotPanel() {
+  const adviceEl = document.getElementById("copilot-advice-output");
+  if (adviceEl) adviceEl.innerHTML = "";
+  const adviceSec = document.getElementById("copilot-advice-section");
+  if (adviceSec) adviceSec.style.display = "none";
+}
+
+function renderDashboardError(err) {
+  const container = document.getElementById("court-starters");
+  if (container) {
+    const msg = (err && err.detail && (err.detail.message || err.detail.code || err.detail)) || "Failed to load dashboard.";
+    container.innerHTML = `<div class="dashboard-error" style="display:flex; justify-content:center; align-items:center; height:200px; color:var(--accent-red); font-size:0.95rem;">⚠️ ${escapeHtml(String(msg))}</div>`;
+  }
+  const benchContainer = document.getElementById("court-bench");
+  if (benchContainer) benchContainer.innerHTML = "";
 }

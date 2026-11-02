@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import importlib.metadata
 
-__all__ = ["__version__"]
+__all__ = ["__version__", "paths"]
+
+from . import paths
 
 try:
     __version__ = importlib.metadata.version("euroleague-fantasy-manager")

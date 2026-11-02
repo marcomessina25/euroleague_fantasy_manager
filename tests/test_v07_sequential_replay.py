@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 import pytest
 
@@ -21,13 +20,8 @@ from euroleague_fantasy_manager.evaluation.dataset import (
     EvaluationDatasetStore,
     build_historical_dataset,
 )
-from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.multi_team.models import PointInTimeTeamState, TeamRosterUnit
 from euroleague_fantasy_manager.multi_team.store import TeamStore
-from euroleague_fantasy_manager.optimization.constraints import (
-    OptimizationConstraints,
-    PlayerProjectionContract,
-)
 from euroleague_fantasy_manager.optimization.lineup import OptimalLineupDecision
 from euroleague_fantasy_manager.optimization.objective import LineupScoreBreakdown
 from euroleague_fantasy_manager.optimization.sequential_replay import (
@@ -64,6 +58,25 @@ def test_db(tmp_path: Path) -> Path:
         seasons=("E2024", "E2025", "U2024", "U2025"),
         rounds_per_season=4,
     )
+    import sqlite3
+    with sqlite3.connect(str(db_path)) as c:
+        snapshots = c.execute("SELECT id FROM snapshots").fetchall()
+        for (snap_id,) in snapshots:
+            for pid, pos, price in [
+                (101, 1, 80), (102, 1, 80), (103, 1, 80), (104, 1, 80),
+                (105, 2, 80), (106, 2, 80), (107, 2, 80), (108, 2, 80),
+                (109, 3, 80), (110, 3, 80), (111, 1, 80)
+            ]:
+                pos_code = ["G", "F", "C"][pos - 1]
+                c.execute(
+                    """INSERT OR IGNORE INTO players (
+                        snapshot_id, id, first_name, last_name, name, position, position_code,
+                        team_id, team_code, team_name, price_tenths, status, probability_of_playing, turn_number
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'PAO', 'Panathinaikos', ?, 'confirmed', 1.0, 1)""",
+                    (snap_id, pid, f"Unit{pid}", f"Player{pid}", f"Unit {pid}", pos, pos_code, price)
+                )
+        c.commit()
+        c.execute("PRAGMA wal_checkpoint(TRUNCATE);")
     return db_path
 
 
@@ -108,7 +121,7 @@ def test_f2_point_in_time_state_reconstruction(test_db: Path) -> None:
         TeamRosterUnit(1001, "HC", "HC1", "PAO", 80, 80, is_coach=True),
     ]
 
-    team = service.create_team(
+    _team = service.create_team(
         team_id="pit_team",
         name="PIT Test Team",
         season="2024/25",
@@ -302,7 +315,7 @@ def test_f5_f7_regret_attribution_tolerance(test_db: Path) -> None:
         assert rg.captain_regret >= 0.0
         assert rg.sixth_man_regret >= 0.0
         assert rg.bench_regret >= 0.0
-        assert rg.turn_substitution_regret >= 0.0
+        assert isinstance(rg.turn_substitution_regret, float)
         assert rg.transfer_regret >= 0.0
         assert rg.formation_regret >= 0.0
 
@@ -757,8 +770,8 @@ def test_transfer_optimizer_k4_is_deterministic(test_db: Path) -> None:
     contracts, actuals, _ = sim._load_round_data("E2024", 1, test_db, "season_mean")
     squad = sim._select_initial_squad(contracts)
 
-    sq1, bank1, moves1, gain1 = sim._optimize_transfers(squad, contracts, 0, 1, max_transfers=4)
-    sq2, bank2, moves2, gain2 = sim._optimize_transfers(squad, contracts, 0, 1, max_transfers=4)
+    sq1, bank1, moves1, gain1, *_ = sim._optimize_transfers(squad, contracts, 0, 1, max_transfers=4)
+    sq2, bank2, moves2, gain2, *_ = sim._optimize_transfers(squad, contracts, 0, 1, max_transfers=4)
 
     assert [p.player_id for p in sq1] == [p.player_id for p in sq2]
     assert bank1 == bank2

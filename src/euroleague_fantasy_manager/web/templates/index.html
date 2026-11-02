@@ -13,7 +13,7 @@
     <div class="brand">
       <span style="font-size:1.5rem;">🏀</span>
       <h1>EuroLeague Fantasy Workstation</h1>
-      <span class="badge-version">v0.9.0</span>
+      <span class="badge-version">v1.0.2</span>
     </div>
 
     <div class="header-controls">
@@ -475,8 +475,8 @@
           <div class="form-group">
             <label for="copilot-provider">LLM Provider</label>
             <select id="copilot-provider" class="form-control" onchange="onProviderSelected()">
+              <option value="heuristic" selected>Heuristic (100% Offline Fallback)</option>
               <option value="auto">Auto (First Configured Provider)</option>
-              <option value="heuristic">Heuristic (100% Offline Fallback)</option>
               <option value="gemini">Google Gemini</option>
               <option value="openai">OpenAI (ChatGPT / GPT-4o)</option>
               <option value="claude">Anthropic Claude</option>
@@ -493,7 +493,7 @@
           </div>
 
           <div class="form-group">
-            <label for="copilot-api-key">API Key (stored locally only)</label>
+            <label for="copilot-api-key">API Key (session storage by default)</label>
             <div style="display:flex; gap:0.35rem;">
               <input type="password" id="copilot-api-key" class="form-control" style="flex:1;"
                      placeholder="Paste provider API key" autocomplete="off" spellcheck="false"
@@ -501,6 +501,11 @@
               <button type="button" class="btn btn-secondary" id="copilot-api-key-toggle"
                       onclick="toggleCopilotApiKeyVisibility()" title="Show/hide key" style="padding:0.45rem 0.65rem;">👁️</button>
             </div>
+            <label style="font-size:0.75rem; margin-top:0.35rem; display:flex; align-items:center; gap:0.35rem;">
+              <input type="checkbox" id="copilot-remember-key" onchange="onCopilotRememberKeyChange()">
+              Remember key on this device
+            </label>
+            <span id="copilot-remember-warning" style="display:none; font-size:0.7rem; color:var(--accent-amber); margin-top:0.2rem;">⚠️ Warning: Key will be stored unencrypted in browser localStorage.</span>
             <span id="copilot-key-hint" style="display:none; font-size:0.75rem; color:var(--accent-red); margin-top:0.25rem;"></span>
           </div>
 
@@ -810,21 +815,6 @@ All advice is grounded strictly in the deterministic Manager Dossier with guaran
         </div>
       </div>
     </div>
-
-    <!-- Substitution Selector Modal -->
-    <div id="sub-modal" class="modal-backdrop" style="display:none;">
-      <div class="modal-card" style="max-width: 500px;">
-        <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
-          <h3 style="margin:0; font-size:1.1rem;">Substitute Player</h3>
-          <button class="btn btn-secondary" onclick="closeSubModal()" style="padding:0.2rem 0.5rem;">✕</button>
-        </div>
-        <p style="font-size:0.85rem; color:var(--text-muted); margin-top:0.5rem;">
-          Select a bench or court teammate to swap with <strong id="sub-target-name"></strong>:
-        </p>
-        <div id="sub-options-list" style="margin-top:1rem; display:flex; flex-direction:column; gap:0.5rem; max-height:300px; overflow-y:auto;">
-          <!-- Populated via JS -->
-        </div>
-      </div>
     </div>
 
     <!-- Rename Team Modal -->

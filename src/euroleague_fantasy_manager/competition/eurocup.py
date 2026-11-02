@@ -104,29 +104,7 @@ def apply_bye_week_adjustments(
     return adjusted
 
 
-def compute_head_coach_fantasy_points(win: bool, margin: int) -> float:
-    """Compute official fantasy points for a Head Coach: 10.0 base +/- margin bonus."""
-    abs_margin = abs(int(margin))
-    if win:
-        if abs_margin >= 21:
-            bonus = 10.0
-        elif abs_margin >= 11:
-            bonus = 5.0
-        elif abs_margin >= 6:
-            bonus = 2.0
-        else:
-            bonus = 1.0
-        return 10.0 + bonus
-    else:
-        if abs_margin >= 21:
-            penalty = -10.0
-        elif abs_margin >= 11:
-            penalty = -5.0
-        elif abs_margin >= 6:
-            penalty = -2.0
-        else:
-            penalty = -1.0
-        return max(0.0, 10.0 + penalty)
+
 
 
 def compute_eurocup_group_standings(

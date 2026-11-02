@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
 
 from euroleague_fantasy_manager.models import Position
 from euroleague_fantasy_manager.optimization.constraints import (
-    OptimizationConstraints,
     PlayerProjectionContract,
 )
 from euroleague_fantasy_manager.optimization.trade_policy import (
@@ -320,7 +318,7 @@ def test_w3_cross_league_ruleset_quota_verification() -> None:
     el_rules = get_league_ruleset("euroleague")
     ec_rules = get_league_ruleset("eurocup")
 
-    assert el_rules.max_court_players_per_club == 3
+    assert el_rules.max_court_players_per_club == 6
     assert ec_rules.max_court_players_per_club == 6
     assert el_rules.squad_size == 11
     assert ec_rules.squad_size == 11

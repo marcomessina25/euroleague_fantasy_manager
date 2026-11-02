@@ -1,7 +1,6 @@
 """Decomposed expected fantasy points pipeline: E[FP] = P(play) * E[min | play] * E[FP/min | play] for V0.3."""
 
 from dataclasses import dataclass
-from typing import Sequence
 
 from ..evaluation.features import PointInTimeFeatureRow
 from ..valuation.player_value import compute_player_valuation

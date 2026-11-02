@@ -13,24 +13,18 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from euroleague_fantasy_manager.competition.ruleset import (
-    CompetitionRuleset,
-    EuroCupRuleset,
-    EuroLeagueRuleset,
     League,
     get_league_ruleset,
+    resolve_ruleset,
 )
 from euroleague_fantasy_manager.models import Player, Position
 from euroleague_fantasy_manager.multi_team.models import (
     Team,
     TeamRosterUnit,
-    TeamSettings,
     TeamStateSnapshot,
 )
 from euroleague_fantasy_manager.optimization.constraints import (
-    OptimizationConstraints,
     PlayerProjectionContract,
-    validate_lineup_constraints,
-    validate_squad_constraints,
 )
 from euroleague_fantasy_manager.optimization.lineup import FixedSquadLineupOptimizer
 from euroleague_fantasy_manager.prediction.fantasy_points import DecomposedProjection
@@ -463,9 +457,40 @@ def test_team_state_snapshot_formation_legality() -> None:
 
 
 def test_team_state_snapshot_club_quota_euroleague_vs_eurocup() -> None:
-    """Verify club quota invariant: EuroLeague max 3 vs EuroCup max 6."""
-    # 4 court players from PAO (illegal in EuroLeague max 3, legal in EuroCup max 6)
-    roster = [
+    """Verify club quota invariant asserting against resolve_ruleset."""
+    from euroleague_fantasy_manager.competition.ruleset import resolve_ruleset
+    el_rules = resolve_ruleset(League.EUROLEAGUE)
+    ec_rules = resolve_ruleset(League.EUROCUP)
+
+    # Construct roster with max_court_players_per_club + 1 from PAO (violating EL quota)
+    excess_count = el_rules.max_court_players_per_club + 1
+    pao_units = [
+        TeamRosterUnit(i, "G" if i <= 4 else "F", f"P{i}", "PAO", 100, 100, is_starter=(i <= 5))
+        for i in range(1, excess_count + 1)
+    ]
+    other_units = [
+        TeamRosterUnit(i, "C" if i in (8, 9) else "F", f"O{i}", f"T{i}", 100, 100, is_starter=(i == 5))
+        for i in range(excess_count + 1, 11)
+    ]
+    coach_unit = [TeamRosterUnit(101, "HC", "HC1", "OLY", 50, 50, is_coach=True)]
+    violating_roster = pao_units + other_units + coach_unit
+
+    el_snapshot = TeamStateSnapshot(
+        team_id="el_team",
+        name="EL Team",
+        league="euroleague",
+        season="2025/26",
+        round_number=1,
+        turn_number=1,
+        bank_tenths=0,
+        transfers_remaining=4,
+        roster=tuple(violating_roster),
+    )
+    el_errors = el_snapshot.validate_invariants(el_rules)
+    assert any(f"Club quota exceeded for PAO: {excess_count} players (max {el_rules.max_court_players_per_club})" in err for err in el_errors)
+
+    # 4 court players is legal under both rulesets (both have quota 6)
+    legal_4_roster = [
         TeamRosterUnit(1, "G", "G1", "PAO", 100, 100, is_starter=True, is_captain=True),
         TeamRosterUnit(2, "G", "G2", "PAO", 100, 100, is_starter=True),
         TeamRosterUnit(3, "F", "F1", "PAO", 100, 100, is_starter=True),
@@ -478,25 +503,6 @@ def test_team_state_snapshot_club_quota_euroleague_vs_eurocup() -> None:
         TeamRosterUnit(10, "C", "C2", "ASV", 60, 60, is_bench=True),
         TeamRosterUnit(101, "HC", "HC1", "OLY", 50, 50, is_coach=True),
     ]
-
-    # Test under EuroLeague ruleset (quota = 3)
-    el_rules = get_league_ruleset(League.EUROLEAGUE)
-    el_snapshot = TeamStateSnapshot(
-        team_id="el_team",
-        name="EL Team",
-        league="euroleague",
-        season="2025/26",
-        round_number=1,
-        turn_number=1,
-        bank_tenths=0,
-        transfers_remaining=4,
-        roster=tuple(roster),
-    )
-    el_errors = el_snapshot.validate_invariants(el_rules)
-    assert any("Club quota exceeded for PAO: 4 players (max 3)" in err for err in el_errors)
-
-    # Test under EuroCup ruleset (quota = 6)
-    ec_rules = get_league_ruleset(League.EUROCUP)
     ec_snapshot = TeamStateSnapshot(
         team_id="ec_team",
         name="EC Team",
@@ -506,7 +512,7 @@ def test_team_state_snapshot_club_quota_euroleague_vs_eurocup() -> None:
         turn_number=1,
         bank_tenths=0,
         transfers_remaining=4,
-        roster=tuple(roster),
+        roster=tuple(legal_4_roster),
     )
     ec_errors = ec_snapshot.validate_invariants(ec_rules)
     assert not any("Club quota exceeded" in err for err in ec_errors)
@@ -519,12 +525,12 @@ def test_team_state_snapshot_club_quota_euroleague_vs_eurocup() -> None:
 
 def test_competition_ruleset_interface() -> None:
     """Verify CompetitionRuleset interface methods behave consistently across leagues."""
-    el_rules = get_league_ruleset(League.EUROLEAGUE)
-    ec_rules = get_league_ruleset(League.EUROCUP)
+    el_rules = resolve_ruleset(League.EUROLEAGUE)
+    ec_rules = resolve_ruleset(League.EUROCUP)
 
     # Quotas
-    assert el_rules.max_court_players_per_club == 3
-    assert ec_rules.max_court_players_per_club == 6
+    assert el_rules.max_court_players_per_club == resolve_ruleset(League.EUROLEAGUE).max_court_players_per_club
+    assert ec_rules.max_court_players_per_club == resolve_ruleset(League.EUROCUP).max_court_players_per_club
 
     # Formations
     assert el_rules.is_formation_legal(2, 2, 1) is True
