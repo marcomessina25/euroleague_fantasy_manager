@@ -737,7 +737,7 @@ def list_players_endpoint(
     max_price: float | None = None,
     league: League = Depends(parse_league),
     sort: str = "expected_fp",
-    offset: int = 0,
+    offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     prediction_service: PredictionService = Depends(get_prediction_service),
 ) -> list[dict[str, Any]]:
@@ -797,7 +797,8 @@ def list_players_endpoint(
             continue
 
         val = valuations.get(c.player_id, {})
-        own_pct = float(ownership_map.get(c.player_id, 10.0))
+        raw_pop = ownership_map.get(c.player_id)
+        own_pct = float(raw_pop) if raw_pop is not None else 10.0
         arch, arch_badge = classify_ownership_archetype(own_pct, expected_fp=c.expected_fp)
         badges = []
         if arch_badge:

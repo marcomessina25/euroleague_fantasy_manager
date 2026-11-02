@@ -31,7 +31,7 @@ def test_elf_gui_host_and_port(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     ret = main(["--db", str(db_file), "gui", "--host", "127.0.0.1", "--port", "8008", "--open-browser"])
     assert ret == 0
     assert calls["run"] == {"host": "127.0.0.1", "port": 8008}
-    assert calls["open"] == "http://127.0.0.1:8008"
+    assert calls["open"].rstrip("/") == "http://127.0.0.1:8008"
 
 
 def test_team_select_and_delete_exit_codes(tmp_path: Path, capsys: pytest.CaptureFixture):

@@ -35,6 +35,7 @@ class PredictionService:
         model_name: str = "price_prior_v1",
         force_refresh: bool = False,
         league: str | League | None = None,
+        raise_on_missing: bool = False,
     ) -> dict[int, PlayerProjectionContract]:
         """Retrieve projection contracts keyed by player_id."""
         norm_league = League.from_str(league).value if league else "euroleague"
@@ -42,7 +43,12 @@ class PredictionService:
         if not force_refresh and cache_key in self._cache:
             return self._cache[cache_key]
 
-        contracts = self._build_contracts(season, round_number, model_name, league=norm_league)
+        try:
+            contracts = self._build_contracts(season, round_number, model_name, league=norm_league)
+        except NoSnapshotForRoundError:
+            if raise_on_missing:
+                raise
+            return {}
         self._cache[cache_key] = contracts
         return contracts
 
@@ -52,9 +58,12 @@ class PredictionService:
         round_number: int,
         model_name: str = "price_prior_v1",
         league: str | League | None = None,
+        raise_on_missing: bool = True,
     ) -> list[PlayerProjectionContract]:
         """Retrieve all projection contracts as a list."""
-        contracts_dict = self.get_projections_dict(season, round_number, model_name, league=league)
+        contracts_dict = self.get_projections_dict(
+            season, round_number, model_name, league=league, raise_on_missing=raise_on_missing
+        )
         return list(contracts_dict.values())
 
     def get_player_projection(
@@ -66,7 +75,7 @@ class PredictionService:
         league: str | League | None = None,
     ) -> PlayerProjectionContract | None:
         """Retrieve single player projection contract."""
-        contracts = self.get_projections_dict(season, round_number, model_name, league=league)
+        contracts = self.get_projections_dict(season, round_number, model_name, league=league, raise_on_missing=False)
         return contracts.get(int(player_id))
 
     def get_player_valuations(
@@ -78,7 +87,10 @@ class PredictionService:
         league: str | League | None = None,
     ) -> dict[int, dict[str, Any]]:
         """Compute advanced valuation metrics: PAR, credit efficiency, and risk-adjusted score."""
-        contracts = self.get_projections(season, round_number, model_name, league=league)
+        try:
+            contracts = self.get_projections(season, round_number, model_name, league=league, raise_on_missing=False)
+        except NoSnapshotForRoundError:
+            return {}
         if not contracts:
             return {}
 

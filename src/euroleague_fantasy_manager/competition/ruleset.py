@@ -249,8 +249,8 @@ _RULESETS: dict[League, CompetitionRuleset] = {
 }
 
 
-def get_league_ruleset(league: League | str | None = None) -> CompetitionRuleset:
-    """Retrieve active fallback ruleset for a given league (defaults to EuroLeague if None)."""
+def get_base_ruleset(league: League | str | None = None) -> CompetitionRuleset:
+    """Retrieve static fallback ruleset for a given league (defaults to EuroLeague if None)."""
     l_enum = League.EUROLEAGUE if league is None else League.from_str(league)
     return _RULESETS[l_enum]
 
@@ -261,7 +261,17 @@ def resolve_ruleset(
     snapshot_id: int | None = None,
 ) -> CompetitionRuleset:
     """Resolve ruleset against stored official config if available, otherwise returning base fallback ruleset."""
-    base = get_league_ruleset(league)
+    base = get_base_ruleset(league)
+    if db_path is None:
+        try:
+            from euroleague_fantasy_manager import paths
+
+            default_db = paths.database_path()
+            if default_db.is_file():
+                db_path = default_db
+        except Exception:
+            pass
+
     if db_path is None:
         return base
 
@@ -297,6 +307,11 @@ def resolve_ruleset(
     if diffs:
         logger.warning("Official config overrides fallback ruleset: %s", ", ".join(diffs))
     return merged
+
+
+def get_league_ruleset(league: League | str | None = None) -> CompetitionRuleset:
+    """Retrieve active ruleset for a given league (defaults to EuroLeague if None), resolving from DB if available."""
+    return resolve_ruleset(league=league)
 
 
 def is_unlimited_trade_round(round_number: int, ruleset: CompetitionRuleset) -> bool:

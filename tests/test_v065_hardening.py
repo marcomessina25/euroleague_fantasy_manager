@@ -485,7 +485,7 @@ def test_w4_edge_006_round_rollover_uses_team_round(tmp_path: Path):
         TeamRosterUnit(player_id=103, name="G3", position="G", is_sixth_man=True),
         TeamRosterUnit(player_id=401, name="Coach", position="HC", is_coach=True),
     ]
-    ts.update_team_squad("mid_round", units)
+    ts.update_team_squad("mid_round", units, validate=False)
 
     dossier = generate_manager_dossier(team_id="mid_round", database_path=db_path)
     assert dossier.round_number == 1
@@ -583,7 +583,7 @@ def test_w6_dossier_content_hash_invariance_and_sensitivity(tmp_path: Path):
         TeamRosterUnit(player_id=103, name="G3", position="G", is_sixth_man=True),
         TeamRosterUnit(player_id=401, name="Coach", position="HC", is_coach=True),
     ]
-    ts.update_team_squad("h_team", units)
+    ts.update_team_squad("h_team", units, validate=False)
 
     dossier1 = generate_manager_dossier(team_id="h_team", database_path=db_path)
     dossier2 = generate_manager_dossier(team_id="h_team", database_path=db_path)

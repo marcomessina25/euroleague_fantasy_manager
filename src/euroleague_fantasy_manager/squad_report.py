@@ -36,15 +36,20 @@ def generate_squad_report(
     store = SnapshotStore(database_path)
     eff_league_id = league_id if league_id is not None else getattr(state, "league_id", None)
     active_round = round_number if round_number is not None else (state.round_number or get_current_round(store, league_id=eff_league_id))
-    snap = (
-        store.get_snapshot_for_round(
+    snap = None
+    if active_round is not None:
+        snap = store.get_snapshot_for_round(
             league_id=eff_league_id,
             season_code=getattr(state, "season", None),
             round_number=active_round,
         )
-        if active_round is not None
-        else store.get_latest_summary(league_id=eff_league_id)
-    )
+        if snap is None:
+            snap = store.get_snapshot_for_round(
+                league_id=eff_league_id,
+                round_number=active_round,
+            )
+    if snap is None:
+        snap = store.get_latest_summary(league_id=eff_league_id)
     if snap is not None:
         all_players = store.load_players_for_snapshot(snap.snapshot_id)
     else:

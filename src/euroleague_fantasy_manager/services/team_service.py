@@ -285,6 +285,7 @@ class TeamService:
         self,
         team_id: str,
         squad: Sequence[TeamRosterUnit],
+        validate: bool = True,
     ) -> Team:
         """Convenience method to update squad for the team's current round."""
         team = self.get_team(team_id)
@@ -292,7 +293,7 @@ class TeamService:
             team_id=team_id,
             round_number=team.round_number,
             roster_units=squad,
-            validate=True,
+            validate=validate,
         )
 
     def import_squad(

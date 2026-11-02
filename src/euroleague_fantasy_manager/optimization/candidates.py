@@ -61,26 +61,12 @@ class CandidateGenerator:
         # Filter out players already in squad
         eligible = [p for p in market if p.player_id not in squad_ids]
 
-        if exhaustive:
-            guards = tuple(p for p in eligible if p.position == Position.GUARD)
-            forwards = tuple(p for p in eligible if p.position == Position.FORWARD)
-            centers = tuple(p for p in eligible if p.position == Position.CENTER)
-            coaches = tuple(p for p in eligible if p.position == Position.HEAD_COACH)
-            return CandidatePool(
-                guards=guards,
-                forwards=forwards,
-                centers=centers,
-                coaches=coaches,
-                is_exhaustive=True,
-                total_candidates=len(eligible),
-            )
-
-        # Non-exhaustive: measure and filter
+        # Measure and filter
         replacements = compute_positional_replacement_levels(eligible)
 
         by_pos: dict[Position, list[PlayerProjectionContract]] = defaultdict(list)
         for p in eligible:
-            if p.probability_play < self.min_probability_play:
+            if not exhaustive and p.probability_play < self.min_probability_play:
                 continue
             by_pos[p.position].append(p)
 
@@ -92,12 +78,6 @@ class CandidateGenerator:
 
         filtered: dict[Position, list[PlayerProjectionContract]] = {}
         for pos, players in by_pos.items():
-            limit = self.max_candidates_per_pos
-            if pos == Position.CENTER:
-                limit = min(limit, max(4, limit // 2))
-            elif pos == Position.HEAD_COACH:
-                limit = min(limit, max(2, limit // 2))
-
             sorted_players = sorted(
                 players,
                 key=lambda x: (
@@ -109,7 +89,15 @@ class CandidateGenerator:
                 ),
                 reverse=True,
             )
-            filtered[pos] = sorted_players[:limit]
+            if exhaustive:
+                filtered[pos] = sorted_players
+            else:
+                limit = self.max_candidates_per_pos
+                if pos == Position.CENTER:
+                    limit = min(limit, max(4, limit // 2))
+                elif pos == Position.HEAD_COACH:
+                    limit = min(limit, max(2, limit // 2))
+                filtered[pos] = sorted_players[:limit]
 
         g = tuple(filtered.get(Position.GUARD, []))
         f = tuple(filtered.get(Position.FORWARD, []))
@@ -122,6 +110,6 @@ class CandidateGenerator:
             forwards=f,
             centers=c,
             coaches=hc,
-            is_exhaustive=False,
+            is_exhaustive=exhaustive,
             total_candidates=total,
         )

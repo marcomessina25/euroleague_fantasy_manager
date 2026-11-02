@@ -67,7 +67,7 @@ def import_squad_from_file(
             "unlimited_windows_remaining": sorted(resolve_ruleset(league_id).unlimited_trade_rounds),
         }
 
-    lines = players_path.read_text(encoding="utf-8").splitlines()
+    lines = resolved_players_path.read_text(encoding="utf-8").splitlines()
 
     imported_units: list[dict[str, Any]] = []
     for line in lines:

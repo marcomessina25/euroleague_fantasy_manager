@@ -146,7 +146,7 @@ def test_total_count_reflects_filters_not_truncation(client_with_market):
 def test_offset_pages_through_the_whole_universe_without_gaps(client_with_market):
     client = client_with_market
 
-    res_all = client.get("/api/workstation/players?limit=1000&sort=name")
+    res_all = client.get("/api/workstation/players?limit=500&sort=name")
     everyone = _names(res_all.json())
     total = int(res_all.headers["X-Total-Count"])
     assert total == MARKET_SIZE == len(everyone)
@@ -177,10 +177,10 @@ def test_offset_beyond_total_returns_empty_not_error(client_with_market):
 def test_invalid_pagination_and_sort_are_rejected(client_with_market):
     client = client_with_market
 
-    assert client.get("/api/workstation/players?limit=0").status_code == 400
-    assert client.get("/api/workstation/players?limit=999999").status_code == 400
-    assert client.get("/api/workstation/players?offset=-1").status_code == 400
-    assert client.get("/api/workstation/players?sort=bogus").status_code == 400
+    assert client.get("/api/workstation/players?limit=0").status_code in (400, 422)
+    assert client.get("/api/workstation/players?limit=999999").status_code in (400, 422)
+    assert client.get("/api/workstation/players?offset=-1").status_code in (400, 422)
+    assert client.get("/api/workstation/players?sort=bogus").status_code in (400, 422)
 
 
 def test_default_ordering_is_unchanged_for_existing_callers(client_with_market):

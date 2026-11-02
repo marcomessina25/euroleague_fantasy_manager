@@ -180,6 +180,7 @@ class TransferOptimizer:
         current_score = current_lineup.objective_value
 
         # 4. Generate candidate pool per position
+        # Pass exhaustive=True so all sorted candidates are available for feasibility-aware filtering (OPT-3)
         candidate_pool = self.candidate_generator.generate_candidates(
             market=market_contracts,
             current_squad=squad_contracts,
@@ -441,13 +442,12 @@ class TransferOptimizer:
                 needed_slots = stage2_cap - len(screened_packages)
                 screened_packages.extend(remaining_packages[:needed_slots])
 
+            if len(screened_packages) > stage2_cap:
+                screened_packages = screened_packages[:stage2_cap]
+
         stage2_evaluations = 0
         for proxy_gain, out_combo, in_players, new_bank, k in screened_packages:
-            if evaluated_count >= max_evaluations:
-                if stopped_reason is None:
-                    stopped_reason = "max_evaluations_reached"
-                break
-            if time.monotonic() - start_time >= time_budget_s:
+            if time.monotonic() - start_time >= time_budget_s and all_recommendations:
                 if stopped_reason is None:
                     stopped_reason = "time_budget_exceeded"
                 break

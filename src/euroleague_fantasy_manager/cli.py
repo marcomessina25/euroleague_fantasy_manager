@@ -135,6 +135,25 @@ def resolve_command_league(
     return league
 
 
+def _resolve_eval_db(args: argparse.Namespace) -> Path:
+    if getattr(args, "eval_db", None) is not None:
+        return args.eval_db
+    default_prod = paths.database_path().resolve()
+    if getattr(args, "db", None) is not None and Path(args.db).resolve() != default_prod:
+        return Path(args.db)
+    return paths.elf_home() / "data" / "eval.sqlite3"
+
+
+def _resolve_cli_team_id(pos_id: str | None, flag_id: str | None, required: bool = True) -> str | None:
+    """Normalize target team ID resolution, rejecting conflicting values."""
+    if pos_id and flag_id and pos_id != flag_id:
+        raise ValueError(f"Conflicting team IDs provided: positional '{pos_id}' vs --id '{flag_id}'.")
+    resolved = pos_id or flag_id
+    if required and not resolved:
+        raise ValueError("Team ID required.")
+    return resolved
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="elf",
@@ -714,6 +733,7 @@ def build_parser() -> argparse.ArgumentParser:
     t_import_squad.add_argument("--file", type=Path, default=DEFAULT_PLAYERS_PATH, help="Path to players.txt.")
 
     t_show = team_sub.add_parser("show", help="Show team details and squad.")
+    t_show.add_argument("pos_id", nargs="?", default=None, help="Team ID (default: active team).")
     t_show.add_argument("--id", type=str, default=None, help="Team ID (default: active team).")
     t_show.add_argument("--json", action="store_true", help="Output JSON payload.")
 
@@ -1023,7 +1043,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "predict":
         norm_season = normalize_season_code(args.season)
-        eval_db = getattr(args, "eval_db", None) or args.db
+        eval_db = _resolve_eval_db(args)
         if _is_production_db(eval_db) and not getattr(args, "allow_synthetic", False):
             try:
                 import sqlite3
@@ -1092,7 +1112,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             model_list = [m.strip() for m in str(args.models).split(",") if m.strip()]
         target_seasons = args.seasons if args.seasons else args.season
-        eval_db = getattr(args, "eval_db", None) or args.db
+        eval_db = _resolve_eval_db(args)
         store_eval = EvaluationDatasetStore(eval_db)
         t_seasons = [normalize_season_code(s) for s in (args.seasons if args.seasons else [args.season])]
         missing_seasons = [s for s in t_seasons if s not in store_eval.list_seasons()]
@@ -1225,7 +1245,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         if args.opt_command == "backtest":
-            eval_db = getattr(args, "eval_db", None) or args.db
+            eval_db = _resolve_eval_db(args)
             store_eval = EvaluationDatasetStore(eval_db)
             if norm_season not in store_eval.list_seasons():
                 if _is_production_db(eval_db) and not getattr(args, "allow_synthetic", False):
@@ -1560,17 +1580,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 1
 
         if args.team_command == "show":
-            target_id = args.id
+            try:
+                target_id = _resolve_cli_team_id(getattr(args, "pos_id", None), getattr(args, "id", None), required=False)
+            except ValueError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                return 1
             if not target_id:
                 act = ts.get_active_team()
                 if not act:
-                    print("No active team found.")
+                    print("No active team found.", file=sys.stderr)
                     return 1
                 target_id = act.team_id
             try:
                 team = ts.get_team(target_id)
             except KeyError:
-                print(f"Team '{target_id}' not found.")
+                print(f"Team '{target_id}' not found.", file=sys.stderr)
                 return 1
             if getattr(args, "json", False):
                 print(json.dumps(team.to_dict(), indent=2, ensure_ascii=False))
@@ -1591,22 +1615,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         if args.team_command == "select":
-            target_id = args.id or getattr(args, "pos_id", None)
-            if not target_id:
-                print("Error: Team ID required.")
+            try:
+                target_id = _resolve_cli_team_id(getattr(args, "pos_id", None), getattr(args, "id", None), required=True)
+            except ValueError as e:
+                print(f"Error: {e}", file=sys.stderr)
                 return 1
             try:
                 ts.set_active_team(target_id)
                 print(f"Active team set to '{target_id}'")
                 return 0
             except KeyError:
-                print(f"Team '{target_id}' not found.")
+                print(f"Team '{target_id}' not found.", file=sys.stderr)
                 return 1
 
         if args.team_command == "delete":
-            target_id = args.id or getattr(args, "pos_id", None)
-            if not target_id:
-                print("Error: Team ID required.")
+            try:
+                target_id = _resolve_cli_team_id(getattr(args, "pos_id", None), getattr(args, "id", None), required=True)
+            except ValueError as e:
+                print(f"Error: {e}", file=sys.stderr)
                 return 1
             deleted = ts.delete_team(target_id)
             if deleted:
