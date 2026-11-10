@@ -1532,8 +1532,22 @@ function toggleTradeOut(pid, name, credits) {
   updateTradeStudioUI();
 }
 
+function toggleTradeIn(pid, name, credits) {
+  const idx = tradeStudioState.transfersIn.findIndex((x) => x.id === pid);
+  if (idx >= 0) {
+    tradeStudioState.transfersIn.splice(idx, 1);
+  } else {
+    const inSquad = tradeStudioState.currentSquad.some((x) => x.player_id === pid);
+    if (inSquad) {
+      alert("Player is already in your squad!");
+      return;
+    }
+    tradeStudioState.transfersIn.push({ id: pid, name: name, credits: credits });
+  }
+  updateTradeStudioUI();
+}
+
 function addTradeIn(pid, name, credits) {
-  // Check if already in squad and not being traded out
   const inSquad = tradeStudioState.currentSquad.some((x) => x.player_id === pid);
   if (inSquad) {
     alert("Player is already in your squad!");
@@ -1641,6 +1655,35 @@ function updateTradeStudioUI() {
   if (execBtn) {
     execBtn.disabled = !isValid;
   }
+  updatePlayerPoolActionButtons();
+}
+
+function updatePlayerPoolActionButtons() {
+  const tbody = document.getElementById("player-pool-tbody");
+  if (!tbody) return;
+  const buttons = tbody.querySelectorAll("button[data-player-id]");
+  buttons.forEach((btn) => {
+    const pid = Number(btn.dataset.playerId);
+    if (!pid) return;
+    const isIn = tradeStudioState.transfersIn.some((x) => x.id === pid);
+    if (isIn) {
+      btn.className = "btn btn-secondary";
+      btn.style.padding = "0.2rem 0.5rem";
+      btn.style.fontSize = "0.75rem";
+      btn.style.color = "var(--accent-green)";
+      btn.style.borderColor = "var(--accent-green)";
+      btn.dataset.action = "toggle-trade-in";
+      btn.textContent = "✓ Selected (In)";
+    } else {
+      btn.className = "btn btn-primary";
+      btn.style.padding = "0.2rem 0.5rem";
+      btn.style.fontSize = "0.75rem";
+      btn.style.color = "";
+      btn.style.borderColor = "";
+      btn.dataset.action = "toggle-trade-in";
+      btn.textContent = "+ Buy";
+    }
+  });
 }
 
 function onStrategyPresetChange() {
@@ -1840,9 +1883,9 @@ async function loadPlayerPool(opts) {
         if (inSquad) {
           actionBtn = `<span style="font-size:0.75rem; color:var(--text-muted); font-style:italic;">In Squad</span>`;
         } else if (isIn) {
-          actionBtn = `<button class="btn btn-secondary" style="padding:0.2rem 0.5rem; font-size:0.75rem; color:var(--accent-green); border-color:var(--accent-green);" data-action="remove-trade-in" data-player-id="${p.player_id}">✓ In (Remove)</button>`;
+          actionBtn = `<button class="btn btn-secondary" style="padding:0.2rem 0.5rem; font-size:0.75rem; color:var(--accent-green); border-color:var(--accent-green);" data-action="toggle-trade-in" data-player-id="${p.player_id}" data-player-name="${escapeHtml(p.name)}" data-player-credits="${p.credits}">✓ Selected (In)</button>`;
         } else {
-          actionBtn = `<button class="btn btn-primary" style="padding:0.2rem 0.5rem; font-size:0.75rem;" data-action="add-trade-in" data-player-id="${p.player_id}" data-player-name="${escapeHtml(p.name)}" data-player-credits="${p.credits}">+ Buy</button>`;
+          actionBtn = `<button class="btn btn-primary" style="padding:0.2rem 0.5rem; font-size:0.75rem;" data-action="toggle-trade-in" data-player-id="${p.player_id}" data-player-name="${escapeHtml(p.name)}" data-player-credits="${p.credits}">+ Buy</button>`;
         }
 
         let badgesHtml = "";
@@ -3077,6 +3120,8 @@ document.addEventListener("click", (e) => {
       const rec = tradeStudioState.currentRecommendations[idx];
       applySuggestedTrade(rec.transfers_out_details, rec.transfers_in_details);
     }
+  } else if (action === "toggle-trade-in") {
+    toggleTradeIn(Number(el.dataset.playerId), el.dataset.playerName, Number(el.dataset.playerCredits));
   } else if (action === "add-trade-in") {
     addTradeIn(Number(el.dataset.playerId), el.dataset.playerName, Number(el.dataset.playerCredits));
   } else if (action === "trigger-update-data") {
