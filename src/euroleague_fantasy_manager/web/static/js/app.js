@@ -2096,6 +2096,21 @@ async function onTeamBuilderLeagueChange() {
   teamBuilderState.selectedPlayers = [];
   teamBuilderState.recommendedPlayerIds = [];
   hideTeamBuilderDropdown();
+
+  // Update round input to target league's active current round
+  const roundInput = document.getElementById("tb-team-round");
+  try {
+    const crRes = await fetch(`/api/workstation/current-round?league=${encodeURIComponent(teamBuilderLeague())}`);
+    if (crRes.ok) {
+      const crData = await crRes.json();
+      if (roundInput && crData.current_round) {
+        roundInput.value = crData.current_round;
+      }
+    }
+  } catch (e) {
+    // Keep existing value
+  }
+
   await loadTeamBuilderPool();
   updateTeamBuilderUI();
 }

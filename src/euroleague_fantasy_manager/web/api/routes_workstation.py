@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field, confloat, conint
 
 from euroleague_fantasy_manager.competition.ruleset import League, get_league_ruleset
-from euroleague_fantasy_manager.models import ModelUnavailableError, Position
+from euroleague_fantasy_manager.models import ModelUnavailableError, NoSnapshotForRoundError, Position
 from euroleague_fantasy_manager.multi_team.models import TeamRosterUnit
 from euroleague_fantasy_manager.optimization.ownership_strategy import (
     classify_ownership_archetype,
@@ -763,8 +763,12 @@ def list_players_endpoint(
             detail=f"sort must be one of: {', '.join(sorted(PLAYER_SORT_KEYS))}.",
         )
 
-    contracts = prediction_service.get_projections(season, round_number, league=league.value)
-    valuations = prediction_service.get_player_valuations(season, round_number, league=league.value)
+    try:
+        contracts = prediction_service.get_projections(season, round_number, league=league.value)
+        valuations = prediction_service.get_player_valuations(season, round_number, league=league.value)
+    except NoSnapshotForRoundError:
+        response.headers["X-Total-Count"] = "0"
+        return []
 
     ownership_map: dict[int, float] = {}
     try:
@@ -975,6 +979,11 @@ def suggest_initial_team_endpoint(
             locked_player_ids=req.locked_player_ids,
             league=norm_league.value,
         )
+    except NoSnapshotForRoundError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No snapshot found for league '{norm_league.value}' in round {req.round_number}. Please update data first.",
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -995,7 +1004,13 @@ def player_intel_endpoint(
         raise HTTPException(status_code=400, detail=f"Invalid round_number: {round_number} is out of bounds (1..38).")
 
     rnd = round_number or 1
-    contracts = prediction_service.get_projections(season, rnd, league=league.value)
+    try:
+        contracts = prediction_service.get_projections(season, rnd, league=league.value)
+    except NoSnapshotForRoundError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No snapshot found for league '{league.value}' in round {rnd}.",
+        )
     if not contracts:
         raise HTTPException(
             status_code=404,

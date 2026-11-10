@@ -134,7 +134,13 @@ def create_team(
         contracts: list[PlayerProjectionContract] = []
 
         if req.player_ids:
-            proj_dict = prediction_service.get_projections_dict(req.season, round_num, league=league)
+            try:
+                proj_dict = prediction_service.get_projections_dict(req.season, round_num, league=league)
+            except NoSnapshotForRoundError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"No snapshot found for league '{league}' in round {round_num}. Please click 'Update Data' to fetch live data first.",
+                )
             missing = [pid for pid in req.player_ids if pid not in proj_dict]
             if missing:
                 raise HTTPException(
