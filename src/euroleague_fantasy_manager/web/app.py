@@ -61,6 +61,8 @@ def create_app(db_path: str | Path = "data/euroleague.sqlite3") -> FastAPI:
                 if not ct.startswith("application/json") and not ct.startswith("multipart/form-data"):
                     return Response("Content-Type must be application/json", status_code=415)
         response = await call_next(request)
+        response.headers.setdefault("Cache-Control", "no-cache, no-store, must-revalidate")
+        response.headers.setdefault("Pragma", "no-cache")
         response.headers.setdefault(
             "Content-Security-Policy",
             "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'",
