@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>EuroLeague Fantasy Workstation</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏀</text></svg>">
   <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
@@ -19,8 +20,8 @@
     <div class="header-controls">
       <!-- Competition Switcher (EuroLeague / EuroCup) -->
       <div class="comp-switcher" id="competition-switcher" title="Toggle between EuroLeague and EuroCup Fantasy Competitions">
-        <button id="btn-comp-euroleague" class="comp-toggle-btn active" onclick="switchCompetition('euroleague')">EuroLeague</button>
-        <button id="btn-comp-eurocup" class="comp-toggle-btn" onclick="switchCompetition('eurocup')">EuroCup</button>
+        <button id="btn-comp-euroleague" class="comp-toggle-btn active" >EuroLeague</button>
+        <button id="btn-comp-eurocup" class="comp-toggle-btn" >EuroCup</button>
       </div>
 
       <!-- Team Profile Tabs (up to 6) -->
@@ -54,7 +55,7 @@
       </div>
 
       <!-- Live API Update Button -->
-      <button class="btn btn-secondary" id="btn-update-data" onclick="triggerUpdateData()" title="Query the Fantasy API to update the live snapshot and player values for the active team's league" style="padding:0.4rem 0.8rem; font-size:0.8rem; white-space:nowrap; display:flex; align-items:center; gap:0.4rem;">
+      <button class="btn btn-secondary" id="btn-update-data"  title="Query the Fantasy API to update the live snapshot and player values for the active team's league" style="padding:0.4rem 0.8rem; font-size:0.8rem; white-space:nowrap; display:flex; align-items:center; gap:0.4rem;">
         <span id="update-spinner" style="display:none;">⏳</span>
         <span id="update-icon">🔄</span>
         <span id="update-text">Update Data</span>
@@ -83,7 +84,7 @@
             <h2>🏀 Starting Five (Court Layout)</h2>
             <div style="display:flex; align-items:center; gap:0.6rem;">
               <label for="lineup-round-select" style="font-size:0.8rem; color:var(--text-muted);">Round</label>
-              <select id="lineup-round-select" onchange="onLineupRoundChange()" title="View or backfill a past round" style="padding:0.25rem 0.5rem; font-size:0.8rem;">
+              <select id="lineup-round-select"  title="View or backfill a past round" style="padding:0.25rem 0.5rem; font-size:0.8rem;">
                 <!-- Populated by JS from /api/teams/{id}/rounds -->
               </select>
               <span id="lineup-round-mode" style="font-size:0.75rem; color:var(--accent-orange); font-weight:700;"></span>
@@ -100,7 +101,7 @@
                 <span id="sub-source-name" style="color:var(--accent-blue); font-weight:700;"></span>.
               </span>
             </div>
-            <button class="btn btn-secondary btn-sm" onclick="cancelSubstitution()" style="padding:0.25rem 0.6rem; font-size:0.8rem;">✕ Cancel</button>
+            <button id="btn-cancel-sub" class="btn btn-secondary btn-sm" style="padding:0.25rem 0.6rem; font-size:0.8rem;">✕ Cancel</button>
           </div>
 
           <div class="court-container">
@@ -140,8 +141,8 @@
               </select>
             </div>
             <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
-              <button class="btn btn-primary" onclick="triggerOptimizeLineup()" style="flex:1;">🚀 Run Optimizer</button>
-              <button class="btn btn-secondary" id="btn-undo-optimizer" onclick="undoLineupOptimization()" style="display:none; padding:0.4rem 0.8rem; font-size:0.8rem;" title="Restore previous lineup prior to optimization">↩ Undo</button>
+              <button id="btn-run-optimizer" class="btn btn-primary" style="flex:1;">🚀 Run Optimizer</button>
+              <button class="btn btn-secondary" id="btn-undo-optimizer"  style="display:none; padding:0.4rem 0.8rem; font-size:0.8rem;" title="Restore previous lineup prior to optimization">↩ Undo</button>
             </div>
           </div>
 
@@ -162,7 +163,7 @@
       <div class="card">
         <div class="card-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
           <h2>🔄 Intra-Round Substitution Simulator</h2>
-          <button class="btn btn-primary" onclick="runIntraRoundSimulator()" id="btn-run-intra-sub">
+          <button class="btn btn-primary"  id="btn-run-intra-sub">
             ⚡ Calculate Optimal Substitutions
           </button>
         </div>
@@ -203,24 +204,24 @@
         <div class="card-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
           <h2>💼 Trade Studio & Transfer Manager</h2>
           <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
-            <button class="btn btn-secondary" onclick="confirmRevertRoundStart()" id="btn-revert-round-start" title="Reset all transfers and substitutions back to the round start baseline" style="font-size:0.8rem; padding:0.4rem 0.8rem; border-color:rgba(239, 68, 68, 0.4); color:var(--accent-red);">
+            <button class="btn btn-secondary"  id="btn-revert-round-start" title="Reset all transfers and substitutions back to the round start baseline" style="font-size:0.8rem; padding:0.4rem 0.8rem; border-color:rgba(239, 68, 68, 0.4); color:var(--accent-red);">
               ↺ Revert to Round Start
             </button>
             <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.85rem; font-weight:600; cursor:pointer;">
-              <input type="checkbox" id="unlimited-window-toggle" onchange="onUnlimitedToggleChange()"> 🌟 Unlimited Trade Window
+              <input type="checkbox" id="unlimited-window-toggle" > 🌟 Unlimited Trade Window
             </label>
             <div style="display:flex; align-items:center; gap:0.35rem;">
               <span style="font-size:0.8rem; font-weight:600; color:var(--text-muted);">Strategy:</span>
-              <select id="ts-strategy-preset" onchange="onStrategyPresetChange()" style="font-size:0.8rem; padding:0.35rem 0.6rem; background:var(--bg-secondary); border:1px solid var(--border-color); color:var(--text-primary); border-radius:4px; font-weight:600;">
+              <select id="ts-strategy-preset"  style="font-size:0.8rem; padding:0.35rem 0.6rem; background:var(--bg-secondary); border:1px solid var(--border-color); color:var(--text-primary); border-radius:4px; font-weight:600;">
                 <option value="balanced_value" selected>⚖️ Balanced Value</option>
                 <option value="rank_protect">🛡️ Rank Protect</option>
                 <option value="rank_chase">⚔️ Rank Chase</option>
               </select>
             </div>
-            <button class="btn btn-secondary" onclick="triggerSuggestTransfers()" id="btn-suggest-trades" style="font-size:0.8rem; padding:0.4rem 0.8rem;">
+            <button class="btn btn-secondary"  id="btn-suggest-trades" style="font-size:0.8rem; padding:0.4rem 0.8rem;">
               ⚡ Suggest Transfers
             </button>
-            <button class="btn btn-primary" onclick="submitExecuteTransfers()" id="btn-execute-trades" style="font-size:0.8rem; padding:0.4rem 0.8rem;" disabled>
+            <button class="btn btn-primary"  id="btn-execute-trades" style="font-size:0.8rem; padding:0.4rem 0.8rem;" disabled>
               ✓ Execute Transfers (<span id="trades-count-badge">0</span>)
             </button>
           </div>
@@ -291,21 +292,21 @@
             <div class="card-header" style="display:flex; justify-content:space-between; align-items:center; padding-bottom:0.4rem; border-bottom:1px solid var(--border-color); flex-wrap:wrap; gap:0.4rem;">
               <h3 style="font-size:0.9rem;">2. Market Browser (Select to Buy / In)</h3>
               <div style="display:flex; gap:0.5rem;">
-                <select id="market-filter-pos" onchange="loadPlayerPool()" style="padding:0.25rem 0.5rem; font-size:0.8rem;">
+                <select id="market-filter-pos" style="padding:0.25rem 0.5rem; font-size:0.8rem;">
                   <option value="">All Pos</option>
                   <option value="G">Guard (G)</option>
                   <option value="F">Forward (F)</option>
                   <option value="C">Center (C)</option>
                   <option value="HC">Coach (HC)</option>
                 </select>
-                <select id="market-filter-sort" onchange="loadPlayerPool()" title="Ordering of the market list" style="padding:0.25rem 0.5rem; font-size:0.8rem;">
+                <select id="market-filter-sort" title="Ordering of the market list" style="padding:0.25rem 0.5rem; font-size:0.8rem;">
                   <option value="expected_fp">Exp FP ↓</option>
                   <option value="fp_per_credit">FP / Credit ↓</option>
                   <option value="price_desc">Price ↓</option>
                   <option value="price_asc">Price ↑ (cheapest)</option>
                   <option value="name">Name A–Z</option>
                 </select>
-                <input type="text" id="market-filter-search" placeholder="Search..." oninput="loadPlayerPool()" style="padding:0.25rem 0.5rem; font-size:0.8rem; width:130px;">
+                <input type="text" id="market-filter-search" placeholder="Search..." style="padding:0.25rem 0.5rem; font-size:0.8rem; width:130px;">
               </div>
             </div>
             <div style="overflow-x:auto; margin-top:0.5rem; max-height:480px; overflow-y:auto;">
@@ -328,8 +329,8 @@
             <div style="display:flex; justify-content:space-between; align-items:center; gap:0.5rem; margin-top:0.5rem; padding-top:0.4rem; border-top:1px solid var(--border-color);">
               <span id="player-pool-count" style="font-size:0.75rem; color:var(--text-muted);"></span>
               <div style="display:flex; gap:0.35rem;">
-                <button id="player-pool-prev" class="btn btn-secondary" style="padding:0.2rem 0.55rem; font-size:0.75rem;" onclick="playerPoolPrevPage()">← Prev</button>
-                <button id="player-pool-next" class="btn btn-secondary" style="padding:0.2rem 0.55rem; font-size:0.75rem;" onclick="playerPoolNextPage()">Next →</button>
+                <button id="player-pool-prev" class="btn btn-secondary" style="padding:0.2rem 0.55rem; font-size:0.75rem;">← Prev</button>
+                <button id="player-pool-next" class="btn btn-secondary" style="padding:0.2rem 0.55rem; font-size:0.75rem;">Next →</button>
               </div>
             </div>
           </div>
@@ -359,7 +360,7 @@
             <label>Discount Factor (γ)</label>
             <input type="number" step="0.05" min="0.5" max="1.0" value="0.95" id="mr-gamma">
           </div>
-          <button class="btn btn-primary" onclick="triggerMultiRound()">🚀 Run Multi-Round Planner</button>
+          <button id="btn-run-multi-round" class="btn btn-primary">🚀 Run Multi-Round Planner</button>
         </div>
 
         <div id="multi-round-steps" style="margin-top:1.5rem;">
@@ -439,7 +440,7 @@
           </div>
         </div>
 
-        <button class="btn btn-primary" style="margin-top:1rem;" onclick="triggerScenario()">🔬 Run What-If Simulation</button>
+        <button id="btn-run-scenario" class="btn btn-primary" style="margin-top:1rem;">🔬 Run What-If Simulation</button>
         <div id="scenario-results" class="card" style="display:none; margin-top:1rem; border-color:var(--accent-purple);"></div>
       </div>
     </section>
@@ -474,7 +475,7 @@
 
           <div class="form-group">
             <label for="copilot-provider">LLM Provider</label>
-            <select id="copilot-provider" class="form-control" onchange="onProviderSelected()">
+            <select id="copilot-provider" class="form-control">
               <option value="heuristic" selected>Heuristic (100% Offline Fallback)</option>
               <option value="auto">Auto (First Configured Provider)</option>
               <option value="gemini">Google Gemini</option>
@@ -487,7 +488,7 @@
 
           <div class="form-group">
             <label for="copilot-model">Sub-Model</label>
-            <select id="copilot-model" class="form-control" onchange="onCopilotModelChanged()">
+            <select id="copilot-model" class="form-control">
               <option value="">(default)</option>
             </select>
           </div>
@@ -497,12 +498,12 @@
             <div style="display:flex; gap:0.35rem;">
               <input type="password" id="copilot-api-key" class="form-control" style="flex:1;"
                      placeholder="Paste provider API key" autocomplete="off" spellcheck="false"
-                     oninput="onCopilotApiKeyInput()">
+                     >
               <button type="button" class="btn btn-secondary" id="copilot-api-key-toggle"
-                      onclick="toggleCopilotApiKeyVisibility()" title="Show/hide key" style="padding:0.45rem 0.65rem;">👁️</button>
+                       title="Show/hide key" style="padding:0.45rem 0.65rem;">👁️</button>
             </div>
             <label style="font-size:0.75rem; margin-top:0.35rem; display:flex; align-items:center; gap:0.35rem;">
-              <input type="checkbox" id="copilot-remember-key" onchange="onCopilotRememberKeyChange()">
+              <input type="checkbox" id="copilot-remember-key">
               Remember key on this device
             </label>
             <span id="copilot-remember-warning" style="display:none; font-size:0.7rem; color:var(--accent-amber); margin-top:0.2rem;">⚠️ Warning: Key will be stored unencrypted in browser localStorage.</span>
@@ -519,7 +520,7 @@
           </div>
 
           <div style="display:flex; gap:0.5rem;">
-            <button class="btn btn-primary" id="btn-run-intelligence" onclick="triggerCopilotAdvise()" style="white-space:nowrap; padding:0.55rem 1.25rem;">
+            <button class="btn btn-primary" id="btn-run-intelligence" style="white-space:nowrap; padding:0.55rem 1.25rem;">
               <span id="intel-spinner" style="display:none;">⏳</span>
               <span id="intel-icon">⚡</span>
               <span id="intel-btn-text">Generate Intelligence</span>
@@ -581,7 +582,7 @@
               <h3>💬 Copilot Strategic Briefing</h3>
               <div style="display:flex; gap:0.5rem; align-items:center;">
                 <span class="badge" id="copilot-meta-badge" style="font-size:0.75rem;">Ready</span>
-                <button class="btn btn-secondary btn-sm" onclick="copyCopilotAdvice()" title="Copy advice text" style="padding:0.25rem 0.6rem; font-size:0.8rem;">
+                <button id="btn-copy-advice" class="btn btn-secondary btn-sm" title="Copy advice text" style="padding:0.25rem 0.6rem; font-size:0.8rem;">
                   📋 Copy
                 </button>
               </div>
@@ -629,29 +630,29 @@ All advice is grounded strictly in the deterministic Manager Dossier with guaran
       <div class="modal-content card">
         <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
           <h2>🏀 Initial Team Builder</h2>
-          <button class="btn btn-icon" onclick="closeTeamBuilderModal()" style="font-size:1.2rem; background:transparent; border:none; color:var(--text-muted); cursor:pointer;">✕</button>
+          <button id="tb-btn-close-modal" class="btn btn-icon" style="font-size:1.2rem; background:transparent; border:none; color:var(--text-muted); cursor:pointer;">✕</button>
         </div>
 
         <!-- Team Name, League, Round, Credits & Budget Bar -->
         <div style="display:grid; grid-template-columns: 1fr 140px 90px 100px 1.5fr; gap:0.75rem; margin-top:1rem; align-items:center;">
           <div class="form-group">
             <label for="tb-team-name">Team Name *</label>
-            <input type="text" id="tb-team-name" placeholder="e.g. Panathinaikos Elite" maxlength="32" oninput="updateTeamBuilderUI()">
+            <input type="text" id="tb-team-name" placeholder="e.g. Panathinaikos Elite" maxlength="32">
           </div>
           <div class="form-group">
             <label for="tb-team-league">League</label>
-            <select id="tb-team-league" onchange="onTeamBuilderLeagueChange()" style="padding:0.45rem 0.5rem; font-size:0.85rem;">
+            <select id="tb-team-league" style="padding:0.45rem 0.5rem; font-size:0.85rem;">
               <option value="euroleague">EuroLeague [EL]</option>
               <option value="eurocup">EuroCup [EC]</option>
             </select>
           </div>
           <div class="form-group">
             <label for="tb-team-round">Round *</label>
-            <input type="number" id="tb-team-round" min="1" max="38" value="1" onchange="onTeamBuilderRoundChange()" style="padding:0.45rem 0.5rem; font-size:0.85rem; width:100%;">
+            <input type="number" id="tb-team-round" min="1" max="38" value="1" style="padding:0.45rem 0.5rem; font-size:0.85rem; width:100%;">
           </div>
           <div class="form-group" id="tb-credits-group">
             <label for="tb-team-credits" id="tb-team-credits-label">Bank Cr *</label>
-            <input type="number" id="tb-team-credits" min="0" step="0.1" value="0.0" oninput="updateTeamBuilderUI()" style="padding:0.45rem 0.5rem; font-size:0.85rem; width:100%;">
+            <input type="number" id="tb-team-credits" min="0" step="0.1" value="0.0" style="padding:0.45rem 0.5rem; font-size:0.85rem; width:100%;">
           </div>
           <div class="stats-bar" style="justify-content:space-around;">
             <div class="stat-item">
@@ -688,10 +689,10 @@ All advice is grounded strictly in the deterministic Manager Dossier with guaran
               <option value="conservative">Conservative</option>
               <option value="upside">Upside Ceiling</option>
             </select>
-            <button class="btn btn-primary" onclick="suggestOptimalInitialTeam()" id="tb-btn-suggest" style="font-size:0.8rem; padding:0.4rem 0.8rem;" title="Round-1 expected FP maximization under salary cap & quotas (exact MILP)">
+            <button class="btn btn-primary"  id="tb-btn-suggest" style="font-size:0.8rem; padding:0.4rem 0.8rem;" title="Round-1 expected FP maximization under salary cap & quotas (exact MILP)">
               ⚡ Suggest Squad (Round 1 Objective)
             </button>
-            <button class="btn btn-secondary" onclick="clearTeamBuilderRoster()" style="font-size:0.8rem; padding:0.4rem 0.6rem;">
+            <button id="tb-btn-clear" class="btn btn-secondary" style="font-size:0.8rem; padding:0.4rem 0.6rem;">
               🗑️ Clear
             </button>
           </div>
@@ -704,7 +705,7 @@ All advice is grounded strictly in the deterministic Manager Dossier with guaran
             <span id="tb-pool-count" style="font-size:0.75rem; color:var(--text-muted);"></span>
           </div>
           <div style="display:flex; gap:0.75rem; margin-top:0.5rem; position:relative;">
-            <select id="tb-search-pos" style="width:130px;" onchange="onTeamBuilderSearchInput()">
+            <select id="tb-search-pos" style="width:130px;">
               <option value="">All Pos</option>
               <option value="G">Guard (G)</option>
               <option value="F">Forward (F)</option>
@@ -712,7 +713,7 @@ All advice is grounded strictly in the deterministic Manager Dossier with guaran
               <option value="HC">Coach (HC)</option>
             </select>
             <div style="flex:1; position:relative;">
-              <input type="text" id="tb-player-search" placeholder="Type player or coach name to filter..." oninput="onTeamBuilderSearchInput()" onfocus="onTeamBuilderSearchInput()" autocomplete="off">
+              <input type="text" id="tb-player-search" placeholder="Type player or coach name to filter..." autocomplete="off">
               <div id="tb-search-dropdown" class="search-dropdown-menu" style="display:none;"></div>
             </div>
           </div>
@@ -745,8 +746,8 @@ All advice is grounded strictly in the deterministic Manager Dossier with guaran
 
         <!-- Modal Actions Footer -->
         <div style="display:flex; justify-content:flex-end; gap:0.75rem; margin-top:1.5rem; border-top:1px solid var(--border-color); padding-top:1rem;">
-          <button class="btn btn-secondary" onclick="closeTeamBuilderModal()">Cancel</button>
-          <button class="btn btn-primary" id="tb-btn-create" onclick="submitCreateTeam()" disabled>
+          <button id="tb-btn-cancel" class="btn btn-secondary">Cancel</button>
+          <button class="btn btn-primary" id="tb-btn-create" disabled>
             ✓ Create Team & Enter Workstation
           </button>
         </div>
@@ -762,7 +763,7 @@ All advice is grounded strictly in the deterministic Manager Dossier with guaran
             <h2 id="pm-name" style="margin:0; font-size:1.25rem;">Player Name</h2>
             <span id="pm-team" style="color:var(--text-muted); font-size:0.9rem;">(BAR)</span>
           </div>
-          <button class="btn btn-secondary" onclick="closePlayerModal()" style="padding:0.2rem 0.5rem; font-size:0.85rem;">✕</button>
+          <button id="pm-btn-close" class="btn btn-secondary" style="padding:0.2rem 0.5rem; font-size:0.85rem;">✕</button>
         </div>
 
         <!-- Primary Metric Cards -->
@@ -810,8 +811,8 @@ All advice is grounded strictly in the deterministic Manager Dossier with guaran
 
         <!-- Squad Actions for Team Players -->
         <div id="pm-squad-actions" style="display:none; gap:0.5rem; margin-top:1rem; justify-content:flex-end;">
-          <button class="btn btn-secondary" id="pm-btn-cap" onclick="onModalMakeCaptain()">👑 Name Captain</button>
-          <button class="btn btn-primary" id="pm-btn-sub" onclick="onModalSubstitute()">⇄ Substitute</button>
+          <button class="btn btn-secondary" id="pm-btn-cap">👑 Name Captain</button>
+          <button class="btn btn-primary" id="pm-btn-sub">⇄ Substitute</button>
         </div>
       </div>
     </div>
@@ -828,21 +829,21 @@ All advice is grounded strictly in the deterministic Manager Dossier with guaran
           <input type="text" id="rename-team-input" placeholder="Enter new team name...">
         </div>
         <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1.5rem;">
-          <button class="btn btn-secondary" onclick="closeRenameModal()">Cancel</button>
-          <button class="btn btn-primary" onclick="submitRenameTeam()">Save Name</button>
+          <button id="rename-team-cancel" class="btn btn-secondary">Cancel</button>
+          <button id="rename-team-save" class="btn btn-primary">Save Name</button>
         </div>
       </div>
     </div>
 
     <!-- Player Intelligence Drawer / Modal -->
-    <div id="player-intel-modal" class="modal-backdrop" style="display:none;" onclick="if(event.target===this)closePlayerIntelModal()">
+    <div id="player-intel-modal" class="modal-backdrop" style="display:none;">
       <div class="modal-card" style="max-width: 580px; max-height: 85vh; overflow-y: auto;">
         <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
           <div style="display:flex; align-items:center; gap:0.6rem;">
             <span id="intel-pos-badge" class="player-pos-badge" style="font-size:0.9rem; padding:0.2rem 0.5rem;">G</span>
             <h3 id="intel-player-name" style="margin:0; font-size:1.2rem;">Player Intelligence</h3>
           </div>
-          <button class="btn btn-secondary" onclick="closePlayerIntelModal()" style="padding:0.2rem 0.6rem; font-size:1.1rem; line-height:1;">&times;</button>
+          <button id="intel-modal-close" class="btn btn-secondary" style="padding:0.2rem 0.6rem; font-size:1.1rem; line-height:1;">&times;</button>
         </div>
         <div style="margin-top:0.75rem;">
           <div id="intel-badges-row" style="display:flex; gap:0.4rem; flex-wrap:wrap; margin-bottom:0.75rem;">

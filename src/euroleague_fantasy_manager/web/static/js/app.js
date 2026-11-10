@@ -57,10 +57,103 @@ async function loadVersion() {
   }
 }
 
+
+function initStaticEventListeners() {
+  const on = (id, event, handler) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener(event, handler);
+  };
+
+  // Competition Switcher
+  on("btn-comp-euroleague", "click", () => switchCompetition("euroleague"));
+  on("btn-comp-eurocup", "click", () => switchCompetition("eurocup"));
+
+  // Live Data Update
+  on("btn-update-data", "click", () => triggerUpdateData());
+
+  // Lineup Tab
+  on("lineup-round-select", "change", onLineupRoundChange);
+  on("btn-cancel-sub", "click", cancelSubstitution);
+  on("btn-run-optimizer", "click", triggerOptimizeLineup);
+  on("btn-undo-optimizer", "click", undoLineupOptimization);
+
+  // Intra-round Simulator
+  on("btn-run-intra-sub", "click", runIntraRoundSimulator);
+
+  // Trade Studio Tab
+  on("btn-revert-round-start", "click", confirmRevertRoundStart);
+  on("unlimited-window-toggle", "change", onUnlimitedToggleChange);
+  on("ts-strategy-preset", "change", onStrategyPresetChange);
+  on("btn-suggest-trades", "click", triggerSuggestTransfers);
+  on("btn-execute-trades", "click", submitExecuteTransfers);
+  on("market-filter-pos", "change", () => loadPlayerPool());
+  on("market-filter-sort", "change", () => loadPlayerPool());
+  on("market-filter-search", "input", () => loadPlayerPool());
+  on("player-pool-prev", "click", playerPoolPrevPage);
+  on("player-pool-next", "click", playerPoolNextPage);
+
+  // Multi-Round
+  on("btn-run-multi-round", "click", triggerMultiRound);
+
+  // What-If Scenario
+  on("btn-run-scenario", "click", triggerScenario);
+
+  // Copilot / Intelligence
+  on("copilot-provider", "change", onProviderSelected);
+  on("copilot-model", "change", onCopilotModelChanged);
+  on("copilot-api-key", "input", onCopilotApiKeyInput);
+  on("copilot-api-key-toggle", "click", toggleCopilotApiKeyVisibility);
+  on("copilot-remember-key", "change", onCopilotRememberKeyChange);
+  on("btn-run-intelligence", "click", triggerCopilotAdvise);
+  on("btn-copy-advice", "click", copyCopilotAdvice);
+
+  // Team Builder Modal
+  on("tb-btn-close-modal", "click", closeTeamBuilderModal);
+  on("tb-btn-cancel", "click", closeTeamBuilderModal);
+  on("tb-team-name", "input", updateTeamBuilderUI);
+  on("tb-team-league", "change", onTeamBuilderLeagueChange);
+  on("tb-team-round", "change", onTeamBuilderRoundChange);
+  on("tb-team-credits", "input", updateTeamBuilderUI);
+  on("tb-btn-suggest", "click", suggestOptimalInitialTeam);
+  on("tb-btn-clear", "click", clearTeamBuilderRoster);
+  on("tb-search-pos", "change", onTeamBuilderSearchInput);
+  on("tb-player-search", "input", onTeamBuilderSearchInput);
+  on("tb-player-search", "focus", onTeamBuilderSearchInput);
+  on("tb-btn-create", "click", submitCreateTeam);
+
+  // Player Details Modal
+  on("pm-btn-close", "click", closePlayerModal);
+  on("pm-btn-cap", "click", onModalMakeCaptain);
+  on("pm-btn-sub", "click", onModalSubstitute);
+
+  // Rename Team Modal
+  on("rename-team-cancel", "click", closeRenameModal);
+  on("rename-team-save", "click", submitRenameTeam);
+  const renameInput = document.getElementById("rename-team-input");
+  if (renameInput) {
+    renameInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        submitRenameTeam();
+      }
+    });
+  }
+
+  // Player Intelligence Modal
+  on("intel-modal-close", "click", closePlayerIntelModal);
+  const intelModal = document.getElementById("player-intel-modal");
+  if (intelModal) {
+    intelModal.addEventListener("click", (e) => {
+      if (e.target === intelModal) closePlayerIntelModal();
+    });
+  }
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   loadVersion();
   captureIntelligenceDefaults();
   initNav();
+  initStaticEventListeners();
   await loadTeams();
   await loadRules(activeTeamLeague());
   await loadDashboard();
