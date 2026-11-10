@@ -979,7 +979,7 @@ def suggest_initial_team_endpoint(
             locked_player_ids=req.locked_player_ids,
             league=norm_league.value,
         )
-    except NoSnapshotForRoundError as e:
+    except NoSnapshotForRoundError:
         raise HTTPException(
             status_code=400,
             detail=f"No snapshot found for league '{norm_league.value}' in round {req.round_number}. Please update data first.",
