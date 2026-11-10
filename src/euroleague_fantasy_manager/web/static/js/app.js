@@ -2063,7 +2063,7 @@ async function loadTeamBuilderPool() {
     if (poolIndicator) poolIndicator.textContent = "Loading player pool...";
     teamBuilderState.allPlayers = [];
     try {
-      const res = await fetch(`/api/workstation/players?season=${state.season}&round_number=${round}&limit=500&league=${encodeURIComponent(league)}`);
+      const res = await fetch(`/api/workstation/players?season=${state.season}&round_number=${round}&limit=1000&league=${encodeURIComponent(league)}`);
       if (res.ok) {
         const rawPlayers = await res.json();
         // Ignore stale responses if the league or round was changed while loading.
@@ -2162,7 +2162,7 @@ function onTeamBuilderSearchInput() {
     if (selectedIds.has(p.player_id)) return false;
     const pPos = normalizePos(p.position);
     if (posFilter && pPos !== posFilter) return false;
-    if (query && !p.name.toLowerCase().includes(query) && !p.team_code.toLowerCase().includes(query)) return false;
+    if (query && !p.name.toLowerCase().includes(query) && !p.team_code.toLowerCase().includes(query) && !(p.team_name && p.team_name.toLowerCase().includes(query))) return false;
     return true;
   });
 
@@ -2182,7 +2182,7 @@ function onTeamBuilderSearchInput() {
       <div>
         <span class="player-pos-badge" style="font-size:0.7rem; margin-right:0.3rem;">${pos}</span>
         <strong>${escapeHtml(p.name)}</strong>
-        <span style="color:var(--text-muted); font-size:0.75rem; margin-left:0.3rem;">(${escapeHtml(p.team_code)})</span>
+        <span style="color:var(--text-muted); font-size:0.75rem; margin-left:0.3rem;">(${escapeHtml(p.team_code)}${p.team_name && p.team_name !== p.team_code ? ` - ${escapeHtml(p.team_name)}` : ""})</span>
       </div>
       <div style="display:flex; align-items:center; gap:0.6rem;">
         <span style="font-size:0.75rem; color:var(--text-muted);">${p.credits} cr</span>

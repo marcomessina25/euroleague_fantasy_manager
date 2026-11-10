@@ -738,7 +738,7 @@ def list_players_endpoint(
     league: League = Depends(parse_league),
     sort: str = "expected_fp",
     offset: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=500),
+    limit: int = Query(50, ge=1, le=MAX_PLAYER_PAGE_SIZE),
     prediction_service: PredictionService = Depends(get_prediction_service),
 ) -> list[dict[str, Any]]:
     """Player browser for Trade Studio with valuation metrics.
@@ -771,14 +771,19 @@ def list_players_endpoint(
         return []
 
     ownership_map: dict[int, float] = {}
+    teams_map: dict[int, str] = {}
     try:
         from euroleague_fantasy_manager.storage import SnapshotStore
         s_store = SnapshotStore(prediction_service.database_path)
         snap = s_store.get_snapshot_for_round(league_id=get_league_ruleset(league).league_id, round_number=round_number) or s_store.get_latest_summary(league_id=get_league_ruleset(league).league_id)
-        p_list = s_store.load_players_for_snapshot(snap.snapshot_id) if snap else []
-        ownership_map = {p.id: p.popularity for p in p_list}
+        if snap:
+            p_list = s_store.load_players_for_snapshot(snap.snapshot_id)
+            ownership_map = {p.id: p.popularity for p in p_list}
+            t_map = s_store.load_teams_for_snapshot(snap.snapshot_id)
+            teams_map = {tid: t_info["name"] for tid, t_info in t_map.items()}
     except Exception:
         ownership_map = {}
+        teams_map = {}
 
     target_pos_code = None
     if position:
@@ -794,7 +799,8 @@ def list_players_endpoint(
         )
         if target_pos_code and pos_code != target_pos_code:
             continue
-        if search and search.lower() not in c.player_name.lower() and search.lower() not in c.team_code.lower():
+        team_full_name = teams_map.get(c.team_id, "")
+        if search and search.lower() not in c.player_name.lower() and search.lower() not in c.team_code.lower() and search.lower() not in team_full_name.lower():
             continue
         if min_price is not None and c.credits < min_price:
             continue
@@ -815,6 +821,7 @@ def list_players_endpoint(
             "position": pos_code,
             "position_name": c.position.name if hasattr(c.position, "name") else str(c.position),
             "team_code": c.team_code,
+            "team_name": team_full_name or c.team_code,
             "price_tenths": c.price_tenths,
             "credits": c.credits,
             "expected_fp": round(c.expected_fp, 2),
@@ -1022,14 +1029,19 @@ def player_intel_endpoint(
         raise HTTPException(status_code=404, detail=f"Player ID {player_id} not found in round {rnd}.")
 
     ownership_map: dict[int, float] = {}
+    teams_map: dict[int, str] = {}
     try:
         from euroleague_fantasy_manager.storage import SnapshotStore
         s_store = SnapshotStore(prediction_service.database_path)
         snap = s_store.get_snapshot_for_round(league_id=get_league_ruleset(league).league_id, round_number=round_number) or s_store.get_latest_summary(league_id=get_league_ruleset(league).league_id)
-        p_list = s_store.load_players_for_snapshot(snap.snapshot_id) if snap else []
-        ownership_map = {p.id: p.popularity for p in p_list}
+        if snap:
+            p_list = s_store.load_players_for_snapshot(snap.snapshot_id)
+            ownership_map = {p.id: p.popularity for p in p_list}
+            t_map = s_store.load_teams_for_snapshot(snap.snapshot_id)
+            teams_map = {tid: t_info["name"] for tid, t_info in t_map.items()}
     except Exception:
         ownership_map = {}
+        teams_map = {}
 
     raw_own = ownership_map.get(player_id)
     own_pct = float(raw_own) if raw_own is not None else 10.0
@@ -1096,6 +1108,7 @@ def player_intel_endpoint(
         "name": contract.player_name,
         "position": pos_code,
         "team_code": contract.team_code,
+        "team_name": teams_map.get(contract.team_id, contract.team_code),
         "group_name": group_name,
         "credits": contract.credits,
         "price_tenths": contract.price_tenths,
