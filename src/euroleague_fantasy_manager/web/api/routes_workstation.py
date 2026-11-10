@@ -18,7 +18,7 @@ from euroleague_fantasy_manager.rules import MAX_TRADES_PER_ROUND
 
 # Largest page the player browser will serve in one request. Paging with
 # `offset` reaches the rest of the universe; nothing is ever unreachable.
-MAX_PLAYER_PAGE_SIZE = 1000
+MAX_PLAYER_PAGE_SIZE = 500
 
 # Ordering options for the player browser. Every key breaks ties on player_id so
 # that paging is stable and cannot drop or duplicate a player between pages.
@@ -738,7 +738,7 @@ def list_players_endpoint(
     league: League = Depends(parse_league),
     sort: str = "expected_fp",
     offset: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=MAX_PLAYER_PAGE_SIZE),
+    limit: int = Query(50, ge=1, le=500),
     prediction_service: PredictionService = Depends(get_prediction_service),
 ) -> list[dict[str, Any]]:
     """Player browser for Trade Studio with valuation metrics.

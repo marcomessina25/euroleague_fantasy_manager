@@ -2063,18 +2063,25 @@ async function loadTeamBuilderPool() {
     if (poolIndicator) poolIndicator.textContent = "Loading player pool...";
     teamBuilderState.allPlayers = [];
     try {
-      const res = await fetch(`/api/workstation/players?season=${state.season}&round_number=${round}&limit=1000&league=${encodeURIComponent(league)}`);
-      if (res.ok) {
-        const rawPlayers = await res.json();
+      let allRawPlayers = [];
+      let offset = 0;
+      const pageSize = 500;
+      while (true) {
+        const res = await fetch(`/api/workstation/players?season=${state.season}&round_number=${round}&limit=${pageSize}&offset=${offset}&league=${encodeURIComponent(league)}`);
+        if (!res.ok) break;
+        const page = await res.json();
         // Ignore stale responses if the league or round was changed while loading.
         if (teamBuilderLeague() !== league || teamBuilderRound() !== round) return;
-        teamBuilderState.allPlayers = rawPlayers.map((p) => ({
-          ...p,
-          position: normalizePos(p.position),
-        }));
-        teamBuilderState.poolLeague = league;
-        teamBuilderState.poolRound = round;
+        allRawPlayers.push(...page);
+        if (page.length < pageSize) break;
+        offset += pageSize;
       }
+      teamBuilderState.allPlayers = allRawPlayers.map((p) => ({
+        ...p,
+        position: normalizePos(p.position),
+      }));
+      teamBuilderState.poolLeague = league;
+      teamBuilderState.poolRound = round;
     } catch (err) {
       console.error("Failed to fetch market pool:", err);
     }
